@@ -1,0 +1,421 @@
+# P/D DISAGGREGATION — KEDA experiment: token-aware (BACKEND-AGNOSTIC)
+#
+# Port of the token-aware ScaledObjects published in
+#   asm582/token-aware-autoscaling@7e70bf5  pd-setup/launch-scaledobjects.sh:288-358
+#   (design rationale: TOKEN-AWARE-AUTOSCALING-SUMMARY.md sections 2-6)
+# The source repo's pd-setup/ deploys the upstream llm-d `pd-disaggregation`
+# guide, so this lands as a variant of that guide's staging directory.
+#
+# WHAT IT CHANGES vs baseline.yaml (this dir)
+#   prefill: vllm:num_requests_waiting + vllm:kv_cache_usage_perc
+#            -> SECONDS OF UNCACHED PREFILL BACKLOG, from EPP router metrics:
+#               sum(inflight_tokens over LIVE prefill pods) / peakPrefillThroughput
+#               threshold 1.5 s of queue wait per replica.
+#   decode:  vllm:num_requests_waiting + max(kv_cache_usage_perc) @ 0.95
+#            -> sum(vllm:kv_cache_usage_perc over decode pods) @ 0.80
+#               ("pods' worth of full KV cache"; act at 80% full).
+#   min/max: 1/4 -> 1/10 (the published figures). Set maxReplicas back to 4 if
+#            you want a cap-for-cap comparison against baseline.yaml.
+#   behavior + pollingInterval are unchanged from baseline (they already match
+#   the source: scaleUp 1 pod/180s, scaleDown 1 pod/300s after a 300s window).
+#
+# NECESSARY DEVIATION FROM THE "keda: BLOCK ONLY" RULE
+# The prefill trigger reads `llm_d_epp_inflight_tokens`, which only exists if
+# the EPP runs the `inflight-load-producer` plugin. Baseline's plugin chain does
+# not include it, so this variant adds that one plugin (a producer — it is not
+# referenced from any schedulingProfile, so routing decisions are unchanged).
+# Nothing else outside `keda:` differs from baseline.
+#
+# WHY sum() AND NOT max(), AND WHY THE LIVENESS GATE — see the header of
+# launch-scaledobjects.sh; both are load-bearing:
+#   * metricType AverageValue makes the HPA compute ceil(total / threshold), so
+#     the numerator must GROW with the pool. max() of a per-pod value cannot,
+#     which would structurally cap the role's replicas.
+#   * `or vector(0)` only collapses to a single series when the left side has an
+#     empty label set — which sum() guarantees. Without it KEDA gets two series
+#     and fails with FailedGetExternalMetric.
+#   * inflight_tokens is a GaugeVec whose series are never deleted when a pod
+#     goes away, so a scaled-down pod would strand a non-zero series and turn
+#     scale-down into a one-way ratchet. Intersecting with
+#     llm_d_epp_per_endpoint_queue_size (rebuilt from live endpoints each scrape)
+#     on a derived `target_pod` label admits only live pods.
+#
+# DECODE SIGNAL. This file renders the published (default) occupancy trigger.
+# The source script also offers `--decode-signal waiters`
+# (avg_over_time(sum(vllm:num_requests_waiting_by_reason{reason="capacity"}))[2m:15s]
+# gated on a strict-majority fleet-wide test, threshold 1). That is a different
+# unit, not a different threshold — add it as a separate sibling
+# (token-aware-waiters.yaml) rather than editing this one.
+#
+# PREREQUISITES
+#   1. peakPrefillThroughput (tokenAware.peakPrefillThroughput below) is
+#      hardware-, model-, TP- and fabric-specific. MEASURE IT on the target
+#      stack before trusting a result — a wrong divisor silently changes when
+#      prefill scales (the same load asked for 8 replicas at 2665 tok/s and 3 at
+#      15928 tok/s on the reference stack).
+#   2. EPP metrics must be scraped into the Prometheus/Thanos that KEDA queries.
+#      `modelservice.router.epp.monitoring.prometheus.enabled: true` (below,
+#      inherited from baseline) does that.
+#   3. On OpenShift, KEDA reaches Thanos with bearer auth — that connection and
+#      its `prometheus-auth` Secret come from the cluster-config overlay
+#      (see benchmark/config/cluster-configs/ocp/*.yaml), not from this file.
+#
+# This scenario deliberately contains NO backend-specific settings (image,
+# accelerator, per-role resources, vLLM command, plugins). Pick a backend by
+# layering one of benchmark/config/cluster-configs/{vllm,vllm-sim-qwen3-32b,inference-sim}.yaml
+# via `--cluster-config`. See benchmark/README.md.
+#
+# Merge note: the harness deep-merges dicts but REPLACES lists wholesale. The
+# scaling strategy (keda) lives here because its scaleTargetRef.kind is a
+# topology concern (Deployment); backend overlays must not set `keda`.
+
+scenario:
+  - name: "pd-disaggregation"
+
+    # =========================================================================
+    # TOKEN-AWARE CONSTANTS — referenced by the KEDA queries below via
+    # ${tokenAware.*}. Kept out of `keda:` so a run can override one number:
+    #   --set tokenAware.peakPrefillThroughput=2665
+    # =========================================================================
+    tokenAware:
+      # V_P, tokens/sec that ONE prefill replica retires. NOT a constant: it is
+      # hardware-, model-, TP- and fabric-specific. 2696 is the reference P/D
+      # stack's calibrated figure (Qwen3-32B, summary section 6); upstream lists
+      # 15928 for Qwen3-32B / H100 / TP=2 on the AGGREGATED path, and a P/D path
+      # with a slow KV fabric can be ~6x lower. Measure it on YOUR hardware
+      # (calibrate-peak-prefill.sh / guides/recipes/router/calibration/calibrate.sh)
+      # and override before reading anything into the results.
+      peakPrefillThroughput: 2696
+
+      # Seconds of QUEUE WAIT per prefill replica before scaling out. This is
+      # the budget left after the irreducible idle floor:
+      #     threshold ~= TTFT_SLO - (ISL_uncached / V_P)
+      # The ISL/V_P floor already includes NIXL transfer + first decode step, so
+      # do NOT add a transfer term. At V_P ~= 2696:
+      #     prefill-heavy  ISL 8192 -> floor 3.0s  -> 8s SLO => 5.0
+      #     symmetrical    ISL 2048 -> floor 0.76s -> 3s SLO => 2.2
+      #     decode-heavy   ISL 256  -> TTFT trivially met; decode KV governs
+      # 1.5 is the interactive / short-context default. For a p90/p99 SLO trim
+      # to ~60-70% of the formula (the metric is a per-replica AVERAGE).
+      prefillThresholdSeconds: "1.5"
+
+      # Pods' worth of full decode KV cache. Already a fraction of capacity, so
+      # it is compared directly: 0.8 = "act at 80% full". Lower for more
+      # headroom, raise to run hotter.
+      decodeKvThreshold: "0.8"
+
+    # =========================================================================
+    # KUSTOMIZE DEPLOY METHOD — disabled; deploying via modelservice below
+    # =========================================================================
+    kustomize:
+      enabled: false
+      guideName: "pd-disaggregation"
+      repoPath: ""
+      repoRef: "main"
+      gaieVersion: ""
+      acceleratorBackend: "gpu/vllm"
+      monitoring: false
+      overlayPath: ""
+      extraHelmValues: []
+      extraHelmSets: {}
+      guideVariableOverrides: {}
+      patches: []
+
+    # =========================================================================
+    # MODEL — identity only. Backend overlays set gpuMemoryUtilization.
+    # =========================================================================
+    model:
+      name: Qwen/Qwen3-32B      # served model id + harness request/tokenizer; must equal huggingfaceId
+      shortName: qwen3-32b
+      path: models/Qwen/Qwen3-32B
+      huggingfaceId: Qwen/Qwen3-32B
+      maxModelLen: 16384
+      size: 2Gi
+
+    # =========================================================================
+    # DEPLOYMENT METHOD
+    # =========================================================================
+    modelservice:
+      enabled: true
+
+      uriProtocol: hf # no model-weight download; backends serve without weights
+
+      # Gateway topology — epponly (no Kubernetes Gateway/HTTPRoute)
+      gateway:
+        className: epponly
+
+      # Routing connector — nixlv2 selects the routing-sidecar wire protocol
+      routing:
+        connector: nixlv2
+
+      # EPP router — PD plugin chain. EPP-side and independent of the backend.
+      router:
+        epp:
+          replicas: 1
+          pluginsConfigFile: "pd-config.yaml"
+          pluginsCustomConfig:
+            pd-config.yaml: |
+              apiVersion: llm-d.ai/v1alpha1
+              kind: EndpointPickerConfig
+              plugins:
+              - type: disagg-headers-handler
+              - type: always-disagg-pd-decider
+              - type: disagg-profile-handler
+                parameters:
+                  deciderPluginName: always-disagg-pd-decider
+              # REQUIRED BY THIS VARIANT (only delta from baseline's chain):
+              # publishes per-pod llm_d_epp_inflight_tokens, the prefill
+              # trigger's source. It is a producer, not referenced from any
+              # schedulingProfile below, so routing is identical to baseline.
+              - type: inflight-load-producer
+              - type: prefill-filter
+              - type: decode-filter
+              - type: prefix-cache-scorer
+              - type: queue-scorer
+              - type: kv-cache-utilization-scorer
+              - type: active-request-scorer
+              schedulingProfiles:
+              - name: prefill
+                plugins:
+                - pluginRef: prefill-filter
+                - pluginRef: prefix-cache-scorer
+                  weight: 3
+                - pluginRef: queue-scorer
+                  weight: 2
+                - pluginRef: kv-cache-utilization-scorer
+                  weight: 2
+              - name: decode
+                plugins:
+                - pluginRef: decode-filter
+                - pluginRef: active-request-scorer
+                  weight: 2
+                - pluginRef: prefix-cache-scorer
+                  weight: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+        proxy:
+          resources:
+            requests:
+              cpu: "50m"
+              memory: 128Mi
+            limits:
+              cpu: "500m"
+              memory: 512Mi
+        monitoring:
+          prometheus:
+            enabled: true
+
+      httpRoute:
+        requestTimeout: "300s"
+        backendRequestTimeout: "0s"
+
+    # =========================================================================
+    # DECODE — backend-agnostic skeleton. Backend overlays add resources,
+    # accelerator, vllm command, initContainers, env and volumes.
+    # =========================================================================
+    decode:
+      replicas: 1
+      accelerator:
+        count: 1                 # per-role accelerator count; backend overlays override (0 for CPU sims)
+      parallelism:
+        tensor: 1
+        data: 1
+        dataLocal: 1
+        workers: 1
+      extraContainerConfig:
+        ports:
+          - containerPort: 8200 # metrics; matches modelservice decode metricsPort
+            name: metrics
+            protocol: TCP
+      monitoring:
+        podmonitor:
+          enabled: true
+          portName: metrics
+          path: /metrics
+          interval: 15s
+
+    # =========================================================================
+    # PREFILL — backend-agnostic skeleton (see DECODE).
+    # =========================================================================
+    prefill:
+      enabled: true
+      replicas: 1
+      accelerator:
+        count: 1                 # per-role accelerator count; backend overlays override (0 for CPU sims)
+      parallelism:
+        tensor: 1
+        data: 1
+        dataLocal: 1
+        workers: 1
+      extraContainerConfig:
+        ports:
+          - containerPort: 8000 # metrics; matches modelservice prefill metricsPort
+            name: metrics
+            protocol: TCP
+      monitoring:
+        podmonitor:
+          enabled: true
+          portName: metrics
+          path: /metrics
+          interval: 15s
+
+    standalone:
+      enabled: false
+
+    # =========================================================================
+    # SCALING STRATEGY (KEDA) — TOKEN-AWARE per-role autoscaling.
+    # prefill scales on seconds of uncached prefill backlog (EPP router
+    # metrics); decode scales on summed KV-cache occupancy (vLLM metric).
+    # scaleTargetRef.kind is Deployment for this topology. Backend overlays
+    # override `prometheus` (Thanos + bearer auth on OpenShift) but never `keda`
+    # itself.
+    # =========================================================================
+    keda:
+      enabled: true
+      namespace: ""              # defaults to deploy namespace (first slot of `-p`)
+      prometheus:
+        baseUrl: http://prometheus-operated.monitoring.svc.cluster.local
+        port: 9090
+      scaledObjects:
+      # -----------------------------------------------------------------------
+      # PREFILL — 100% llm-d EPP metrics, no vLLM metric involved.
+      # "tokens the router has queued on LIVE prefill pods, divided by prefill
+      # capacity in tokens/s" => seconds of backlog, compared to the TTFT-derived
+      # per-replica budget. `and on (target_pod)` is a set intersection used as a
+      # liveness gate, not arithmetic; the two label_replace calls only rename
+      # endpoint_name / model_server_endpoint onto a common label so PromQL can
+      # line them up. The division must live inside the query — KEDA has no
+      # arithmetic on the result.
+      # -----------------------------------------------------------------------
+      - name: pd-disaggregation-prefill
+        scaleTargetRef:
+          kind: Deployment
+          name: ${model.idLabel}-prefill
+        minReplicas: 1
+        maxReplicas: 10
+        pollingInterval: 15
+        unsafeSsl: true
+        triggers:
+          - name: prefill-token-backlog
+            type: prometheus
+            metricType: AverageValue
+            query: |
+              (
+                sum(
+                    label_replace(
+                      llm_d_epp_inflight_tokens{namespace="${namespace.name}",
+                                                producer_name="inflight-load-producer",
+                                                endpoint_name=~".*prefill.*"},
+                      "target_pod", "$1", "endpoint_name", "(.+)")
+                  and on (target_pod)
+                    label_replace(
+                      llm_d_epp_per_endpoint_queue_size{name="${model.idLabel}-router",
+                                                        model_server_endpoint=~".*prefill.*"},
+                      "target_pod", "$1", "model_server_endpoint", "(.+)")
+                )
+                / ${tokenAware.peakPrefillThroughput}
+              ) or vector(0)
+            threshold: "${tokenAware.prefillThresholdSeconds}"
+            activationThreshold: "0"
+        behavior:
+          scaleUp:
+            stabilizationWindowSeconds: 0
+            policies:
+              - type: Pods
+                value: 1
+                periodSeconds: 180
+          scaleDown:
+            stabilizationWindowSeconds: 300
+            policies:
+              - type: Pods
+                value: 1
+                periodSeconds: 300
+      # -----------------------------------------------------------------------
+      # DECODE — one vLLM metric: how full the decode KV caches are, summed
+      # across pods. A vLLM metric rather than an EPP one because the autoscaler
+      # needs a PER-POD KV reading it can filter to decode and sum; the EPP's
+      # only KV metric is a single pool-wide average covering both roles.
+      # No liveness gate needed: kv_cache_usage_perc is scraped from each pod, so
+      # a dead pod's series goes stale on its own.
+      # Known caveat (recorded in the source): occupancy is a LEVEL, and a
+      # full-but-flowing cache is healthy — in the ISL-8192 arm it read 0.72-0.98
+      # while decode was merely waiting on prefill's NIXL handoffs, buying decode
+      # replicas that were not the bottleneck. See the `waiters` alternative in
+      # the file header.
+      # -----------------------------------------------------------------------
+      - name: pd-disaggregation-decode
+        scaleTargetRef:
+          kind: Deployment
+          name: ${model.idLabel}-decode
+        minReplicas: 1
+        maxReplicas: 10
+        pollingInterval: 15
+        unsafeSsl: true
+        triggers:
+          - name: decode-kv-utilization
+            type: prometheus
+            metricType: AverageValue
+            query: |
+              sum(vllm:kv_cache_usage_perc{namespace="${namespace.name}",
+                                           pod=~".*decode.*"}) or vector(0)
+            threshold: "${tokenAware.decodeKvThreshold}"
+            activationThreshold: "0"
+        behavior:
+          scaleUp:
+            stabilizationWindowSeconds: 0
+            policies:
+              - type: Pods
+                value: 1
+                periodSeconds: 180
+          scaleDown:
+            stabilizationWindowSeconds: 300
+            policies:
+              - type: Pods
+                value: 1
+                periodSeconds: 300
+
+    # =========================================================================
+    # COMMON — shared-memory volume only. Backends that need extra volumes
+    # (plugins, model config) add them under decode/prefill in their overlay.
+    # =========================================================================
+    vllmCommon:
+      shmMemory: 500Mi
+      volumes:
+        - name: dshm
+          type: emptyDir
+          emptyDir:
+            medium: Memory
+            sizeLimit: 500Mi
+      volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+
+    storage:
+      workloadPvc:
+        accessModes:
+          - ReadWriteMany
+        storageClassName: auto
+      modelPvc:
+        size: 2Gi
+        accessModes:
+          - ReadWriteMany
+        storageClassName: auto
+
+    timeouts:
+      controlWait: 300
+      harnessWait: 900000
+
+    workDir: "~/data/pd-disaggregation"
+
+    harness:
+      name: inference-perf
+      experimentProfile: sanity_random.yaml
+      pvcSize: 3Gi
+      resources:
+        cpu: "1"
+        memory: 2Gi

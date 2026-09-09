@@ -172,6 +172,33 @@ def _forget_port_forward(target, context):
 # configure
 # --------------------------------------------------------------------------
 
+# The only variables _capture_snapshot substitutes before replaying a panel's
+# expression against Prometheus. Anything else (another dashboard variable, a
+# Grafana macro such as $__rate_interval) reaches Prometheus unexpanded, and
+# the panel freezes empty in the snapshot -- see "Extending the dashboard" in
+# docs/benchmark-report.md. `$1`-style label_replace capture groups are fine:
+# Grafana leaves them alone and so do we.
+SNAPSHOT_SAFE_VARIABLES = ("namespace",)
+
+
+def _dashboard_expression_errors(dashboard):
+    """Return a list of human-readable reasons the dashboard's panel queries wouldn't
+    survive snapshot capture, empty if they all would."""
+    errors = []
+    for panel in dashboard.get("panels", []):
+        for target in panel.get("targets", []) or []:
+            expr = target.get("expr", "")
+            for variable in re.findall(r"\$(\w+)", expr):
+                if variable.isdigit() or variable in SNAPSHOT_SAFE_VARIABLES:
+                    continue
+                errors.append(
+                    f"panel {panel.get('title')!r} target {target.get('refId')}: "
+                    f"${variable} is not substituted during snapshot capture "
+                    f"(only {', '.join('$' + v for v in SNAPSHOT_SAFE_VARIABLES)})"
+                )
+    return errors
+
+
 def cmd_configure(args):
     err = resolve_remote_prometheus(args, context=getattr(args, "context", None))
     if err:
@@ -251,6 +278,12 @@ def cmd_configure(args):
 
     with open(DASHBOARD_JSON_PATH) as f:
         dashboard = json.load(f)
+    expr_errors = _dashboard_expression_errors(dashboard)
+    if expr_errors:
+        print(f"ERROR: {DASHBOARD_JSON_PATH} has queries that snapshots can't replay:", file=sys.stderr)
+        for e in expr_errors:
+            print(f"  - {e}", file=sys.stderr)
+        return 1
     dashboard["id"] = None
     status, result = _http(
         "POST",
@@ -294,20 +327,16 @@ def _run_window(experiment_dir):
     return namespace, start_s, stop_s, meta.get("experiment_id", os.path.basename(experiment_dir))
 
 
-def _live_dashboard_url(grafana_url, dashboard_uid, namespace, start_s, stop_s, session_id=None):
+def _live_dashboard_url(grafana_url, dashboard_uid, namespace, start_s, stop_s):
     """Build a Grafana dashboard URL time-boxed to a run window and scoped to its namespace,
-    so the dashboard shows only the data for that run. `session_id`, if given, is passed
-    through as the `session_id` dashboard variable -- see "Identifying a session's metrics"
-    in docs/benchmark-report.md; the shipped panels don't key off it, but it's there for a
-    panel query that's been opted into the kube_pod_labels join."""
-    url = (
+    so the dashboard shows only the data for that run. Namespace + time window is the whole
+    of a session's identity here -- the pods carry no session-id label to filter on; see
+    "Identifying a session's metrics" in docs/benchmark-report.md."""
+    return (
         f"{grafana_url.rstrip('/')}/d/{dashboard_uid}"
         f"?orgId=1&from={int(start_s * 1000)}&to={int(stop_s * 1000)}"
         f"&var-namespace={urllib.parse.quote(namespace)}"
     )
-    if session_id:
-        url += f"&var-session_id={urllib.parse.quote(session_id)}"
-    return url
 
 
 def _session_id_from_experiment_dir(experiment_dir):
@@ -422,7 +451,7 @@ def _capture_snapshot(experiment_dir, grafana_url, user, password, dashboard_uid
             query_spec = query["spec"]
             refid = query_spec["refId"]
             orig = query_spec["query"]["spec"]
-            expr = orig["expr"].replace("$namespace", namespace).replace("$session_id", session_id)
+            expr = orig["expr"].replace("$namespace", namespace)
             legend_format = orig.get("legendFormat", "")
 
             series = _query_range(grafana_url, ds_uid, user, password, expr, namespace, start_s, stop_s, step_s)
@@ -467,9 +496,7 @@ def _capture_snapshot(experiment_dir, grafana_url, user, password, dashboard_uid
         "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "snapshot_url": snap_result.get("url"),
         "snapshot_delete_url": snap_result.get("deleteUrl"),
-        "live_dashboard_url": _live_dashboard_url(
-            grafana_url, dashboard_uid, namespace, start_s, stop_s, session_id=session_id
-        ),
+        "live_dashboard_url": _live_dashboard_url(grafana_url, dashboard_uid, namespace, start_s, stop_s),
     }
     out_path = os.path.join(experiment_dir, "grafana_snapshot.yaml")
     with open(out_path, "w") as f:
@@ -557,9 +584,8 @@ def _render_experiment(experiment_dir):
 
     snapshot = _load_yaml(os.path.join(experiment_dir, "grafana_snapshot.yaml"))
     window = _run_window_epochs(meta)
-    session_id = _session_id_from_experiment_dir(experiment_dir)
     live_url = snapshot.get("live_dashboard_url") if snapshot else (
-        _live_dashboard_url(DEFAULT_GRAFANA_URL, DASHBOARD_UID, *window, session_id=session_id) if window else None
+        _live_dashboard_url(DEFAULT_GRAFANA_URL, DASHBOARD_UID, *window) if window else None
     )
     live_html = (
         "<p><strong>Live dashboard</strong> (time-boxed to this run &amp; its namespace, so it shows "
@@ -841,9 +867,17 @@ def _scan_stacks(session_dir):
         return stacks
     for entry in sorted(os.listdir(plan_dir)):
         stack_dir = os.path.join(plan_dir, entry)
-        if not os.path.isdir(stack_dir) or not os.path.isfile(os.path.join(plan_dir, entry + ".yaml")):
-            continue  # not a stack dir (e.g. a dry-run's nested plan/setup/)
-        cfg = _load_yaml(os.path.join(stack_dir, "config.yaml"))
+        config_path = os.path.join(stack_dir, "config.yaml")
+        # A stack dir is one holding a rendered config.yaml. Don't key off a
+        # sibling plan/<entry>.yaml: that file is named after the *experiment*
+        # (e.g. plan/token-aware.yaml), which needn't match the stack dir's
+        # name (plan/pd-disaggregation/), and requiring it silently dropped
+        # every stack -- leaving the session with no namespace, and its
+        # Grafana link scoped to `.*`. A dry-run's nested plan/setup/ has no
+        # config.yaml, so it's still excluded.
+        if not os.path.isdir(stack_dir) or not os.path.isfile(config_path):
+            continue
+        cfg = _load_yaml(config_path)
         model = cfg.get("model") or {}
         namespace = cfg.get("namespace") or {}
         stacks.append({
@@ -913,10 +947,7 @@ def _scan_experiment(workspace, experiment_dir, grafana_url=DEFAULT_GRAFANA_URL,
     # straight from the run window -- available as soon as run_metadata.yaml exists, with
     # no snapshot required (it just needs Grafana + Prometheus still holding the data).
     window = _run_window_epochs(meta)
-    grafana_live_url = (
-        _live_dashboard_url(grafana_url, dashboard_uid, *window, session_id=_session_id_from_experiment_dir(experiment_dir))
-        if window else None
-    )
+    grafana_live_url = _live_dashboard_url(grafana_url, dashboard_uid, *window) if window else None
 
     harness_delta_seconds = _parse_iso8601_duration_seconds(meta.get("harness_delta")) if meta else None
 
@@ -955,6 +986,15 @@ def _scan_session(workspace, session_id, grafana_url=DEFAULT_GRAFANA_URL, dashbo
         d for d in glob.glob(os.path.join(results_dir, "*")) if os.path.isdir(d)
     ) if os.path.isdir(results_dir) else []
     experiments = [_scan_experiment(workspace, d, grafana_url, dashboard_uid) for d in experiment_dirs]
+
+    # A session that ran against an already-stood-up stack has no plan/<stack>/
+    # of its own, so fall back to the namespace its runs recorded. Namespace is
+    # the only thing scoping this session's Grafana/Prometheus links (see
+    # "Identifying a session's metrics" in docs/benchmark-report.md), so an
+    # unknown one costs the link all of its precision.
+    namespace = primary.get("namespace") or next(
+        (e["metadata"]["namespace"] for e in experiments if (e.get("metadata") or {}).get("namespace")), None
+    )
 
     combined_text = stdout_text + "\n" + stderr_text
     is_dry_run = "[DRY RUN]" in stdout_text or "would have executed" in stdout_text
@@ -1013,8 +1053,8 @@ def _scan_session(workspace, session_id, grafana_url=DEFAULT_GRAFANA_URL, dashbo
     session_window_to = last_ts if (stage == "torn_down" and last_ts) else now
     session_grafana_live_url = (
         _live_dashboard_url(
-            grafana_url, dashboard_uid, primary.get("namespace") or ".*",
-            first_ts.timestamp(), session_window_to.timestamp(), session_id=session_id,
+            grafana_url, dashboard_uid, namespace or ".*",
+            first_ts.timestamp(), session_window_to.timestamp(),
         )
         if first_ts else None
     )
@@ -1025,7 +1065,7 @@ def _scan_session(workspace, session_id, grafana_url=DEFAULT_GRAFANA_URL, dashbo
         "scenario_spec": scenario_spec,
         "scenario_kind": scenario_kind,
         "backend": backend,
-        "namespace": primary.get("namespace"),
+        "namespace": namespace,
         "model": primary.get("model_name"),
         "stacks": stacks,
         "is_dry_run": is_dry_run,

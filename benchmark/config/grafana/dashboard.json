@@ -17,12 +17,22 @@
   "graphTooltip": 1,
   "id": null,
   "links": [],
+  "description": "Per-run view of a benchmark session: vLLM engine metrics, llm-d EPP (router) metrics, and the replica counts every autoscaling experiment is judged on. Two conventions: (1) panel queries may only reference the $namespace variable and must use literal range durations (no $__rate_interval), because benchmark_report.py's snapshot capture substitutes exactly that variable and sends the expression to Prometheus verbatim; (2) every vllm: query is wrapped in `max by (pod, namespace, engine)` so that pods scraped by both a PodMonitor and a ServiceMonitor -- the usual llm-d layout -- are counted once. A session is identified by its namespace plus the run's time window; there is no session-id pod label. See benchmark/docs/benchmark-report.md.",
   "panels": [
+    {
+      "id": 100,
+      "title": "vLLM - capacity & queueing",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
     {
       "id": 1,
       "title": "KV Cache Utilization",
+      "description": "Per-pod vLLM KV-cache occupancy (1 = full). The primary saturation signal for KV-based scaling triggers.",
       "type": "timeseries",
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
       "datasource": { "type": "prometheus" },
       "fieldConfig": {
         "defaults": {
@@ -51,12 +61,12 @@
       },
       "targets": [
         {
-          "expr": "vllm:kv_cache_usage_perc{namespace=~\"$namespace\"} * on (pod, namespace) group_left(label_llmdbench_ai_session_id) kube_pod_labels{namespace=~\"$namespace\", label_llmdbench_ai_session_id=~\"$session_id\"}",
+          "expr": "max by (pod, namespace, engine) (vllm:kv_cache_usage_perc{namespace=~\"$namespace\"})",
           "legendFormat": "{{pod}}",
           "refId": "A"
         },
         {
-          "expr": "avg(vllm:kv_cache_usage_perc{namespace=~\"$namespace\"} * on (pod, namespace) group_left(label_llmdbench_ai_session_id) kube_pod_labels{namespace=~\"$namespace\", label_llmdbench_ai_session_id=~\"$session_id\"})",
+          "expr": "avg(max by (pod, namespace, engine) (vllm:kv_cache_usage_perc{namespace=~\"$namespace\"}))",
           "legendFormat": "avg",
           "refId": "B"
         }
@@ -66,8 +76,9 @@
     {
       "id": 2,
       "title": "Queue Size",
+      "description": "Per-pod running and waiting request counts straight from the vLLM engine.",
       "type": "timeseries",
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
       "datasource": { "type": "prometheus" },
       "fieldConfig": {
         "defaults": {
@@ -87,13 +98,1126 @@
       },
       "targets": [
         {
-          "expr": "vllm:num_requests_waiting{namespace=~\"$namespace\"} * on (pod, namespace) group_left(label_llmdbench_ai_session_id) kube_pod_labels{namespace=~\"$namespace\", label_llmdbench_ai_session_id=~\"$session_id\"}",
+          "expr": "max by (pod, namespace, engine) (vllm:num_requests_waiting{namespace=~\"$namespace\"})",
           "legendFormat": "{{pod}} waiting",
           "refId": "A"
         },
         {
-          "expr": "vllm:num_requests_running{namespace=~\"$namespace\"} * on (pod, namespace) group_left(label_llmdbench_ai_session_id) kube_pod_labels{namespace=~\"$namespace\", label_llmdbench_ai_session_id=~\"$session_id\"}",
+          "expr": "max by (pod, namespace, engine) (vllm:num_requests_running{namespace=~\"$namespace\"})",
           "legendFormat": "{{pod}} running",
+          "refId": "B"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 3,
+      "title": "Fleet Requests (running / waiting)",
+      "description": "Same signals as \"Queue Size\", summed over the fleet. \"waiting (avg per pod)\" is the shape a KEDA AverageValue trigger sees: the HPA divides the summed metric by the replica count.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(max by (pod, namespace, engine) (vllm:num_requests_running{namespace=~\"$namespace\"}))",
+          "legendFormat": "running (fleet)",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(max by (pod, namespace, engine) (vllm:num_requests_waiting{namespace=~\"$namespace\"}))",
+          "legendFormat": "waiting (fleet)",
+          "refId": "B"
+        },
+        {
+          "expr": "avg(max by (pod, namespace, engine) (vllm:num_requests_waiting{namespace=~\"$namespace\"}))",
+          "legendFormat": "waiting (avg per pod)",
+          "refId": "C"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 4,
+      "title": "Waiting Requests by Reason",
+      "description": "vllm:num_requests_waiting_by_reason splits the queue into 'capacity' (no scheduling capacity -- the queue depth that should drive scale-out) and 'deferred' (transient constraints: LoRA budget, KV transfer, blocked status). Empty on vLLM builds that predate the metric.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason) (max by (pod, namespace, engine, reason) (vllm:num_requests_waiting_by_reason{namespace=~\"$namespace\"}))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 5,
+      "title": "Preemptions",
+      "description": "Rate of engine preemptions. Sustained preemption means the fleet is over-committed on KV cache -- a scale-out signal that KV utilization alone can under-report.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 17 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(max by (pod, namespace, engine) (rate(vllm:num_preemptions_total{namespace=~\"$namespace\"}[2m])))",
+          "legendFormat": "preemptions/s (fleet)",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (pod, namespace, engine) (rate(vllm:num_preemptions_total{namespace=~\"$namespace\"}[2m]))",
+          "legendFormat": "{{pod}}",
+          "refId": "B"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 6,
+      "title": "Prefix Cache Hit Rate",
+      "description": "Token-weighted hit rate. 'local' is the engine's own prefix cache; 'external' is the KV-connector (NIXL) cache and is only populated on P/D runs. Prefix reuse changes the cost of a prefill, so it moves the throughput a given replica count can sustain.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(max by (pod, namespace, engine) (rate(vllm:prefix_cache_hits_total{namespace=~\"$namespace\"}[2m]))) / sum(max by (pod, namespace, engine) (rate(vllm:prefix_cache_queries_total{namespace=~\"$namespace\"}[2m])))",
+          "legendFormat": "local",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(max by (pod, namespace, engine) (rate(vllm:external_prefix_cache_hits_total{namespace=~\"$namespace\"}[2m]))) / sum(max by (pod, namespace, engine) (rate(vllm:external_prefix_cache_queries_total{namespace=~\"$namespace\"}[2m])))",
+          "legendFormat": "external (KV connector)",
+          "refId": "B"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 101,
+      "title": "vLLM - throughput & latency",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 7,
+      "title": "Token Throughput",
+      "description": "Prefill (prompt) and decode (generation) tokens per second across the fleet. The denominator for any tokens/s-per-replica calibration, e.g. token-aware.yaml's peakPrefillThroughput.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(max by (pod, namespace, engine) (rate(vllm:prompt_tokens_total{namespace=~\"$namespace\"}[2m])))",
+          "legendFormat": "prompt tokens/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(max by (pod, namespace, engine) (rate(vllm:generation_tokens_total{namespace=~\"$namespace\"}[2m])))",
+          "legendFormat": "generation tokens/s",
+          "refId": "B"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 8,
+      "title": "Completed Requests by Finish Reason",
+      "description": "Completion rate split by finished_reason. A rising 'abort'/'length' share while load is flat usually means the fleet is shedding rather than serving.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "reqps",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (finished_reason) (max by (pod, namespace, engine, finished_reason) (rate(vllm:request_success_total{namespace=~\"$namespace\"}[2m])))",
+          "legendFormat": "{{finished_reason}}",
+          "refId": "A"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 9,
+      "title": "Time To First Token (TTFT)",
+      "description": "Fleet-wide TTFT percentiles. The SLO that prefill scaling is tuned against -- token-aware.yaml derives its prefill threshold from a TTFT budget.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 34 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (max by (pod, namespace, engine, le) (rate(vllm:time_to_first_token_seconds_bucket{namespace=~\"$namespace\"}[5m]))))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (max by (pod, namespace, engine, le) (rate(vllm:time_to_first_token_seconds_bucket{namespace=~\"$namespace\"}[5m]))))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (max by (pod, namespace, engine, le) (rate(vllm:time_to_first_token_seconds_bucket{namespace=~\"$namespace\"}[5m]))))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 10,
+      "title": "Inter-Token Latency (ITL / TPOT)",
+      "description": "Decode-side latency percentiles. Falls back to vllm:time_per_output_token_seconds on vLLM builds that predate the inter_token_latency rename.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 34 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (max by (pod, namespace, engine, le) (rate(vllm:inter_token_latency_seconds_bucket{namespace=~\"$namespace\"}[5m]) or rate(vllm:time_per_output_token_seconds_bucket{namespace=~\"$namespace\"}[5m]))))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (max by (pod, namespace, engine, le) (rate(vllm:inter_token_latency_seconds_bucket{namespace=~\"$namespace\"}[5m]) or rate(vllm:time_per_output_token_seconds_bucket{namespace=~\"$namespace\"}[5m]))))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (max by (pod, namespace, engine, le) (rate(vllm:inter_token_latency_seconds_bucket{namespace=~\"$namespace\"}[5m]) or rate(vllm:time_per_output_token_seconds_bucket{namespace=~\"$namespace\"}[5m]))))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 11,
+      "title": "End-to-End Request Latency",
+      "description": "Engine-observed request latency (queueing + prefill + decode), excluding anything the router adds.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 42 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (max by (pod, namespace, engine, le) (rate(vllm:e2e_request_latency_seconds_bucket{namespace=~\"$namespace\"}[5m]))))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (max by (pod, namespace, engine, le) (rate(vllm:e2e_request_latency_seconds_bucket{namespace=~\"$namespace\"}[5m]))))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (max by (pod, namespace, engine, le) (rate(vllm:e2e_request_latency_seconds_bucket{namespace=~\"$namespace\"}[5m]))))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 12,
+      "title": "Request Queue Time",
+      "description": "How long admitted requests sat in the engine queue before scheduling. This is the part of TTFT that adding replicas actually removes, so it is the cleanest 'was the scale-out justified' read.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 42 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (max by (pod, namespace, engine, le) (rate(vllm:request_queue_time_seconds_bucket{namespace=~\"$namespace\"}[5m]))))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (max by (pod, namespace, engine, le) (rate(vllm:request_queue_time_seconds_bucket{namespace=~\"$namespace\"}[5m]))))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (max by (pod, namespace, engine, le) (rate(vllm:request_queue_time_seconds_bucket{namespace=~\"$namespace\"}[5m]))))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 102,
+      "title": "Replicas & autoscaling",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 50 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 13,
+      "title": "Serving Replicas by Role",
+      "description": "Replicas counted from the metrics themselves: one count per pod actually scraped, deduplicated with `max by (pod, namespace)` so a pod covered by both a PodMonitor and a ServiceMonitor isn't counted twice. Backend- and workload-API-agnostic (Deployment, LeaderWorkerSet, standalone). Role comes from the pod name (`*-prefill-*` / `*-decode-*`); anything else counts as 'aggregated'.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 51 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0,
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "count by (role) (label_replace(label_replace(max by (pod, namespace) (vllm:num_requests_running{namespace=~\"$namespace\"}), \"role\", \"aggregated\", \"pod\", \".*\"), \"role\", \"$1\", \"pod\", \".*-(prefill|decode)-.*\"))",
+          "legendFormat": "{{role}}",
+          "refId": "A"
+        },
+        {
+          "expr": "count(max by (pod, namespace) (vllm:num_requests_running{namespace=~\"$namespace\"}))",
+          "legendFormat": "all serving pods",
+          "refId": "B"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 14,
+      "title": "Deployment Replicas (kube-state-metrics)",
+      "description": "Ground truth for what the autoscaler asked for (spec) versus what is serving (available). The gap is scale-up latency -- image pull + model load -- which is why a run's throughput lags its replica count. Namespace- and time-scoped, like every panel on this dashboard (see benchmark-report.md).",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 51 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0,
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "kube_deployment_spec_replicas{namespace=~\"$namespace\"}",
+          "legendFormat": "{{deployment}} spec",
+          "refId": "A"
+        },
+        {
+          "expr": "kube_deployment_status_replicas_available{namespace=~\"$namespace\"}",
+          "legendFormat": "{{deployment}} available",
+          "refId": "B"
+        },
+        {
+          "expr": "kube_deployment_status_replicas_unavailable{namespace=~\"$namespace\"}",
+          "legendFormat": "{{deployment}} unavailable",
+          "refId": "C"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 15,
+      "title": "HPA Desired vs Current (KEDA)",
+      "description": "KEDA drives scaling through a generated HPA, so this is where a trigger's arithmetic surfaces: desired = ceil(metric / threshold), clamped to [min, max]. Desired pinned to max means the trigger is saturated; desired stuck at min means it never activated.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 59 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0,
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{namespace=~\"$namespace\"}",
+          "legendFormat": "{{horizontalpodautoscaler}} desired",
+          "refId": "A"
+        },
+        {
+          "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=~\"$namespace\"}",
+          "legendFormat": "{{horizontalpodautoscaler}} current",
+          "refId": "B"
+        },
+        {
+          "expr": "kube_horizontalpodautoscaler_spec_min_replicas{namespace=~\"$namespace\"}",
+          "legendFormat": "{{horizontalpodautoscaler}} min",
+          "refId": "C"
+        },
+        {
+          "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=~\"$namespace\"}",
+          "legendFormat": "{{horizontalpodautoscaler}} max",
+          "refId": "D"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 16,
+      "title": "KEDA Trigger Values",
+      "description": "The value each KEDA scaler reported to the HPA, and whether the scaler is active. Thresholds are not exported by KEDA -- read them from the scenario's `keda:` block. Requires the keda-operator metrics endpoint to be scraped; the namespace label lands as exported_namespace when the metric's own label collides with the scrape target's, hence the `or`.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 59 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*active$" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "max", "value": 1 },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [8, 4] } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "max by (scaledObject, scaler, metric) (keda_scaler_metrics_value{exported_namespace=~\"$namespace\"} or keda_scaler_metrics_value{namespace=~\"$namespace\"})",
+          "legendFormat": "{{scaledObject}} / {{metric}}",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (scaledObject, scaler) (keda_scaler_active{exported_namespace=~\"$namespace\"} or keda_scaler_active{namespace=~\"$namespace\"})",
+          "legendFormat": "{{scaledObject}} / {{scaler}} active",
+          "refId": "B"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 17,
+      "title": "WVA Desired vs Current Replicas",
+      "description": "Workload-Variant-Autoscaler's own view, per VariantAutoscaling. Only populated on runs that take the WVA path (`wva.enabled`); KEDA-only runs leave this empty. WVA's namespace label usually arrives as exported_namespace because it collides with the controller pod's own namespace label.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 67 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0,
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max by (variant_name) (wva_desired_replicas{exported_namespace=~\"$namespace\"} or wva_desired_replicas{namespace=~\"$namespace\"})",
+          "legendFormat": "{{variant_name}} desired",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (variant_name) (wva_current_replicas{exported_namespace=~\"$namespace\"} or wva_current_replicas{namespace=~\"$namespace\"})",
+          "legendFormat": "{{variant_name}} current",
+          "refId": "B"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 18,
+      "title": "EPP Ready Endpoints",
+      "description": "Replica count as the router sees it: endpoints it is willing to route to. Lags the Deployment's available count by the readiness-probe + EPP refresh delay, which is the delay any router-metric-driven trigger actually reacts through. Falls back to the deprecated inference_pool_ready_pods on older EPP builds.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 67 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0,
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max by (name) (llm_d_epp_ready_endpoints{namespace=~\"$namespace\"}) or max by (name) (inference_pool_ready_pods{namespace=~\"$namespace\"})",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 29,
+      "title": "KEDA Autoscaler Errors & Health",
+      "description": "Why nothing is scaling. 'registered' vs 'reporting a metric' is the important pair: a ScaledObject that fails its check (bad trigger metadata, missing TriggerAuthentication bearer token, unreachable Prometheus) is still registered, but KEDA never creates its HPA and never publishes a scaler value for it -- so the two lines diverge and every other autoscaling panel goes quiet. Error counters cover the opposite case, where the ScaledObject is live but its queries fail. Diagnose a divergence with `kubectl get scaledobject -n <ns> -o json` and read the Ready condition's message. Note KEDA reports the ScaledObject's namespace as exported_namespace (its own `namespace` label is the operator's), hence the `or`.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 75 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0,
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*errors \\(5m\\)$" },
+            "properties": [
+              { "id": "custom.fillOpacity", "value": 20 },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum(keda_resource_registered_total{type=~\"scaled_?object\", exported_namespace=~\"$namespace\"} or keda_resource_registered_total{type=~\"scaled_?object\", namespace=~\"$namespace\"})",
+          "legendFormat": "ScaledObjects registered",
+          "refId": "A"
+        },
+        {
+          "expr": "count(count by (scaledObject) (keda_scaler_metrics_value{exported_namespace=~\"$namespace\"} or keda_scaler_metrics_value{namespace=~\"$namespace\"})) or vector(0)",
+          "legendFormat": "ScaledObjects reporting a metric",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (scaledObject) (increase(keda_scaled_object_errors_total{exported_namespace=~\"$namespace\"}[5m]) or increase(keda_scaled_object_errors_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{scaledObject}} errors (5m)",
+          "refId": "C"
+        },
+        {
+          "expr": "sum by (scaledObject, scaler) (increase(keda_scaler_detail_errors_total{exported_namespace=~\"$namespace\"}[5m]) or increase(keda_scaler_detail_errors_total{namespace=~\"$namespace\"}[5m])) or sum by (scaledObject, scaler) (increase(keda_scaler_errors_total{exported_namespace=~\"$namespace\"}[5m]) or increase(keda_scaler_errors_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{scaledObject}} / {{scaler}} trigger errors (5m)",
+          "refId": "D"
+        },
+        {
+          "expr": "sum by (horizontalpodautoscaler) (kube_horizontalpodautoscaler_status_condition{namespace=~\"$namespace\", condition=\"ScalingActive\", status=\"false\"})",
+          "legendFormat": "{{horizontalpodautoscaler}} ScalingActive=false",
+          "refId": "E"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 103,
+      "title": "EPP (router / endpoint picker)",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 83 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 19,
+      "title": "EPP Pool KV Cache Utilization",
+      "description": "The router's pool-wide KV view (average across endpoints, plus its spread). A large std dev means load is unevenly distributed, so the pool average understates how close individual replicas are to saturation.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 84 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "percentunit",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max by (name) (llm_d_epp_average_kv_cache_utilization{namespace=~\"$namespace\"}) or max by (name) (inference_pool_average_kv_cache_utilization{namespace=~\"$namespace\"})",
+          "legendFormat": "{{name}} avg",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (name) (llm_d_epp_std_dev_kv_cache_utilization{namespace=~\"$namespace\"})",
+          "legendFormat": "{{name}} std dev",
+          "refId": "B"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 20,
+      "title": "EPP Pool Queue & Running Requests",
+      "description": "Router-side averages per endpoint. Compare against the vLLM fleet panels above: a divergence means the router's view of the pool is stale or its endpoint set is wrong.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 84 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max by (name) (llm_d_epp_average_queue_size{namespace=~\"$namespace\"}) or max by (name) (inference_pool_average_queue_size{namespace=~\"$namespace\"})",
+          "legendFormat": "{{name}} avg queue size",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (name) (llm_d_epp_average_running_requests{namespace=~\"$namespace\"}) or max by (name) (inference_pool_average_running_requests{namespace=~\"$namespace\"})",
+          "legendFormat": "{{name}} avg running",
+          "refId": "B"
+        },
+        {
+          "expr": "max by (name) (llm_d_epp_std_dev_queue_size{namespace=~\"$namespace\"})",
+          "legendFormat": "{{name}} queue std dev",
+          "refId": "C"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 21,
+      "title": "EPP Per-Endpoint Queue Size",
+      "description": "Pending depth per backend endpoint, rebuilt from the live endpoint set on every scrape -- so a scaled-down pod's series disappears instead of going stale. token-aware.yaml uses exactly this property as a liveness gate for its prefill trigger.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 92 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max by (model_server_endpoint) (llm_d_epp_per_endpoint_queue_size{namespace=~\"$namespace\"})",
+          "legendFormat": "{{model_server_endpoint}}",
+          "refId": "A"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 22,
+      "title": "EPP Request & Error Rate",
+      "description": "Requests the router accepted, and the errors it returned, by model. Errors rising with replica count is the classic sign of scale-out outrunning model load time.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 92 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "reqps",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (model_name) (rate(llm_d_epp_request_total{namespace=~\"$namespace\"}[2m])) or sum by (model_name) (rate(inference_objective_request_total{namespace=~\"$namespace\"}[2m]))",
+          "legendFormat": "{{model_name}} requests",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (error_code) (rate(llm_d_epp_request_error_total{namespace=~\"$namespace\"}[2m])) or sum by (error_code) (rate(inference_objective_request_error_total{namespace=~\"$namespace\"}[2m]))",
+          "legendFormat": "errors {{error_code}}",
+          "refId": "B"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 23,
+      "title": "EPP In-Flight Requests",
+      "description": "Requests the router currently has outstanding, by model. The router-side counterpart to the vLLM fleet running/waiting panel.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 100 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (model_name) (llm_d_epp_request_running{namespace=~\"$namespace\"}) or sum by (model_name) (inference_objective_running_requests{namespace=~\"$namespace\"})",
+          "legendFormat": "{{model_name}}",
+          "refId": "A"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 24,
+      "title": "EPP Request Latency (router-observed)",
+      "description": "What the client actually experiences: engine time plus routing, queueing and flow control. Compare with the vLLM TTFT/E2E panels -- the delta is the router's own contribution.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 100 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(llm_d_epp_request_ttft_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "TTFT p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(llm_d_epp_request_ttft_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "TTFT p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(llm_d_epp_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m]) or rate(inference_objective_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "request duration p50",
+          "refId": "C"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(llm_d_epp_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m]) or rate(inference_objective_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "request duration p95",
+          "refId": "D"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 25,
+      "title": "EPP Scheduling Latency",
+      "description": "End-to-end endpoint-picking time (sub-millisecond when healthy). A spike here means the scheduler itself became the bottleneck -- usually a plugin, not the pool.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 108 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(llm_d_epp_scheduler_e2e_duration_seconds_bucket{namespace=~\"$namespace\"}[5m]) or rate(inference_extension_scheduler_e2e_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "scheduler p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(llm_d_epp_scheduler_e2e_duration_seconds_bucket{namespace=~\"$namespace\"}[5m]) or rate(inference_extension_scheduler_e2e_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "scheduler p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, plugin_name) (rate(llm_d_epp_plugin_duration_seconds_bucket{namespace=~\"$namespace\"}[5m]) or rate(inference_extension_plugin_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "{{plugin_name}} p95",
+          "refId": "C"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 26,
+      "title": "EPP Flow Control Pool Saturation",
+      "description": "The router's own saturation signal, gating dispatch: 1.0 is the set point, and 'effective' is max(prefill, decode). An empty pool also reads 1.0, and stale endpoint metrics score as saturated -- so treat 1.0 during a cold start as 'no data', not 'overloaded'.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 108 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max by (stage) (llm_d_epp_flow_control_pool_saturation{namespace=~\"$namespace\"}) or max by (stage) (inference_extension_flow_control_pool_saturation{namespace=~\"$namespace\"})",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 27,
+      "title": "EPP Flow Control Queue",
+      "description": "Requests held in the router's flow-control queue, by priority. Non-zero means the router is absorbing backlog that the engine queue metrics never see -- scaling triggers reading only vllm:num_requests_waiting will under-react.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 116 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "queue wait p95 (s)" },
+            "properties": [
+              { "id": "unit", "value": "s" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum by (priority) (llm_d_epp_flow_control_queue_size{namespace=~\"$namespace\"}) or sum by (priority) (inference_extension_flow_control_queue_size{namespace=~\"$namespace\"})",
+          "legendFormat": "priority {{priority}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(llm_d_epp_flow_control_request_queue_duration_seconds_bucket{namespace=~\"$namespace\"}[5m]) or rate(inference_extension_flow_control_request_queue_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "queue wait p95 (s)",
+          "refId": "B"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 28,
+      "title": "EPP In-Flight Tokens per Endpoint",
+      "description": "Tokens the router has outstanding on each endpoint -- the numerator of token-aware.yaml's prefill trigger (divided by peakPrefillThroughput to get seconds of backlog). Only published when the EPP runs the `inflight-load-producer` plugin, so it is empty for baseline scenarios. Note the series are never deleted when an endpoint goes away; the scenario intersects them with per-endpoint queue size for liveness.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 116 },
+      "datasource": { "type": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (endpoint_name) (llm_d_epp_inflight_tokens{namespace=~\"$namespace\"})",
+          "legendFormat": "{{endpoint_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(llm_d_epp_inflight_tokens{namespace=~\"$namespace\"})",
+          "legendFormat": "total",
           "refId": "B"
         }
       ],
@@ -101,7 +1225,7 @@
     }
   ],
   "schemaVersion": 39,
-  "tags": ["benchmark", "llm-d-autoscaling", "vllm"],
+  "tags": ["benchmark", "llm-d-autoscaling", "vllm", "epp", "autoscaling"],
   "templating": {
     "list": [
       {
@@ -110,20 +1234,6 @@
         "label": "Namespace",
         "datasource": { "type": "prometheus" },
         "query": { "query": "label_values(vllm:num_requests_running, namespace)", "refId": "namespace" },
-        "refresh": 2,
-        "sort": 1,
-        "multi": true,
-        "includeAll": true,
-        "allValue": ".*",
-        "current": { "value": "$__all", "text": "All" }
-      },
-      {
-        "name": "session_id",
-        "type": "query",
-        "label": "Session ID",
-        "description": "llmdbench.ai/session-id pod label, joined onto the panels below via kube_pod_labels (see docs/benchmark-report.md). Defaults to All (no filtering); pick one session's ID to disambiguate concurrent/reused namespaces.",
-        "datasource": { "type": "prometheus" },
-        "query": { "query": "label_values(kube_pod_labels{namespace=~\"$namespace\"}, label_llmdbench_ai_session_id)", "refId": "session_id" },
         "refresh": 2,
         "sort": 1,
         "multi": true,

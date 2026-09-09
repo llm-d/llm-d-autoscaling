@@ -2,9 +2,9 @@
 
 `benchmark/hack/benchmark_report.py`'s `configure` / `snapshot` / `report` /
 `all` subcommands turn a single finished session into a standalone
-`report.html`, with links to the relevant Grafana panels (vLLM KV-cache
-utilization and queue size) for the exact time window of that session's
-benchmark run.
+`report.html`, with links to the relevant Grafana panels (vLLM engine, llm-d
+EPP/router, and replica counts -- see [Dashboard panels](#dashboard-panels))
+for the exact time window of that session's benchmark run.
 
 For the live, multi-session dashboard (`serve`), see
 [`interactive-dashboard.md`](interactive-dashboard.md) instead -- this doc
@@ -99,15 +99,14 @@ benchmark/hack/benchmark_report.sh configure --prometheus-url http://localhost:9
 ### Why Thanos Querier specifically
 
 On OpenShift, vLLM's `PodMonitor`-scraped metrics live in the
-**user-workload** Prometheus while `kube-state-metrics` (needed for the
-`kube_pod_labels` join -- see "Identifying a session's metrics" below) is
-scraped by the **platform** Prometheus. Those are two separate TSDBs; a
-query can't join across them directly. Thanos Querier merges both, so it's
-the only endpoint where the join panels actually return data. This was
-confirmed by querying each Prometheus directly: `prometheus-operated` in
-`openshift-user-workload-monitoring` has `vllm:*` but zero
-`kube_pod_labels` series, and `prometheus-operated` in
-`openshift-monitoring` has `kube_pod_labels` but zero `vllm:*` series.
+**user-workload** Prometheus while `kube-state-metrics` (which the
+Deployment- and HPA-replica panels query) is scraped by the **platform**
+Prometheus. Those are two separate TSDBs, so neither one alone can serve the
+whole dashboard. Thanos Querier merges both, so it's the only endpoint where
+every panel returns data. This was confirmed by querying each Prometheus
+directly: `prometheus-operated` in `openshift-user-workload-monitoring` has
+`vllm:*` but zero `kube_deployment_*` series, and `prometheus-operated` in
+`openshift-monitoring` has `kube_deployment_*` but zero `vllm:*` series.
 
 ### Alternative: Grafana already running in-cluster (no port-forwarding)
 
@@ -202,90 +201,134 @@ has the data).
 ## Identifying a session's metrics
 
 The vLLM metrics this dashboard queries (`vllm:kv_cache_usage_perc`,
-`vllm:num_requests_waiting`, `vllm:num_requests_running` -- see
-`benchmark/config/grafana/dashboard.json`) carry only standard labels:
-`namespace` and `pod`. There's no `session_id` on them directly. Every
-"which metrics belong to this session" link -- the session-level
-Observability line and Live dashboard link in the
-[interactive dashboard](interactive-dashboard.md), and the Grafana snapshots
-covered here -- **default** to working around that by scoping the Grafana
-dashboard's `namespace` variable to the session's namespace and time-boxing
-the query to that session's (or that experiment's run's) window. That's
-sufficient as long as **one namespace is used by only one session at a
-time**, which is how the "Start a session" form and the `run-benchmark`
+`vllm:num_requests_waiting`, `vllm:num_requests_running`, ... -- see
+[Dashboard panels](#dashboard-panels)) carry only standard labels:
+`namespace` and `pod`. There is no session identifier on them, and nothing
+in the pipeline stamps one: **a session is identified by its namespace plus
+its time window, and by nothing else.** Every "which metrics belong to this
+session" link -- the session-level Observability line and Live dashboard
+link in the [interactive dashboard](interactive-dashboard.md), and the
+Grafana snapshots covered here -- works by scoping the Grafana dashboard's
+`namespace` variable to the session's namespace and time-boxing the query to
+that session's (or that experiment's run's) window. `_live_dashboard_url`
+and `_capture_snapshot` in `benchmark/hack/benchmark_report.py` thread
+exactly those two things through, and `$namespace` is the only variable a
+panel query may reference (see [Extending the
+dashboard](#extending-the-dashboard)).
+
+That is sufficient as long as **one namespace is used by only one session at
+a time**, which is how the "Start a session" form and the `run-benchmark`
 skill both work in practice (a fresh namespace, or an intentionally reused
-one you tear down before reusing).
+one you tear down before reusing). It breaks down if two sessions overlap in
+the same namespace, or if a namespace is reused enough that retention no
+longer cleanly separates their time windows -- in those cases the panels
+show both sessions' pods and there is no way to tell them apart.
 
-It breaks down if two sessions ever overlap in the same namespace, or if a
-namespace is reused enough that retention no longer cleanly separates their
-time windows. For that case, the sibling `llm-d-benchmark` clone's harness
-and serving pod templates now stamp a `llmdbench.ai/session-id: <session-id>`
-label on the pods that produce these metrics (`config/templates/jinja/13_ms-values.yaml.j2`,
-`14_standalone-deployment_yaml.j2`, `20_harness_pod.yaml.j2`), where
-`<session-id>` is the llmdbenchmark workspace/session directory name (e.g.
-`<user>-<timestamp>`) -- the same value used as the session ID everywhere
-else in this dashboard. `session_id` is also a dashboard template variable
-here (`benchmark/config/grafana/dashboard.json`) and is threaded through
-`_live_dashboard_url`/`_capture_snapshot` in `benchmark/hack/benchmark_report.py`
-the same way `namespace` is, so every generated link already carries
-`var-session_id=<id>` and every snapshot's queries have `$session_id`
-substituted.
+> **Deprecated:** earlier revisions gated every `vllm:*` panel on a
+> `kube_pod_labels{label_llmdbench_ai_session_id=~"$session_id"}` join,
+> against a `llmdbench.ai/session-id` pod label stamped by the sibling
+> `llm-d-benchmark` clone's pod templates. That label was never adopted
+> upstream, so the join matched nothing useful and the `session_id`
+> dashboard variable had no values to offer. Both the variable and the join
+> are gone; the panels are plain namespace-scoped queries now. Nothing else
+> about the dashboard changed -- the join was a multiply-by-1 no-op at its
+> default `session_id=.*` anyway.
 
-Both shipped panels join onto the vLLM metrics via `kube_state_metrics`'s
-`kube_pod_labels`, e.g.:
+**Why the `max by (...)` wrapper:** an llm-d serving pod is typically scraped
+*twice* -- once by the guide's PodMonitor and once by the modelservice
+ServiceMonitor -- producing two identical series per pod that differ only in
+`job`. Confirmed live: `count by (job, pod) (vllm:num_requests_running)`
+returns two jobs per pod on an OpenShift benchmark namespace. Per-pod panels
+would draw each pod twice, and every `sum()`/`count()` would be exactly
+double. Collapsing to `(pod, namespace, engine)` first fixes both, and
+keeping `engine` in the grouping preserves per-engine series for
+data-parallel deployments. The replica-count panel groups by `(pod,
+namespace)` only, since it counts pods rather than engines.
 
-```
-vllm:kv_cache_usage_perc{namespace=~"$namespace"}
-  * on (pod, namespace) group_left(label_llmdbench_ai_session_id)
-    kube_pod_labels{namespace=~"$namespace", label_llmdbench_ai_session_id=~"$session_id"}
-```
+**Not every panel's `namespace` label means the same thing.** KEDA and WVA
+metrics are emitted by controllers living in their own namespaces, so the
+*target's* namespace collides with the scrape target's and Prometheus renames
+it to `exported_namespace`; those panels match
+`{exported_namespace=~"$namespace"} or {namespace=~"$namespace"}` so they
+work either way. The `kube_deployment_*` / `kube_horizontalpodautoscaler_*`
+panels describe objects rather than pods, but their `namespace` is the
+object's, so `$namespace` scopes them correctly as-is.
 
-`kube_pod_labels` carries one series per pod regardless of whether
-`label_llmdbench_ai_session_id` is populated -- kube-state-metrics emits the
-base metric (`pod`, `namespace`, `uid`) unconditionally, and only attaches
-the `label_llmdbench_ai_session_id` dimension if that pod label is in its
-`--metric-labels-allowlist`. **OpenShift's built-in cluster-monitoring
-kube-state-metrics ships with `--metric-labels-allowlist=pods=[*]`** (every
-pod label, confirmed on a live OCP cluster), so this works with zero extra
-config there. A manually-installed `kube-prometheus-stack` (e.g. the "local
-Kind" path earlier in this doc) doesn't allowlist custom labels by default --
-set `--metric-labels-allowlist=pods=[llmdbench.ai/session-id]`, or the
-chart's `kube-state-metrics.metricLabelsAllowlist` equivalent, to enable it
-there. Either way, with the default `session_id=.*` the join is a no-op
-multiply-by-1: panels render identically whether or not the allowlist is
-configured. Setting `session_id` to one session's actual ID only filters
-correctly once the allowlist is enabled -- without it, the label is simply
-absent from every series, so a specific (non-`.*`) value matches nothing
-and the panels go blank. That's the tell that the allowlist isn't set, not
-a bug.
+## Dashboard panels
 
-**Both sides of the join are scoped to `$namespace`.** `kube_pod_labels` is
-cluster-wide (every namespace, every pod, on a shared Prometheus this can be
-thousands of series), and Prometheus's vector matching requires the match
-group (`pod`, `namespace`) to be unique on the `kube_pod_labels` side across
-*everything the query returns* -- not just the pods that actually match the
-left-hand side. On a busy shared cluster it's common for some unrelated
-pod, anywhere in any namespace, to transiently have two label sets in
-`kube_pod_labels` at once (e.g. mid-rollout, momentarily overlapping
-old/new label values before the stale series drops out); if the right-hand
-side isn't namespace-scoped, that unrelated duplicate makes Prometheus
-reject the *entire* query with `"many-to-many matching not allowed"` --
-observed live against a real OpenShift cluster's shared Prometheus while
-validating this. Filtering `kube_pod_labels` by the same `$namespace` as the
-left-hand side keeps the match group small enough that this essentially
-never happens for a benchmark's own (few-pod) namespace.
+`benchmark/config/grafana/dashboard.json` is organized into four rows:
 
-Once the allowlist is configured, scope any panel (or an ad-hoc Explore
-query) to one session by setting the dashboard's `session_id` variable, or
-by appending the same join to a new PromQL expression -- always scoped to
-`namespace=~"$namespace"` on the `kube_pod_labels` side for the reason
-above.
+| Row | Panels |
+|-----|--------|
+| **vLLM - capacity & queueing** | KV cache utilization (per pod), queue size (per pod), fleet running/waiting, waiting by reason, preemptions, prefix cache hit rate (local + KV-connector) |
+| **vLLM - throughput & latency** | token throughput, completed requests by finish reason, TTFT, inter-token latency, end-to-end latency, request queue time (p50/p95/p99) |
+| **Replicas & autoscaling** | serving replicas by role (prefill/decode, counted from the metrics themselves), Deployment spec/available/unavailable, HPA desired vs current vs min/max, KEDA trigger values + activation, WVA desired vs current, EPP ready endpoints, KEDA autoscaler errors & health |
+| **EPP (router / endpoint picker)** | pool KV utilization and spread, pool queue/running averages, per-endpoint queue size, request + error rate, in-flight requests, router-observed latency, scheduling latency, flow-control saturation and queue, in-flight tokens per endpoint |
+
+Notes on what may legitimately come up empty:
+
+- **Replica counts have four independent sources** and they intentionally
+  disagree: Deployment `spec` is what the autoscaler asked for, Deployment
+  `available` is what Kubernetes has running, EPP `ready_endpoints` is what
+  the router will route to, and "serving replicas by role" counts pods that
+  are actually reporting metrics. The lag between them *is* the scale-up
+  cost of a strategy. "Serving replicas by role" is the only one that is
+  workload-API-agnostic -- it works for LeaderWorkerSet and standalone
+  deployments, where `kube_deployment_*` has nothing to say.
+- **EPP metrics are queried under both names.** llm-d-router renamed them to
+  `llm_d_epp_*` and kept the `inference_pool_*` / `inference_objective_*` /
+  `inference_extension_*` originals as deprecated aliases; each panel is
+  `<new> or <old>`, aggregated first so the two sides share a label set and
+  the `or` doesn't double-plot when a build emits both. Metrics with no
+  legacy equivalent (std devs, TTFT, per-endpoint queue size) query the new
+  name only.
+- `llm_d_epp_inflight_tokens` requires the EPP `inflight-load-producer`
+  plugin, so its panel is empty unless the scenario enables it (see
+  `scenarios/staging/pd-disaggregation/token-aware.yaml`).
+- **An empty HPA/KEDA panel is a finding, not a gap.** "KEDA Autoscaler
+  Errors & Health" exists to tell the two apart. A ScaledObject that fails
+  its check -- bad trigger metadata, a `TriggerAuthentication` with an empty
+  bearer token, unreachable Prometheus -- is still *registered*, but KEDA
+  never creates its HPA and never publishes a scaler value, so every other
+  autoscaling panel is silent and the run quietly measures a fixed replica
+  count. The panel plots `ScaledObjects registered` against `ScaledObjects
+  reporting a metric`; a gap between them is that failure. Observed live on
+  a token-aware run: registered 2, reporting 0, with
+  `kubectl get scaledobject -n <ns> -o json` giving the reason --
+  `ScaledObjectCheckFailed: ... bearer token=<empty> is required`. When the
+  ScaledObject *is* live but its queries fail, the error counters and
+  `ScalingActive=false` carry the signal instead.
+- KEDA panels need the `keda-operator` metrics endpoint scraped; WVA panels
+  need the run to take the `wva.enabled` path; `vllm:num_requests_waiting_by_reason`
+  needs a recent vLLM; flow-control panels need the EPP's flow-control layer
+  enabled. Simulated backends (`inference-sim`) implement only a subset of
+  the `vllm:*` surface.
+- KEDA's error metric changed names across versions, so the trigger-error
+  target queries `keda_scaler_detail_errors_total` with a fallback to
+  `keda_scaler_errors_total`, each aggregated before the `or` so the two
+  don't double-plot.
 
 ## Extending the dashboard
 
-`benchmark/config/grafana/dashboard.json` starts minimal — KV-cache
-utilization and queue size — scoped by a `namespace` dashboard variable so
-the same dashboard works across benchmark namespaces. Add panels the same
-way (replica counts, scaling activity, latency) and re-run `configure` to
-push the update; `snapshot` picks up whatever panels/targets exist on the
-dashboard at capture time.
+Add panels the same way and re-run `configure` to push the update;
+`snapshot` picks up whatever panels/targets exist on the dashboard at
+capture time. Two constraints come from `_capture_snapshot`, which replays
+each target's `expr` against Prometheus itself rather than letting Grafana
+render it:
+
+1. **Only `$namespace` may appear in an expression.** It is the one variable
+   it substitutes; any other dashboard variable reaches Prometheus unexpanded
+   and the query fails (the snapshot warns and that panel freezes empty).
+   Grafana leaves `$1`-style `label_replace` capture groups alone, so those
+   are safe.
+2. **Use literal range durations, not `$__rate_interval` / `$__interval`.**
+   Those macros are expanded by Grafana at render time, not by the snapshot
+   path. The shipped panels use `[2m]` for counter rates and `[5m]` for
+   anything feeding `histogram_quantile`: latency samples arrive only as
+   requests complete, and on a bursty run a 2-minute window can contain zero
+   of them, which renders the percentile as `NaN`. That was observed on a
+   real session -- `increase(vllm:time_to_first_token_seconds_count[2m])` was
+   0 mid-run while the `[5m]` window held ~245 samples.
+
+`configure` rejects a dashboard that breaks (1). Both are worth re-checking
+with a quick PromQL parse of every target after editing the JSON.

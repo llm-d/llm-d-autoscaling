@@ -89,9 +89,9 @@ doesn't leave one behind holding the port.
   links can only disambiguate sessions by time window, so if the same
   namespace is reused for a later session, the two can't be told apart in
   Grafana/Prometheus once their windows overlap or once retention drops the
-  time boundary. Use one namespace per session if that matters to you, or see
+  time boundary. Use one namespace per session -- see
   [`benchmark-report.md`](benchmark-report.md)'s "Identifying a session's
-  metrics" for a more durable fix.
+  metrics".
   Each experiment's **Grafana** section has its own **Live dashboard**
   link — time-boxed to that run's window and scoped to its
   namespace, so it shows only that run's data — available as soon as

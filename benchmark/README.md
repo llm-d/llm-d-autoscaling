@@ -35,7 +35,8 @@ benchmark/
     │       └── pd-disaggregation/
     │           ├── baseline.yaml         # control = recommended strategy
     │           ├── queue-aggressive.yaml # variant (<strategy>.yaml)
-    │           └── kv-early.yaml          # variant
+    │           ├── kv-early.yaml          # variant
+    │           └── token-aware.yaml       # variant
     └── cluster-configs/      # swappable backend overlays (--cluster-config), grouped by platform
         ├── k8s/
         │   └── inference-sim.yaml       #   llm-d-inference-sim
@@ -90,7 +91,12 @@ Rules:
   the strategy does — e.g. `queue-aggressive.yaml`, `kv-early.yaml`. The file's
   header comment records the exact delta from `baseline.yaml`.
 - **Change only the `keda:` block** in a variant; keep everything else identical
-  to `baseline.yaml`.
+  to `baseline.yaml`. The one admissible exception is a trigger whose *metric
+  does not exist* under baseline — then add the minimum needed to publish it and
+  say so in the header. `token-aware.yaml` does this: its prefill trigger reads
+  `llm_d_epp_inflight_tokens`, so it adds the EPP `inflight-load-producer`
+  plugin (a producer, referenced from no scheduling profile, so routing is
+  unchanged).
 - **Promote a winner** by copying its `keda:` block back into
   `scenarios/guides/<guide>.yaml`; retire the losing variants.
 
@@ -240,6 +246,7 @@ chosen cluster-config + harness/workload, without leaving the browser. See
 [`docs/interactive-dashboard.md`](docs/interactive-dashboard.md).
 
 Each session can also get a standalone HTML summary (`report.html`) with
-links to Grafana panels (vLLM KV-cache utilization, queue size) for that
-session's benchmark-run time window, including a permanent snapshot that survives
+links to Grafana panels for that session's benchmark-run time window --
+vLLM engine metrics, llm-d EPP (router) metrics, and the replica counts the
+scaling strategy is judged on -- including a permanent snapshot that survives
 Prometheus data retention. See [`docs/benchmark-report.md`](docs/benchmark-report.md).
