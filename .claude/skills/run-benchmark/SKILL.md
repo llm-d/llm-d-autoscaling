@@ -78,6 +78,15 @@ subcommand — see Step 7.
 `../llm-d-benchmark/workload/profiles/<harness>/`; list them if the user needs
 options. Other harnesses: `guidellm`, `vllm-benchmark`, `aiperf`.
 
+This repo can also carry its own repo-local workload profiles under
+`benchmark/workload/<harness>/<name>.yaml(.in)` — e.g. a staged ramp derived
+from a shipped profile, tailored to this autoscaling test bed. These aren't
+resolved by `-w`; pass the file straight through instead:
+`--workload-file-path benchmark/workload/<harness>/<name>.yaml(.in)` (alongside
+`-l <harness>`, `-w` is then ignored). The dashboard (`benchmark_report.py
+serve`) discovers both sources and picks the right flag automatically, tagging
+local ones "(local)" in the workload dropdown.
+
 ## Workflow
 
 ### Step 1 — Resolve inputs

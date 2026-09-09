@@ -23,10 +23,14 @@
 # pattern already proven by the EPP+KEDA saturation path). The ServiceAccount
 # + ClusterRoleBinding below grant it read access to Thanos; the
 # `prometheus-auth` Secret (keys: bearerToken, ca.crt) they authenticate with
-# is NOT created here — KEDA's generic-scaledObjects path treats it as
-# user-supplied (see 27a_keda-triggerauthentication.yaml.j2 in llm-d-benchmark).
-# Create it once per namespace after standup:
-#   oc create token wva-prometheus-auth -n <namespace> --duration=24h > /tmp/tok
+# is auto-minted per namespace during standup (llm-d-benchmark step_03,
+# WorkloadMonitoringStep._install_keda_if_enabled -> lib/keda.install_keda_for_namespace
+# -> keda_prometheus_auth.create_prometheus_auth_secret) — it mints a 24h
+# token from `keda-prometheus-auth` and reads the CA cert via
+# openshift-service-ca.crt, the same mechanism the WVA/EPP+KEDA-saturation
+# paths already used. If standup logs a warning that the CA cert could not be
+# extracted, create the Secret manually instead:
+#   oc create token keda-prometheus-auth -n <namespace> --duration=24h > /tmp/tok
 #   oc get cm openshift-service-ca.crt -n <namespace> \
 #     -o jsonpath='{.data.service-ca\.crt}' > /tmp/ca.crt
 #   oc create secret generic prometheus-auth -n <namespace> \
@@ -39,10 +43,10 @@ keda:
     secretName: prometheus-auth
 
 extraObjects:
-  - apiVersion: v1
-    kind: ServiceAccount
-    metadata:
-      name: wva-prometheus-auth
+  # ServiceAccount/keda-prometheus-auth is pre-created by standup step_02
+  # (admin_prerequisites), before step_03 mints a bearer token from it --
+  # see llmdbenchmark/standup/steps/step_02_admin_prerequisites.py. Declaring
+  # it here too would make Helm try to adopt a resource it doesn't own.
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -53,7 +57,7 @@ extraObjects:
       name: allow-thanos-querier-api-access
     subjects:
       - kind: ServiceAccount
-        name: wva-prometheus-auth
+        name: keda-prometheus-auth
         namespace: ${namespace.name}
 
 # GPU scheduling. Uncomment nodeSelector to pin to a GPU product.

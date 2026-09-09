@@ -1,0 +1,146 @@
+apiVersion: v1
+data:
+  latest: 'analyze: false
+
+    endpoint_url: ''''
+
+    experiment_ids:
+
+    - inference-perf-1789049677-biq4r0
+
+    harness: inference-perf
+
+    hostname: lionels-mbp.watson.ibm.com
+
+    model: Qwen/Qwen3-32B
+
+    namespace: lionel-bench-model-sim-32b-pd-token
+
+    output: local
+
+    parallelism: 1
+
+    pvc_name: workload-pvc
+
+    pvc_results_paths:
+
+    - /requests/inference-perf-1789049677-biq4r0_1
+
+    pvc_results_prefix: /requests
+
+    timestamp: 20260910T142322Z
+
+    user: villardl
+
+    workload: guide_pd-disaggregation_2.yaml
+
+    '
+  run-20260909T173435Z: 'analyze: false
+
+    endpoint_url: ''''
+
+    experiment_ids:
+
+    - inference-perf-1788974766-7gxjeb
+
+    harness: inference-perf
+
+    hostname: lionels-mbp.watson.ibm.com
+
+    model: Qwen/Qwen3-32B
+
+    namespace: lionel-bench-model-sim-32b-pd-token
+
+    output: local
+
+    parallelism: 1
+
+    pvc_name: workload-pvc
+
+    pvc_results_paths:
+
+    - /requests/inference-perf-1788974766-7gxjeb_1
+
+    pvc_results_prefix: /requests
+
+    timestamp: 20260909T173435Z
+
+    user: villardl
+
+    workload: guide_pd-disaggregation_2.yaml
+
+    '
+  run-20260909T212841Z: 'analyze: false
+
+    endpoint_url: ''''
+
+    experiment_ids:
+
+    - inference-perf-1788988835-41xd25
+
+    harness: inference-perf
+
+    hostname: Lionels-MacBook-Pro.local
+
+    model: Qwen/Qwen3-32B
+
+    namespace: lionel-bench-model-sim-32b-pd-token
+
+    output: local
+
+    parallelism: 1
+
+    pvc_name: workload-pvc
+
+    pvc_results_paths:
+
+    - /requests/inference-perf-1788988835-41xd25_1
+
+    pvc_results_prefix: /requests
+
+    timestamp: 20260909T212841Z
+
+    user: villardl
+
+    workload: guide_pd-disaggregation_2.yaml
+
+    '
+  run-20260910T142322Z: 'analyze: false
+
+    endpoint_url: ''''
+
+    experiment_ids:
+
+    - inference-perf-1789049677-biq4r0
+
+    harness: inference-perf
+
+    hostname: lionels-mbp.watson.ibm.com
+
+    model: Qwen/Qwen3-32B
+
+    namespace: lionel-bench-model-sim-32b-pd-token
+
+    output: local
+
+    parallelism: 1
+
+    pvc_name: workload-pvc
+
+    pvc_results_paths:
+
+    - /requests/inference-perf-1789049677-biq4r0_1
+
+    pvc_results_prefix: /requests
+
+    timestamp: 20260910T142322Z
+
+    user: villardl
+
+    workload: guide_pd-disaggregation_2.yaml
+
+    '
+kind: ConfigMap
+metadata:
+  name: llm-d-benchmark-run-parameters
+  namespace: lionel-bench-model-sim-32b-pd-token

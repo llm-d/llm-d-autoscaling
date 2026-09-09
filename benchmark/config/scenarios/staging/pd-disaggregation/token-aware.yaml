@@ -416,6 +416,11 @@ scenario:
       name: inference-perf
       experimentProfile: sanity_random.yaml
       pvcSize: 3Gi
-      resources:
-        cpu: "1"
-        memory: 2Gi
+      # Token-aware KEDA triggers only move once prefill/decode see real
+      # backlog, so this scenario is routinely run with heavier profiles
+      # (e.g. guide_pd-disaggregation_2.yaml: num_workers/worker_max_concurrency
+      # 100, 1024-token ISL/OSL, per-request lifecycle reporting) instead of
+      # the sanity_random.yaml default above. That worker count OOMKilled
+      # (exit 137) at the previous 1 CPU / 2Gi cap, so inherit the upstream
+      # inference-perf default (defaults.yaml harness.resources: cpu 16,
+      # memory 32Gi) instead of pinning to the sanity-profile-sized values.
