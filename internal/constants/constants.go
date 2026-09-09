@@ -108,14 +108,6 @@ const (
 	ScaledObjectAPIGroup = "keda.sh"
 
 	// K8s Events
-	K8SEventScaledUp                          = "ScaledUp"
-	K8SEventScaledDown                        = "ScaledDown"
-	K8SEventResourceConstrained               = "ResourceConstrained"
-	K8SEventMetricsUnavailable                = "MetricsUnavailable"
-	K8SEventScaledToZero                      = "ScaledToZero"
-	K8SEventOptimizationFailed                = "OptimizationFailed"
-	K8SEventOptimizationRefused               = "OptimizationRefused"
-	K8SEventUnattributedReadyPods             = "UnattributedReadyPods"
 	K8SEventThroughputAnalyzerRestartRequired = "ThroughputAnalyzerRestartRequired"
 	EnforcerPolicyTypeScaleToZero             = "scale_to_zero"
 	EnforcerPolicyTypeMinimumReplicas         = "minimum_replicas"

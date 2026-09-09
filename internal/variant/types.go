@@ -77,12 +77,10 @@ type ActuationStatus struct {
 
 // VariantAutoscaling is the in-memory representation of the autoscaling configuration
 // and status for a model variant. It embeds metav1.TypeMeta/ObjectMeta so downstream
-// code can continue to read Name/Namespace/Labels/Annotations and record Kubernetes
-// Events against it, as it did with the former CRD.
-//
-// It implements runtime.Object so the shared EventRecorder can reference it, but it is
-// never registered in a scheme or persisted to the Kubernetes API server — variants are
-// synthesized from annotated HPAs/ScaledObjects.
+// code can read Name/Namespace/Labels/Annotations. It implements runtime.Object so
+// test fake clients can store it via AddToScheme (see internal/variant/scheme.go).
+// It is never persisted to the Kubernetes API server — variants are synthesized from
+// annotated HPAs/ScaledObjects.
 type VariantAutoscaling struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

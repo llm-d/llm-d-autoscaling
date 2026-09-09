@@ -18,7 +18,6 @@ package collector
 
 import (
 	"context"
-	"errors"
 	"math"
 	"testing"
 	"time"
@@ -27,10 +26,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
@@ -56,9 +53,8 @@ const (
 
 // mockMetricsSource is a mock implementation of source.MetricsSource for testing
 type mockMetricsSource struct {
-	refreshFunc  func(ctx context.Context, spec source.RefreshSpec) (map[string]*source.MetricResult, error)
-	refreshError error
-	results      map[string]*source.MetricResult
+	refreshFunc func(ctx context.Context, spec source.RefreshSpec) (map[string]*source.MetricResult, error)
+	results     map[string]*source.MetricResult
 }
 
 func (m *mockMetricsSource) QueryList() *source.QueryList {
@@ -69,10 +65,6 @@ func (m *mockMetricsSource) Refresh(ctx context.Context, spec source.RefreshSpec
 	// If refreshFunc is set, use it (takes precedence)
 	if m.refreshFunc != nil {
 		return m.refreshFunc(ctx, spec)
-	}
-	// Otherwise use the error/results fields
-	if m.refreshError != nil {
-		return nil, m.refreshError
 	}
 	if m.results != nil {
 		return m.results, nil
@@ -90,282 +82,6 @@ func (m *mockMetricsSource) Refresh(ctx context.Context, spec source.RefreshSpec
 
 func (m *mockMetricsSource) Get(queryName string, params map[string]string) *source.CachedValue {
 	return nil
-}
-
-func TestRecordMetricsUnavailableEvent(t *testing.T) {
-	tests := []struct {
-		name         string
-		numVAs       int
-		expectedEvts int
-	}{
-		{
-			name:         "records event for single VA",
-			numVAs:       1,
-			expectedEvts: 1,
-		},
-		{
-			name:         "records event for multiple VAs",
-			numVAs:       3,
-			expectedEvts: 3,
-		},
-		{
-			name:         "handles empty VA map",
-			numVAs:       0,
-			expectedEvts: 0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fakeRecorder := record.NewFakeRecorder(100)
-			mockSource := &mockMetricsSource{}
-			collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder, nil)
-
-			variantAutoscalings := make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling)
-			for i := 0; i < tt.numVAs; i++ {
-				vaName := "test-va"
-				if i > 0 {
-					vaName = "test-va-" + string(rune('a'+i))
-				}
-				variantAutoscalings["default/"+vaName] = &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      vaName,
-						Namespace: "default",
-					},
-					Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-						ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
-							Kind: "Deployment",
-							Name: vaName + "-deployment",
-						},
-						ModelID:     "test-model",
-						MaxReplicas: 5,
-					},
-				}
-			}
-
-			collector.recordMetricsUnavailableEvent(variantAutoscalings, nil, "Test metrics unavailable")
-
-			// Count recorded events
-			eventCount := 0
-			for {
-				select {
-				case event := <-fakeRecorder.Events:
-					assert.Contains(t, event, constants.K8SEventMetricsUnavailable,
-						"Event should contain K8SEventMetricsUnavailable constant")
-					assert.Contains(t, event, "Test metrics unavailable",
-						"Event should contain the reason message")
-					eventCount++
-				default:
-					goto done
-				}
-			}
-		done:
-			assert.Equal(t, tt.expectedEvts, eventCount,
-				"Should record correct number of events")
-		})
-	}
-}
-
-func TestCollectReplicaMetrics_ErrorRecordsEvent(t *testing.T) {
-	// This test verifies edge-triggered event emission for metrics collection errors.
-	// Note: Without actual pod data in the k8s client, replicaMetrics is always empty,
-	// so we can't test the full "available → error" transition. This test focuses on
-	// verifying that repeated errors don't flood the event stream.
-
-	ctx := context.Background()
-	fakeRecorder := record.NewFakeRecorder(100)
-
-	variantAutoscalings := map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
-		"default/test-va": {
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-va",
-				Namespace: "default",
-			},
-			Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-				ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
-					Kind: "Deployment",
-					Name: "test-deployment",
-				},
-				ModelID:     "test-model",
-				MaxReplicas: 5,
-			},
-		},
-	}
-
-	scaleTargets := make(map[string]scaletarget.ScaleTargetAccessor)
-	variantCosts := make(map[string]float64)
-
-	// Simulate metrics collection failure
-	mockSource := &mockMetricsSource{
-		refreshError: errors.New("prometheus connection failed"),
-	}
-	collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder, nil)
-
-	// First call with error: no event (first observation, unknown previous state)
-	metrics, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
-	require.Error(t, err, "Should return error when refresh fails")
-	require.Nil(t, metrics, "Should return nil metrics on error")
-
-	select {
-	case event := <-fakeRecorder.Events:
-		t.Errorf("No event expected on first observation: %s", event)
-	default:
-		// Expected: no event
-	}
-
-	// Second call: metrics still fail, should NOT emit event (no state transition)
-	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
-	require.Error(t, err, "Should still return error")
-
-	select {
-	case event := <-fakeRecorder.Events:
-		t.Errorf("No event expected when metrics remain unavailable: %s", event)
-	default:
-		// Expected: no event
-	}
-}
-
-func TestCollectReplicaMetrics_NoMetricsRecordsEvent(t *testing.T) {
-	// This test verifies edge-triggered event emission when no metrics are available.
-	// Simulates a VA scaled to zero (no pods = no metrics) to verify that repeated
-	// "no metrics" states don't flood the event stream.
-
-	ctx := context.Background()
-	fakeRecorder := record.NewFakeRecorder(100)
-
-	variantAutoscalings := map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
-		"default/test-va": {
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-va",
-				Namespace: "default",
-			},
-			Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-				ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
-					Kind: "Deployment",
-					Name: "test-deployment",
-				},
-				ModelID:     "test-model",
-				MaxReplicas: 5,
-			},
-		},
-	}
-
-	scaleTargets := make(map[string]scaletarget.ScaleTargetAccessor)
-	variantCosts := make(map[string]float64)
-
-	// Mock source with no metrics (e.g., VA scaled to zero)
-	mockSource := &mockMetricsSource{
-		results: make(map[string]*source.MetricResult),
-	}
-	collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder, nil)
-
-	// First call: no metrics, should NOT emit event (first observation, unknown previous state)
-	metrics, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
-	require.NoError(t, err, "Should not return error when no metrics available")
-	require.Empty(t, metrics, "Should return empty metrics slice")
-
-	select {
-	case event := <-fakeRecorder.Events:
-		t.Errorf("No event expected on first observation: %s", event)
-	default:
-		// Expected: no event
-	}
-
-	// Second call: still no metrics, should NOT emit event (no state transition)
-	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
-	require.NoError(t, err, "Should not return error")
-
-	select {
-	case event := <-fakeRecorder.Events:
-		t.Errorf("No event expected when metrics remain unavailable: %s", event)
-	default:
-		// Expected: no event
-	}
-
-	// Third call: still no metrics, should NOT emit event (no state transition)
-	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
-	require.NoError(t, err, "Should not return error")
-
-	select {
-	case event := <-fakeRecorder.Events:
-		t.Errorf("No event expected when metrics remain unavailable: %s", event)
-	default:
-		// Expected: no event
-	}
-}
-
-func TestK8SEventMetricsUnavailableConstant(t *testing.T) {
-	// Verify the constant is correctly defined
-	assert.Equal(t, "MetricsUnavailable", constants.K8SEventMetricsUnavailable,
-		"K8SEventMetricsUnavailable constant should match expected value")
-}
-
-func TestCollectReplicaMetrics_EdgeTriggeredEvents(t *testing.T) {
-	// This test verifies the core edge-triggered behavior: events are emitted only on
-	// state transitions, not on every cycle with unavailable metrics. This prevents
-	// event flooding when a VA is legitimately scaled to zero.
-
-	ctx := context.Background()
-	fakeRecorder := record.NewFakeRecorder(100)
-
-	variantAutoscalings := map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
-		"default/test-va": {
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-va",
-				Namespace: "default",
-			},
-			Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-				ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
-					Kind: "Deployment",
-					Name: "test-deployment",
-				},
-				ModelID:     "test-model",
-				MaxReplicas: 5,
-			},
-		},
-	}
-
-	scaleTargets := make(map[string]scaletarget.ScaleTargetAccessor)
-	variantCosts := make(map[string]float64)
-
-	// Mock source that starts with no metrics (simulates VA scaled to zero)
-	mockSource := &mockMetricsSource{
-		results: make(map[string]*source.MetricResult),
-	}
-	collector := NewReplicaMetricsCollector(mockSource, nil, fakeRecorder, nil)
-
-	// First call: metrics unavailable, should NOT emit event (first observation, unknown previous state)
-	_, err := collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
-	require.NoError(t, err)
-
-	select {
-	case event := <-fakeRecorder.Events:
-		t.Errorf("First call should not emit event (unknown previous state): %s", event)
-	default:
-		// Expected: no event - prevents false positive for VAs that start at zero
-	}
-
-	// Second call: metrics still unavailable, should NOT emit event (no state transition)
-	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
-	require.NoError(t, err)
-
-	select {
-	case event := <-fakeRecorder.Events:
-		t.Errorf("Second call should not emit event when metrics remain unavailable: %s", event)
-	default:
-		// Expected: no event - prevents flooding on every optimization cycle
-	}
-
-	// Third call: still unavailable, should NOT emit event
-	_, err = collector.CollectReplicaMetrics(ctx, "test-model", "default", scaleTargets, variantAutoscalings, nil, variantCosts)
-	require.NoError(t, err)
-
-	select {
-	case event := <-fakeRecorder.Events:
-		t.Errorf("Third call should not emit event when metrics remain unavailable: %s", event)
-	default:
-		// Expected: no event
-	}
 }
 
 func TestCollectReplicaMetrics_MetricsObservation(t *testing.T) {
@@ -392,8 +108,7 @@ func TestCollectReplicaMetrics_MetricsObservation(t *testing.T) {
 		t.Fatalf("Failed to add scheme: %v", err)
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	fakeRecorder := record.NewFakeRecorder(100)
-	collector := NewReplicaMetricsCollector(mockSource, k8sClient, fakeRecorder, nil)
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil)
 
 	// Call the function
 	_, err = collector.CollectReplicaMetrics(
@@ -402,7 +117,6 @@ func TestCollectReplicaMetrics_MetricsObservation(t *testing.T) {
 		"test-namespace",
 		make(map[string]scaletarget.ScaleTargetAccessor),
 		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
-		nil,
 		make(map[string]float64),
 	)
 	if err != nil {
@@ -503,8 +217,7 @@ func TestCollectReplicaMetrics_ErrorMetrics(t *testing.T) {
 		t.Fatalf("Failed to add scheme: %v", err)
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	fakeRecorder := record.NewFakeRecorder(100)
-	collector := NewReplicaMetricsCollector(mockSource, k8sClient, fakeRecorder, nil)
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil)
 
 	// Call the function - should return error
 	_, err = collector.CollectReplicaMetrics(
@@ -513,7 +226,6 @@ func TestCollectReplicaMetrics_ErrorMetrics(t *testing.T) {
 		"test-namespace",
 		make(map[string]scaletarget.ScaleTargetAccessor),
 		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
-		nil,
 		make(map[string]float64),
 	)
 	if err == nil {
@@ -630,14 +342,13 @@ func TestCollectReplicaMetrics_ThroughputKeyMerge(t *testing.T) {
 		},
 	}
 
-	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, nil)
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil)
 	results, err := collector.CollectReplicaMetrics(
 		context.Background(),
 		"test-model",
 		"test-ns",
 		make(map[string]scaletarget.ScaleTargetAccessor),
 		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
-		nil,
 		make(map[string]float64),
 	)
 	if err != nil {
@@ -707,14 +418,13 @@ func TestCollectReplicaMetrics_ArrivalRatePerPodRetained(t *testing.T) {
 		},
 	}
 
-	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, nil)
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil)
 	results, err := collector.CollectReplicaMetrics(
 		context.Background(),
 		"test-model",
 		"test-ns",
 		make(map[string]scaletarget.ScaleTargetAccessor),
 		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
-		nil,
 		make(map[string]float64),
 	)
 	if err != nil {
@@ -793,12 +503,12 @@ func TestCollectReplicaMetrics_Freshness(t *testing.T) {
 
 	collect := func(src *mockMetricsSource) []domain.ReplicaMetrics {
 		t.Helper()
-		collector := NewReplicaMetricsCollector(src, k8sClient, nil, nil)
+		collector := NewReplicaMetricsCollector(src, k8sClient, nil)
 		results, err := collector.CollectReplicaMetrics(
 			context.Background(), "test-model", "test-ns",
 			make(map[string]scaletarget.ScaleTargetAccessor),
 			make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
-			nil, make(map[string]float64),
+			make(map[string]float64),
 		)
 		if err != nil {
 			t.Fatalf("CollectReplicaMetrics: %v", err)
@@ -907,14 +617,13 @@ func TestCollectReplicaMetrics_SGLangCacheConfig(t *testing.T) {
 		},
 	})
 
-	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, nil)
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil)
 	results, err := collector.CollectReplicaMetrics(
 		context.Background(),
 		"test-model",
 		"test-ns",
 		map[string]scaletarget.ScaleTargetAccessor{sglangScaleTargetKey: sglangTarget},
 		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
-		nil,
 		make(map[string]float64),
 	)
 	if err != nil {
@@ -983,12 +692,12 @@ func TestCollectReplicaMetrics_SGLangPrefixCacheHitRate(t *testing.T) {
 					}, nil
 				},
 			}
-			collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, nil)
+			collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil)
 			results, err := collector.CollectReplicaMetrics(
 				context.Background(), "test-model", "test-ns",
 				map[string]scaletarget.ScaleTargetAccessor{sglangScaleTargetKey: sglangTarget},
 				make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
-				nil, make(map[string]float64),
+				make(map[string]float64),
 			)
 			if err != nil {
 				t.Fatalf("CollectReplicaMetrics: %v", err)
@@ -1049,7 +758,7 @@ func TestCollectReplicaMetrics_MixedEngine(t *testing.T) {
 		})
 	}
 
-	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, nil)
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil)
 	results, err := collector.CollectReplicaMetrics(
 		context.Background(), "test-model", "test-ns",
 		map[string]scaletarget.ScaleTargetAccessor{
@@ -1057,7 +766,7 @@ func TestCollectReplicaMetrics_MixedEngine(t *testing.T) {
 			sglangScaleTargetKey:  target("lmsysorg/sglang:latest"),
 		},
 		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
-		nil, make(map[string]float64),
+		make(map[string]float64),
 	)
 	if err != nil {
 		t.Fatalf("CollectReplicaMetrics: %v", err)
@@ -1075,101 +784,6 @@ func TestCollectReplicaMetrics_MixedEngine(t *testing.T) {
 	}
 	if got := byPod["sglang-0"]; got != int64(sglangCapacity) {
 		t.Errorf("SGLang pod TotalKvCapacityTokens = %d, want %d (sglang:max_total_num_tokens)", got, int64(sglangCapacity))
-	}
-}
-
-// mockScaleTargetAccessor implements scaletarget.ScaleTargetAccessor for testing.
-// Only GetStatusReadyReplicas is meaningful; all other methods return zero/nil.
-type mockScaleTargetAccessor struct {
-	readyReplicas int32
-}
-
-func (m *mockScaleTargetAccessor) GetName() string                                   { return "" }
-func (m *mockScaleTargetAccessor) GetNamespace() string                              { return "" }
-func (m *mockScaleTargetAccessor) GetReplicas() *int32                               { return nil }
-func (m *mockScaleTargetAccessor) GetDeletionTimestamp() *metav1.Time                { return nil }
-func (m *mockScaleTargetAccessor) GetStatusReplicas() int32                          { return 0 }
-func (m *mockScaleTargetAccessor) GetStatusReadyReplicas() int32                     { return m.readyReplicas }
-func (m *mockScaleTargetAccessor) GetTotalGPUsPerReplica() int                       { return 0 }
-func (m *mockScaleTargetAccessor) GetLeaderPodTemplateSpec() *corev1.PodTemplateSpec { return nil }
-func (m *mockScaleTargetAccessor) GetWorkerPodTemplateSpec() *corev1.PodTemplateSpec { return nil }
-func (m *mockScaleTargetAccessor) GetGroupSize() int32                               { return 1 }
-
-// TestCollectReplicaMetrics_UnattributedReadyPodsEvent verifies that when a VA
-// has Ready pods but none are attributed this cycle, a Warning/UnattributedReadyPods
-// K8s event is emitted exactly once (deduped via vaEventTracker on second call).
-func TestCollectReplicaMetrics_UnattributedReadyPodsEvent(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	require.NoError(t, metrics.InitMetrics(registry))
-
-	scheme := runtime.NewScheme()
-	require.NoError(t, llmdVariantAutoscalingV1alpha1.AddToScheme(scheme))
-	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	fakeRecorder := record.NewFakeRecorder(10)
-
-	// One pod attributed to "va-other", not to "va-target".
-	podLabels := map[string]string{
-		"pod":                               "pod-other",
-		"instance":                          "10.0.0.2:8000",
-		constants.VariantLabelPrometheusKey: "va-other",
-	}
-	ts := time.Now()
-	mockSource := &mockMetricsSource{
-		refreshFunc: func(_ context.Context, _ source.RefreshSpec) (map[string]*source.MetricResult, error) {
-			return map[string]*source.MetricResult{
-				"kv_cache_usage": {
-					Values: []source.MetricValue{{Labels: podLabels, Value: 0.5, Timestamp: ts}},
-				},
-			}, nil
-		},
-	}
-
-	va := &llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
-		ObjectMeta: metav1.ObjectMeta{Name: "va-target", Namespace: "default"},
-		Spec: llmdVariantAutoscalingV1alpha1.VariantAutoscalingSpec{
-			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "dep-target"},
-			ModelID:        "test-model",
-			MaxReplicas:    5,
-		},
-	}
-	variantAutoscalings := map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{
-		"default/va-target": va,
-	}
-	scaleTargets := map[string]scaletarget.ScaleTargetAccessor{
-		"default/dep-target": &mockScaleTargetAccessor{readyReplicas: 2},
-	}
-	variantCosts := make(map[string]float64)
-
-	collector := NewReplicaMetricsCollector(mockSource, k8sClient, fakeRecorder, nil)
-
-	// First call: metrics present for a different VA → va-target has 0 attributed but 2 ready.
-	vaEventTracker := make(map[string]bool)
-	results, err := collector.CollectReplicaMetrics(
-		context.Background(), "test-model", "default",
-		scaleTargets, variantAutoscalings, vaEventTracker, variantCosts,
-	)
-	require.NoError(t, err)
-	assert.NotEmpty(t, results, "expected attributed results for va-other")
-
-	select {
-	case event := <-fakeRecorder.Events:
-		assert.Contains(t, event, constants.K8SEventUnattributedReadyPods)
-		assert.Contains(t, event, "va-target")
-	default:
-		t.Error("expected UnattributedReadyPods event but none received")
-	}
-
-	// Second call with same vaEventTracker: event must NOT be re-emitted (deduped).
-	_, err = collector.CollectReplicaMetrics(
-		context.Background(), "test-model", "default",
-		scaleTargets, variantAutoscalings, vaEventTracker, variantCosts,
-	)
-	require.NoError(t, err)
-	select {
-	case event := <-fakeRecorder.Events:
-		t.Errorf("unexpected duplicate event: %s", event)
-	default:
-		// Expected: no second event
 	}
 }
 
@@ -1212,12 +826,11 @@ func TestCollectReplicaMetrics_ThroughputOrphanSkipped(t *testing.T) {
 		},
 	}
 
-	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, nil)
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil)
 	results, err := collector.CollectReplicaMetrics(
 		context.Background(), "test-model", "test-ns",
 		make(map[string]scaletarget.ScaleTargetAccessor),
 		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
-		nil,
 		make(map[string]float64),
 	)
 	require.NoError(t, err)
@@ -1290,7 +903,7 @@ func TestIsLWSWorker(t *testing.T) {
 				}
 			}
 
-			collector := NewReplicaMetricsCollector(nil, nil, nil, mockLoc)
+			collector := NewReplicaMetricsCollector(nil, nil, mockLoc)
 			got := collector.isLWSWorker(context.Background(), "test-ns", "test-pod")
 
 			if got != tt.want {
@@ -1308,7 +921,7 @@ func TestIsLWSWorker_EmptyPodName(t *testing.T) {
 		},
 	}
 
-	collector := NewReplicaMetricsCollector(nil, nil, nil, mockLoc)
+	collector := NewReplicaMetricsCollector(nil, nil, mockLoc)
 	got := collector.isLWSWorker(context.Background(), "test-ns", "")
 
 	if got != false {
@@ -1439,7 +1052,7 @@ func TestIsLWSWorker_MetricEmissionPatterns(t *testing.T) {
 				},
 			}
 
-			collector := NewReplicaMetricsCollector(nil, nil, nil, mockLoc)
+			collector := NewReplicaMetricsCollector(nil, nil, mockLoc)
 
 			// Simulate filtering: for each pod that emits metrics,
 			// check if it would be filtered out by isLWSWorker
@@ -1646,7 +1259,7 @@ func TestCollectReplicaMetrics_LWSWorkerPodsFiltered(t *testing.T) {
 		},
 	}
 
-	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, mockLoc)
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, mockLoc)
 
 	results, err := collector.CollectReplicaMetrics(
 		context.Background(),
@@ -1654,7 +1267,6 @@ func TestCollectReplicaMetrics_LWSWorkerPodsFiltered(t *testing.T) {
 		namespace,
 		make(map[string]scaletarget.ScaleTargetAccessor),
 		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
-		nil,
 		make(map[string]float64),
 	)
 	if err != nil {
@@ -1826,7 +1438,7 @@ func TestCollectReplicaMetrics_DeploymentUnchanged(t *testing.T) {
 		},
 	}
 
-	collector := NewReplicaMetricsCollector(mockSource, k8sClient, nil, mockLoc)
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, mockLoc)
 
 	results, err := collector.CollectReplicaMetrics(
 		context.Background(),
@@ -1834,7 +1446,6 @@ func TestCollectReplicaMetrics_DeploymentUnchanged(t *testing.T) {
 		namespace,
 		make(map[string]scaletarget.ScaleTargetAccessor),
 		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
-		nil,
 		make(map[string]float64),
 	)
 	if err != nil {

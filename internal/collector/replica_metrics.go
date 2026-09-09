@@ -46,7 +46,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -69,8 +68,6 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/record"
 )
 
 // ReplicaMetricsCollector collects replica-level metrics for both saturation
@@ -78,78 +75,19 @@ import (
 type ReplicaMetricsCollector struct {
 	source    source.MetricsSource
 	k8sClient client.Client
-	recorder  record.EventRecorder
 	locator   locator.PodLocator
-	// metricsAvailableState tracks whether metrics were available in the previous
-	// cycle for each VA (keyed by namespace/name). Used for edge-triggered events.
-	metricsAvailableState map[string]bool
-	mu                    sync.Mutex
 }
 
 // NewReplicaMetricsCollector creates a new replica metrics collector.
-func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient client.Client, recorder record.EventRecorder, podLocator locator.PodLocator) *ReplicaMetricsCollector {
+func NewReplicaMetricsCollector(metricsSource source.MetricsSource, k8sClient client.Client, podLocator locator.PodLocator) *ReplicaMetricsCollector {
 	return &ReplicaMetricsCollector{
-		source:                metricsSource,
-		k8sClient:             k8sClient,
-		recorder:              recorder,
-		locator:               podLocator,
-		metricsAvailableState: make(map[string]bool),
+		source:    metricsSource,
+		k8sClient: k8sClient,
+		locator:   podLocator,
 	}
 }
 
-// recordUnattributedReadyPodsEvent emits a Warning/UnattributedReadyPods K8s event for va.
-// Deduplication: at most one event per VA per cycle; vaEventTracker records which VAs have
-// already received an event this cycle so repeated calls are no-ops for those VAs.
-func (c *ReplicaMetricsCollector) recordUnattributedReadyPodsEvent(
-	va *llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	readyCount int32,
-	vaEventTracker map[string]bool,
-) {
-	if c.recorder == nil {
-		return
-	}
-	key := utils.GetNamespacedKey(va.Namespace, va.Name)
-	if vaEventTracker != nil {
-		if _, ok := vaEventTracker[key]; ok { // one event per VA per cycle
-			return
-		}
-	}
-	c.recorder.Event(va, corev1.EventTypeWarning, constants.K8SEventUnattributedReadyPods,
-		fmt.Sprintf("%s has %d ready pod(s) but none attributed; "+
-			"verify the llm-d.ai/variant pod label on the scale target equals %q",
-			va.Name, readyCount, va.Name))
-	if vaEventTracker != nil {
-		vaEventTracker[key] = true
-	}
-}
-
-func (c *ReplicaMetricsCollector) recordMetricsUnavailableEvent(
-	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	vaEventTracker map[string]bool,
-	reason string,
-) {
-	if c.recorder == nil {
-		return
-	}
-
-	for _, va := range variantAutoscalings {
-		key := utils.GetNamespacedKey(va.Namespace, va.Name)
-		if vaEventTracker != nil {
-			if _, ok := vaEventTracker[key]; ok { // ensures only one event is recorded per VA
-				continue
-			}
-		}
-		c.recorder.Event(va, corev1.EventTypeWarning, constants.K8SEventMetricsUnavailable, reason)
-		if vaEventTracker != nil {
-			vaEventTracker[key] = true
-		}
-	}
-}
-
-// CollectReplicaMetrics collects per-replica metrics for all replicas of a model and records
-// K8S events on failures. This wrapper ensures MetricsUnavailable events are emitted when
-// metrics collection fails or returns no data, using edge-triggered emission (only on
-// transitions from available → unavailable) to avoid flooding the event stream.
+// CollectReplicaMetrics collects per-replica metrics for all replicas of a model.
 //
 // The collected metrics serve both the saturation analyzer and the queueing model analyzer:
 //   - Saturation metrics: KV cache usage, queue length, token capacity, prefix cache hit rate
@@ -172,41 +110,14 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	namespace string,
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
-	vaEventTracker map[string]bool,
 	variantCosts map[string]float64,
 ) ([]domain.ReplicaMetrics, error) {
 	replicaMetrics, err := c.collectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, variantCosts)
-
-	// Determine if metrics are available in this cycle
-	metricsAvailable := err == nil && len(replicaMetrics) > 0
-
-	// Check previous state and emit events only on available → unavailable transitions
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for key, va := range variantAutoscalings {
-		previouslyAvailable, seen := c.metricsAvailableState[key]
-
-		// Edge-triggered: only emit event on available → unavailable transition
-		// Don't emit on first observation (we don't know previous state - VA may have started at zero)
-		shouldEmitEvent := seen && previouslyAvailable && !metricsAvailable
-
-		if shouldEmitEvent {
-			if err != nil {
-				c.recordMetricsUnavailableEvent(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{key: va}, vaEventTracker, "Failed to collect metrics for model")
-			} else if len(replicaMetrics) == 0 {
-				c.recordMetricsUnavailableEvent(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling{key: va}, vaEventTracker, "No saturation metrics available for model")
-			}
-		}
-
-		// Update state for next cycle
-		c.metricsAvailableState[key] = metricsAvailable
+	if err != nil {
+		return nil, err
 	}
 
-	// Warn when a VA has Ready pods but none are attributed to it this cycle.
-	// Only runs when the model produced at least one attributed replica — model-wide
-	// emptiness is the availability path above; the scrape-lag gate keeps quiet there.
-	if err == nil && len(replicaMetrics) > 0 {
+	if len(replicaMetrics) > 0 {
 		attributed := make(map[string]int, len(variantAutoscalings))
 		for i := range replicaMetrics {
 			attributed[replicaMetrics[i].VariantName]++
@@ -221,16 +132,13 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 				continue
 			}
 			if ready := st.GetStatusReadyReplicas(); ready > 0 {
-				ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("VA has ready pods but none attributed",
-					"va", va.Name, "namespace", va.Namespace, "readyReplicas", ready)
-				c.recordUnattributedReadyPodsEvent(va, ready, vaEventTracker)
+				ctrl.LoggerFrom(ctx).Info("Variant has ready pods but none attributed; "+
+					"verify the llm-d.ai/variant pod label on the scale target matches the variant name",
+					"variant", va.Name, "namespace", va.Namespace, "readyReplicas", ready)
 			}
 		}
 	}
 
-	if err != nil {
-		return nil, err
-	}
 	return replicaMetrics, nil
 }
 

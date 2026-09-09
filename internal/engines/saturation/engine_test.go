@@ -33,14 +33,12 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
@@ -231,8 +229,7 @@ var _ = Describe("Saturation Engine", func() {
 			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {},
 			})
-			fakeRecorder := record.NewFakeRecorder(100)
-			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
+			engine := NewEngine(k8sClient, k8sClient, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 
 			By("Performing optimization loop")
 			err := engine.optimize(ctx)
@@ -267,8 +264,7 @@ var _ = Describe("Saturation Engine", func() {
 			testConfig.UpdateQMAnalyzerConfig(map[string]domain.QueueingModelScalingConfig{
 				"default": {},
 			})
-			fakeRecorder := record.NewFakeRecorder(100)
-			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
+			engine := NewEngine(k8sClient, k8sClient, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 
 			By("Running the optimization loop with an observed logger")
 			// A Ginkgo It cannot call zapObserverCtx (it needs *testing.T), so build
@@ -297,23 +293,6 @@ var _ = Describe("Saturation Engine", func() {
 			Expect(mockPromAPI.QueryCallCounts).To(BeEmpty(),
 				"a refused queueing-model cycle must not query Prometheus (no V2/V1 fall-through)")
 
-			By("Verifying the hold is surfaced to operators as a Warning event")
-			// The held variants are synthesized in-memory, so their
-			// TypeOptimizationReady=False/OptimizationRefused condition is set on a
-			// copy with no API object to read back. The event is the observable
-			// half of the same signal, and the one that must not regress to
-			// silence: without it, a cluster whose autoscaling has stopped
-			// entirely looks identical to a healthy idle one.
-			var refusedEvent string
-			for len(fakeRecorder.Events) > 0 {
-				e := <-fakeRecorder.Events
-				if strings.Contains(e, constants.K8SEventOptimizationRefused) {
-					refusedEvent = e
-					break
-				}
-			}
-			Expect(refusedEvent).To(ContainSubstring(v1.EventTypeWarning),
-				"the refusal must raise a Warning event on the held variants")
 		})
 	})
 
@@ -353,8 +332,7 @@ var _ = Describe("Saturation Engine", func() {
 			sourceRegistry.Register("prometheus", source.NewNoOpSource()) // nolint:errcheck
 			// Create minimal test config
 			testConfig := config.NewTestConfig()
-			fakeRecorder := record.NewFakeRecorder(100)
-			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
+			engine := NewEngine(k8sClient, k8sClient, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 			decisions := engine.convertSaturationTargetsToDecisions(context.Background(), saturationTargets, saturationAnalysis, variantStates)
 
 			By("Verifying all variants are included in decisions")
@@ -514,8 +492,7 @@ var _ = Describe("Saturation Engine", func() {
 			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{
 				"default": {},
 			})
-			fakeRecorder := record.NewFakeRecorder(100)
-			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), fakeRecorder, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
+			engine := NewEngine(k8sClient, k8sClient, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 
 			By("Performing optimization loop with source infrastructure")
 			err := engine.optimize(ctx)
@@ -616,7 +593,7 @@ var _ = Describe("Saturation Engine", func() {
 					EnableLimiter: false,
 				},
 			})
-			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), nil, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
+			engine := NewEngine(k8sClient, k8sClient, sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
 
 			By("Running optimize() with EnableLimiter=false")
 			err := engine.optimize(ctx)

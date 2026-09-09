@@ -1,5 +1,5 @@
 # Build the manager binary
-FROM quay.io/projectquay/golang:1.26@sha256:4142f907965c7a70000f34ddfcaefda9b0d61a72dff1b318946c318867f0e53d AS builder
+FROM quay.io/projectquay/golang:1.26@sha256:74560d1d7488711be460297046d5b8423dc21e81f2a0953b36ef6c8ec37a15cb AS builder
 ARG TARGETOS
 ARG TARGETARCH
 

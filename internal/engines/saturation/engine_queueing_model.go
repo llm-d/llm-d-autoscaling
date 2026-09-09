@@ -17,24 +17,13 @@ import (
 )
 
 // refuseQueueingModel is the dispatch target selected when a queueing-model
-// ConfigMap is present. The queueing-model optimize path (optimizeQueueingModel,
-// below) is deferred — it is not yet a first-class voting analyzer in the
-// multi-analyzer engine — so the engine refuses to dispatch it rather than
-// silently running the parked path or silently falling through to the
-// saturation-only / V1 path (either would mask a misconfiguration). It logs an
-// error and produces no decisions; the dispatch case leaves the decision set
-// empty, so the caller's unconditional applySaturationDecisions re-affirms each
-// model's last-good replica count and still emits the HPA/KEDA scaling metric
-// this cycle — affected models are held in place rather than dropped. To
-// re-enable the path later, restore the dispatch to optimizeQueueingModel.
-//
-// The hold is reported as well as logged: a Warning event is raised on every
-// held variant here, and the caller's refused flag drives
-// TypeOptimizationReady=False/OptimizationRefused on each one (vestigial today
-// — nothing reads that condition back, see applySaturationDecisions). Without
-// the event, a cluster that has stopped autoscaling entirely is
-// indistinguishable from a healthy idle one, with a repeating controller log
-// line as the only evidence.
+// ConfigMap is present. The queueing-model optimize path is deferred — it is
+// not yet a first-class voting analyzer in the multi-analyzer engine — so the
+// engine refuses to dispatch it. It logs an error and produces no decisions;
+// the caller's unconditional applySaturationDecisions re-affirms each model's
+// last-good replica count and still emits the HPA/KEDA scaling metric this
+// cycle. The caller's refused flag drives
+// TypeOptimizationReady=False/OptimizationRefused on each in-memory variant.
 func (e *Engine) refuseQueueingModel(
 	ctx context.Context,
 	modelGroups map[string][]llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
@@ -45,7 +34,6 @@ func (e *Engine) refuseQueueingModel(
 		"refusing to dispatch the queueing-model path; enable the saturation and/or throughput analyzers instead",
 		"modelGroups", len(modelGroups),
 	)
-	e.recordOptimizationRefusedEvent(modelGroups)
 }
 
 // optimizeQueueingModel and the two helpers below (runQueueingModelAnalysis,
