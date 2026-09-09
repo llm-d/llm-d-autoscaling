@@ -6,9 +6,12 @@ import (
 	"maps"
 	"slices"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/tracing"
 )
 
 // DefaultLimiter combines an Inventory with an AllocationAlgorithm to constrain
@@ -45,10 +48,29 @@ func (l *DefaultLimiter) Name() string {
 
 // Limit applies resource constraints to scaling decisions.
 // Modifies decisions in place - may reduce TargetReplicas based on available resources.
-func (l *DefaultLimiter) Limit(ctx context.Context, decisions []*domain.VariantDecision) error {
+func (l *DefaultLimiter) Limit(ctx context.Context, decisions []*domain.VariantDecision) (retErr error) {
 	if len(decisions) == 0 {
 		return nil
 	}
+
+	ctx, span := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanLimit)
+	span.SetAttributes(
+		attribute.String(tracing.AttrLimiter, l.Name()),
+		attribute.Int(tracing.AttrDecisionCount, len(decisions)),
+	)
+	defer func() {
+		// Report how many decisions the limiter actually clamped, so a trace
+		// shows the limiter's effect without inspecting every child span.
+		limited := 0
+		for _, d := range decisions {
+			if d != nil && d.WasLimited {
+				limited++
+			}
+		}
+		span.SetAttributes(attribute.Int(tracing.AttrLimitedCount, limited))
+		tracing.RecordError(span, retErr)
+		span.End()
+	}()
 
 	// Step 1: Refresh inventory to get latest limits from cluster
 	if err := l.inventory.Refresh(ctx); err != nil {

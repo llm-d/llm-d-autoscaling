@@ -66,6 +66,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	prometheusutil "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/prometheus"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/tracing"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/crd"
 	poolutil "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/pool"
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
@@ -172,6 +173,33 @@ func main() {
 		os.Exit(1)     //nolint:gocritic // exitAfterDefer: Sync() called explicitly above
 	}
 	setupLog.Info("Configuration loaded successfully")
+
+	// Tracing is opt-in: with OTEL_TRACES_EXPORTER unset (or "none") Init
+	// installs no provider, the OpenTelemetry no-op implementation stays in
+	// place, and nothing is exported.
+	tracingCfg := tracing.ConfigFromEnv()
+	tracingShutdown, err := tracing.Init(context.Background(), tracingCfg)
+	if err != nil {
+		setupLog.Error(err, "failed to initialize tracing - this is a fatal error")
+		logging.Sync() //nolint:errcheck
+		os.Exit(1)
+	}
+	// flushTracing drains pending spans. It is called on every exit path that
+	// follows, since os.Exit does not run deferred functions.
+	flushTracing := func() {
+		if err := tracingShutdown(context.Background()); err != nil {
+			setupLog.Error(err, "failed to shut down tracing cleanly")
+		}
+	}
+	if tracingCfg.Enabled() {
+		setupLog.Info("OpenTelemetry tracing enabled",
+			"exporter", tracingCfg.Exporter,
+			"serviceName", tracingCfg.ServiceName,
+			"endpoint", tracingCfg.Endpoint,
+			"sampler", tracingCfg.Sampler)
+	} else {
+		setupLog.Info("OpenTelemetry tracing disabled (set OTEL_TRACES_EXPORTER to enable)")
+	}
 
 	restartNote := "support requires a controller restart, which happens automatically if the CRD is installed later"
 	if *disableCRDAutoRestart {
@@ -701,6 +729,11 @@ func main() {
 			os.Exit(1)
 		}
 		setupLog.Error(err, "problem running manager")
+		flushTracing()
 		os.Exit(1)
 	}
+
+	// The manager has stopped; flush any spans still buffered by the batcher
+	// before the process exits.
+	flushTracing()
 }

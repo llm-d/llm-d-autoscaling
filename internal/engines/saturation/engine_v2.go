@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"go.opentelemetry.io/otel/attribute"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/accelerator"
@@ -14,6 +15,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/throughput"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/tracing"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
@@ -107,7 +109,15 @@ func (e *Engine) runAnalyzersAndScore(
 	variantAutoscalings map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling,
 	schedulerQueue *domain.SchedulerQueueMetrics,
 	arrivalRate float64,
-) ([]pipeline.NamedAnalyzerResult, error) {
+) (namedResults []pipeline.NamedAnalyzerResult, retErr error) {
+	ctx, span := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanAnalyze)
+	span.SetAttributes(tracing.ModelAttrs(modelID, namespace)...)
+	defer func() {
+		span.SetAttributes(attribute.Int(tracing.AttrAnalyzerCount, len(namedResults)))
+		tracing.RecordError(span, retErr)
+		span.End()
+	}()
+
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Run saturation analyzer (always needed for PerReplicaCapacity).
@@ -165,7 +175,7 @@ func (e *Engine) runAnalyzersAndScore(
 	// is the (a) carrier), tagged Enabled: satVotes; each enabled non-saturation
 	// analyzer is run, calibrated with its resolved thresholds, and appended
 	// tagged Enabled: true.
-	namedResults := []pipeline.NamedAnalyzerResult{{
+	namedResults = []pipeline.NamedAnalyzerResult{{
 		Name:              domain.SaturationAnalyzerName,
 		Result:            baseResult,
 		Score:             scoreForAnalyzer(domain.SaturationAnalyzerName, config),

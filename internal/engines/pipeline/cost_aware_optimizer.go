@@ -6,10 +6,12 @@ import (
 	"math"
 	"sort"
 
+	"go.opentelemetry.io/otel/attribute"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/tracing"
 )
 
 // CostAwareOptimizer is a per-model optimizer that minimizes total cost while
@@ -41,8 +43,19 @@ func (o *CostAwareOptimizer) Optimize(
 	requests []ModelScalingRequest,
 	constraints []*ResourceConstraints,
 ) []domain.VariantDecision {
+	ctx, span := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanOptimize)
+	span.SetAttributes(
+		attribute.String(tracing.AttrOptimizer, o.Name()),
+		attribute.Int(tracing.AttrModelCount, len(requests)),
+	)
+
 	logger := ctrl.LoggerFrom(ctx).WithName(o.Name())
 	var allDecisions []domain.VariantDecision
+
+	defer func() {
+		span.SetAttributes(attribute.Int(tracing.AttrDecisionCount, len(allDecisions)))
+		span.End()
+	}()
 
 	for _, req := range requests {
 		anchor := bindingAnchor(req.AnalyzerResults)

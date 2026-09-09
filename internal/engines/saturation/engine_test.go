@@ -26,6 +26,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/common/model"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -44,6 +47,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/tracing"
 	utils "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	testutils "github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 )
@@ -244,6 +248,123 @@ var _ = Describe("Saturation Engine", func() {
 			// proves the variants were discovered and fed through the saturation pipeline.
 			Expect(mockPromAPI.QueryCallCounts).NotTo(BeEmpty(),
 				"engine should have queried Prometheus for at least one discovered variant")
+		})
+
+		It("should emit a single trace rooted at wva.reconcile for one optimization cycle", func() {
+			By("Installing an in-memory span exporter as the global tracer provider")
+			exporter := tracetest.NewInMemoryExporter()
+			provider := sdktrace.NewTracerProvider(
+				sdktrace.WithSyncer(exporter),
+				sdktrace.WithSampler(sdktrace.AlwaysSample()),
+			)
+			previous := otel.GetTracerProvider()
+			otel.SetTracerProvider(provider)
+			DeferCleanup(func() {
+				otel.SetTracerProvider(previous)
+				Expect(provider.Shutdown(ctx)).To(Succeed())
+			})
+
+			By("Performing one optimization cycle over the discovered variants")
+			mockPromAPI := &testutils.MockPromAPI{
+				QueryResults: map[string]model.Value{},
+				QueryErrors:  map[string]error{},
+			}
+			sourceRegistry := source.NewSourceRegistry()
+			promSource := prometheus.NewPrometheusSource(ctx, mockPromAPI, prometheus.DefaultPrometheusSourceConfig())
+			Expect(sourceRegistry.Register("prometheus", promSource)).To(Succeed())
+
+			testConfig := config.NewTestConfig()
+			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{"default": {}})
+
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(100),
+				sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
+			Expect(engine.optimize(ctx)).To(Succeed())
+
+			spans := exporter.GetSpans()
+			Expect(spans).NotTo(BeEmpty(), "an enabled provider must record spans for a cycle")
+
+			names := make([]string, 0, len(spans))
+			for _, s := range spans {
+				names = append(names, s.Name)
+			}
+
+			By("Producing exactly one root span, named wva.reconcile")
+			var roots tracetest.SpanStubs
+			for _, s := range spans {
+				if !s.Parent.IsValid() {
+					roots = append(roots, s)
+				}
+			}
+			Expect(roots).To(HaveLen(1),
+				"one cycle must produce exactly one root span, got %v", names)
+			Expect(roots[0].Name).To(Equal(tracing.SpanReconcile))
+
+			By("Placing every span of the cycle in the root's trace")
+			traceID := roots[0].SpanContext.TraceID()
+			for _, s := range spans {
+				Expect(s.SpanContext.TraceID()).To(Equal(traceID),
+					"span %q must belong to the cycle's trace", s.Name)
+			}
+
+			By("Recording the cycle's decision context on the root span")
+			attrs := map[string]string{}
+			for _, kv := range roots[0].Attributes {
+				attrs[string(kv.Key)] = kv.Value.Emit()
+			}
+			Expect(attrs).To(HaveKey(tracing.AttrMode))
+			Expect(attrs).To(HaveKey(tracing.AttrOptimizer))
+			Expect(attrs).To(HaveKey(tracing.AttrModelCount))
+
+			By("Emitting the collect and actuate stages within the cycle")
+			// envtest runs no kubelet, so the fixture's pods never become Ready
+			// and the mock Prometheus returns no samples. The cycle therefore
+			// collects, finds no metrics, and actuates without reaching the
+			// analyze/optimize stages. Those stages' spans are covered directly
+			// in the pipeline package's tracing tests.
+			Expect(names).To(ContainElement(tracing.SpanCollect))
+			Expect(names).To(ContainElement(tracing.SpanPrometheusQuery))
+			Expect(names).To(ContainElement(tracing.SpanActuate))
+
+			By("Attaching the actuate stage directly to the root")
+			for _, s := range spans {
+				if s.Name == tracing.SpanActuate {
+					Expect(s.Parent.SpanID()).To(Equal(roots[0].SpanContext.SpanID()))
+				}
+			}
+		})
+
+		It("should export no spans for a cycle when the provider never samples", func() {
+			// Mirrors the disabled deployment: Init installs no provider, so
+			// nothing the cycle starts is ever recorded or exported.
+			exporter := tracetest.NewInMemoryExporter()
+			provider := sdktrace.NewTracerProvider(
+				sdktrace.WithSyncer(exporter),
+				sdktrace.WithSampler(sdktrace.NeverSample()),
+			)
+			previous := otel.GetTracerProvider()
+			otel.SetTracerProvider(provider)
+			DeferCleanup(func() {
+				otel.SetTracerProvider(previous)
+				Expect(provider.Shutdown(ctx)).To(Succeed())
+			})
+
+			mockPromAPI := &testutils.MockPromAPI{
+				QueryResults: map[string]model.Value{},
+				QueryErrors:  map[string]error{},
+			}
+			sourceRegistry := source.NewSourceRegistry()
+			promSource := prometheus.NewPrometheusSource(ctx, mockPromAPI, prometheus.DefaultPrometheusSourceConfig())
+			Expect(sourceRegistry.Register("prometheus", promSource)).To(Succeed())
+
+			testConfig := config.NewTestConfig()
+			testConfig.UpdateSaturationConfig(map[string]config.SaturationScalingConfig{"default": {}})
+
+			engine := NewEngine(k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(100),
+				sourceRegistry, testConfig, pipeline.NewNoOpLimiter("test"))
+			Expect(engine.optimize(ctx)).To(Succeed())
+
+			Expect(exporter.GetSpans()).To(BeEmpty(),
+				"no spans may be exported when sampling is off")
 		})
 
 		It("refuses the queueing-model path loudly and holds, rather than silently running V2/V1", func() {

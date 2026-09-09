@@ -49,6 +49,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
@@ -66,6 +67,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/prometheus"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturationv1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/tracing"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
@@ -175,7 +177,13 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	vaEventTracker map[string]bool,
 	variantCosts map[string]float64,
 ) ([]domain.ReplicaMetrics, error) {
+	ctx, span := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanCollect)
+	span.SetAttributes(tracing.ModelAttrs(modelID, namespace)...)
+	defer span.End()
+
 	replicaMetrics, err := c.collectReplicaMetrics(ctx, modelID, namespace, scaleTargets, variantAutoscalings, variantCosts)
+	span.SetAttributes(attribute.Int(tracing.AttrReplicaMetrics, len(replicaMetrics)))
+	tracing.RecordError(span, err)
 
 	// Determine if metrics are available in this cycle
 	metricsAvailable := err == nil && len(replicaMetrics) > 0

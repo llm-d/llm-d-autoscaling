@@ -6,10 +6,12 @@ import (
 	"math"
 	"sort"
 
+	"go.opentelemetry.io/otel/attribute"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/tracing"
 )
 
 // GreedyByScoreOptimizer is a multi-model optimizer for GPU-constrained
@@ -98,7 +100,17 @@ func (o *GreedyByScoreOptimizer) Optimize(
 	ctx context.Context,
 	requests []ModelScalingRequest,
 	constraints []*ResourceConstraints,
-) []domain.VariantDecision {
+) (allDecisions []domain.VariantDecision) {
+	ctx, span := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanOptimize)
+	span.SetAttributes(
+		attribute.String(tracing.AttrOptimizer, o.Name()),
+		attribute.Int(tracing.AttrModelCount, len(requests)),
+	)
+	defer func() {
+		span.SetAttributes(attribute.Int(tracing.AttrDecisionCount, len(allDecisions)))
+		span.End()
+	}()
+
 	logger := ctrl.LoggerFrom(ctx).WithName(o.Name())
 	available := mergeConstraints(constraints)
 	availableByNS := mergeNamespaceConstraints(constraints)
@@ -143,7 +155,7 @@ func (o *GreedyByScoreOptimizer) Optimize(
 
 	o.fairShareScaleUp(ctx, scaleUpWork, available, availableByNS)
 
-	allDecisions := make([]domain.VariantDecision, 0, len(scaleUpWork))
+	allDecisions = make([]domain.VariantDecision, 0, len(scaleUpWork))
 
 	for _, w := range scaleUpWork {
 		stateMap := buildStateMap(w.req.VariantStates)

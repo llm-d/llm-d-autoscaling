@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
@@ -13,6 +14,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturationv1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/tracing"
 )
 
 // RequestCountFuncType is the signature for functions that retrieve the total request count
@@ -49,6 +51,14 @@ func (e *Enforcer) EnforcePolicyOnDecisions(
 	satConfig *config.SaturationScalingConfig,
 	optimizerName string,
 ) bool {
+	ctx, span := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanEnforce)
+	span.SetAttributes(append(
+		tracing.ModelAttrs(modelID, namespace),
+		attribute.Int(tracing.AttrDecisionCount, len(decisions)),
+		attribute.String(tracing.AttrOptimizer, optimizerName),
+	)...)
+	defer span.End()
+
 	logger := ctrl.LoggerFrom(ctx)
 
 	scaleToZeroEnabled := config.ResolveScaleToZeroEnabled(satConfig, scaleToZeroConfig, modelID)

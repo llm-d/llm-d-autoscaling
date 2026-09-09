@@ -13,11 +13,13 @@ import (
 
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
+	"go.opentelemetry.io/otel/attribute"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	prometheusutil "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/prometheus"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/tracing"
 )
 
 // PrometheusSourceConfig contains configuration for the Prometheus source.
@@ -132,6 +134,16 @@ func (p *PrometheusSource) executeQuery(ctx context.Context, queryName string, p
 			Error:       fmt.Errorf("failed to build query: %w", err),
 		}
 	}
+
+	// The query text is built from registered templates with escaped
+	// parameters (see EscapePromQLValue above), so it is bounded and safe to
+	// record as a span attribute.
+	ctx, span := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanPrometheusQuery)
+	span.SetAttributes(
+		attribute.String(tracing.AttrQueryType, queryName),
+		attribute.String(tracing.AttrQuery, queryStr),
+	)
+	defer span.End()
 
 	// Apply query timeout
 	queryCtx := ctx

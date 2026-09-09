@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -50,6 +51,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturationv1"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/tracing"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
 	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
@@ -434,6 +436,12 @@ func (e *Engine) currentGPULimiter() pipeline.Limiter {
 func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	start := time.Now()
 	var modelsProcessed int
+
+	// Root span of one optimization cycle. Every stage below is a child of it,
+	// so a single trace covers collect → analyze → optimize → limit → enforce
+	// → actuate for this cycle.
+	ctx, span := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanReconcile)
+
 	defer func() {
 		status := "success"
 		if retErr != nil {
@@ -441,6 +449,10 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		}
 		metrics.ObserveOptimizationDuration(time.Since(start).Seconds(), status)
 		metrics.SetModelsProcessed(modelsProcessed)
+
+		span.SetAttributes(attribute.Int(tracing.AttrModelCount, modelsProcessed))
+		tracing.RecordError(span, retErr)
+		span.End()
 	}()
 
 	logger := ctrl.LoggerFrom(ctx)
@@ -474,7 +486,10 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	// internal/collector/collector.go), so skipping it in quota mode loses
 	// nothing of operational value.
 	if e.Config.LimitedModeEnabled() && shouldCollectClusterInventory(e.Config) {
-		inventory, err := collector.CollectInventoryK8S(ctx, e.client)
+		collectCtx, collectSpan := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanCollect)
+		inventory, err := collector.CollectInventoryK8S(collectCtx, e.client)
+		tracing.RecordError(collectSpan, err)
+		collectSpan.End()
 		if err != nil {
 			logger.Error(err, "Failed to collect cluster inventory")
 			// do not proceed to optimization if inventory collection fails in limited mode
@@ -550,6 +565,16 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 	// V1 is deprecated in favor of V2; see issue #1441 for the staged removal plan.
 	// Queueing model is activated by presence of wva-queueing-model-config ConfigMap.
 	mode := modeLabelForAnalyzer(analyzerName)
+	// Analyzer and optimizer names come from a closed set the controller
+	// defines, so they are safe as span attributes.
+	span.SetAttributes(
+		attribute.String(tracing.AttrMode, mode),
+		attribute.String(tracing.AttrAnalyzer, analyzerName),
+		attribute.String(tracing.AttrOptimizer, e.optimizer.Name()),
+		attribute.Bool(tracing.AttrScaleToZero, e.Config.ScaleToZeroEnabled()),
+		attribute.Int(tracing.AttrVariantCount, len(activeVAs)),
+	)
+
 	// optimizationRefused marks a cycle in which the engine declined to run the
 	// configured optimize path at all, as opposed to running it and finding nothing
 	// to change. It is threaded into applySaturationDecisions so the held VAs report
@@ -829,6 +854,16 @@ func (e *Engine) analyzeRoleGroups(
 	currentAllocations map[string]*domain.Allocation,
 	emitSafetyNet safetyNetEmitter,
 ) []domain.VariantDecision {
+	// The V1 path performs analysis and target building together, per role
+	// group, rather than through the V2 analyzer/optimizer split. One analyze
+	// span per model keeps the stage visible on both paths.
+	ctx, span := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanAnalyze)
+	span.SetAttributes(append(
+		tracing.ModelAttrs(modelID, namespace),
+		attribute.String(tracing.AttrAnalyzer, "v1-saturation"),
+	)...)
+	defer span.End()
+
 	logger := ctrl.LoggerFrom(ctx)
 
 	// Sub-group variants by role for P/D-aware analysis.
@@ -884,9 +919,17 @@ func (e *Engine) analyzeRoleGroups(
 			"scaleUpReason", saturationAnalysis.ScaleUpReason,
 			"scaleDownSafe", saturationAnalysis.ScaleDownSafe)
 
-		// Calculate targets and convert to decisions (transition blocking is per role group)
-		saturationTargets := roleAnalyzer.CalculateSaturationTargets(ctx, saturationAnalysis, roleStates)
-		roleDecisions := e.convertSaturationTargetsToDecisions(ctx, saturationTargets, saturationAnalysis, roleStates)
+		// Calculate targets and convert to decisions (transition blocking is per role group).
+		// Target building is the V1 equivalent of the V2 optimizer stage.
+		optimizeCtx, optimizeSpan := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanOptimize)
+		optimizeSpan.SetAttributes(append(
+			tracing.ModelAttrs(modelID, namespace),
+			attribute.String(tracing.AttrOptimizer, "v1-saturation-targets"),
+		)...)
+		saturationTargets := roleAnalyzer.CalculateSaturationTargets(optimizeCtx, saturationAnalysis, roleStates)
+		roleDecisions := e.convertSaturationTargetsToDecisions(optimizeCtx, saturationTargets, saturationAnalysis, roleStates)
+		optimizeSpan.SetAttributes(attribute.Int(tracing.AttrDecisionCount, len(roleDecisions)))
+		optimizeSpan.End()
 
 		logger.Info("Saturation-only decisions made for role group",
 			"modelID", modelID, "role", role,
@@ -1605,6 +1648,13 @@ func (e *Engine) applySaturationDecisions(
 	currentAllocations map[string]*domain.Allocation,
 	refused bool,
 ) {
+	ctx, span := tracing.Tracer(tracerScope).Start(ctx, tracing.SpanActuate)
+	span.SetAttributes(
+		attribute.Int(tracing.AttrDecisionCount, len(decisions)),
+		attribute.Int(tracing.AttrVariantCount, len(vaMap)),
+	)
+	defer span.End()
+
 	logger := ctrl.LoggerFrom(ctx)
 	// Create a map of decisions for O(1) lookup
 	// Use namespace/variantName as key to match vaMap and avoid collisions
