@@ -1,0 +1,104 @@
+# =====================================================================
+# Experiment: Wide-EP LWS fresh post-scale traffic probe (inference-perf)
+# =====================================================================
+#
+# WVA #1525 Track A bounded CPU-only proof. Runs two treatments,
+# sequentially, against a single standing deployment: T1 drives aggregate
+# `vllm:num_requests_waiting` past the unchanged KEDA threshold so
+# KEDA -> HPA -> LeaderWorkerSet scales the decode group 1 -> 2; T2, from a
+# freshly created harness Pod/process, then probes whether the new group
+# (group 1) becomes reachable to new connections while the original group
+# (group 0) also continues serving. See
+# 1525_TRACK_A_FINAL_DECISIONS.md (F1-F16) and
+# 1525_TRACK_A_IMPLEMENTATION_BRIEF.md for the full decision record; this
+# file implements only the smallest defensible change authorized there.
+#
+# Exactly one new file plus one modified scenario file are authorized for
+# this slice (F14); no third tracked source file, no setup:/standup phase,
+# no new load generator.
+#
+# Compatible harness:  inference-perf
+# Compatible workload:  guide_wide-ep-lws_1.yaml
+#                        (workload/profiles/inference-perf in the
+#                        llm-d-benchmark sibling repo; unmodified)
+#
+# Usage (run this after standup, against the wide-ep-lws-scale-mechanics
+# scenario -- see that scenario file's commented runbook for the full
+# pre-run sequence):
+#
+#   llmdbenchmark --spec "${INFERENCE_PERF_SPEC}" run \
+#     -p "${NAMESPACE}" -l inference-perf -w "${INFERENCE_PERF_WORKLOAD}" \
+#     -e benchmark/experiments/wide-ep-lws-fresh-traffic.yaml \
+#     --wait-timeout 600
+#
+# `-o` is intentionally not used: with `-e` present,
+# `step_05_render_profiles.py::_resolve_treatments` returns from the
+# `-e` branch before `context.profile_overrides` (the CLI's `-o` flag) is
+# ever read, so any `-o` value would be silently ignored (F15). The
+# tokenizer override the reused profile needs is therefore carried directly
+# in every treatment below instead.
+
+# No per-treatment retry: a retried T2 would create a second fresh Pod and
+# consume HPA scale-down stabilization margin, silently degrading a valid
+# run (F1).
+treatment_max_attempts: 1
+
+# Abort the run rather than continue past a failed treatment.
+treatment_stop_on_error: true
+
+# This is a closed-loop, non-otel_traces workload; reset_caches is
+# unsupported/inapplicable here and left at its safe default.
+reset_caches: false
+
+# summary_lifecycle_metrics.json-based failure validation is opt-in and not
+# needed: Gate 2's request accounting is done independently against the
+# Prometheus completion counters (F9).
+validate_failures: false
+
+# Deliberately no `setup:` block: a setup phase would trigger a
+# standup-to-teardown cycle per treatment and destroy the LWS 2-group scale
+# state that T2 depends on (F1).
+
+# Shared token shape and tokenizer, merged into every treatment below
+# before its own overrides (F15). Explicit per-treatment duplication of
+# load.type/load.num_workers is preferred for auditability over relying
+# solely on this block; see the two treatments.
+constants:
+  data.input_distribution.min: 512
+  data.input_distribution.max: 512
+  data.input_distribution.mean: 512
+  data.input_distribution.std_dev: 0
+  data.output_distribution.min: 128
+  data.output_distribution.max: 128
+  data.output_distribution.mean: 128
+  data.output_distribution.std_dev: 0
+  tokenizer.pretrained_model_name_or_path: gpt2
+
+treatments:
+  # T1 -- pre-scale-trigger: sized to produce initial waiting well above
+  # the unchanged KEDA threshold=10 for one group (max-num-seqs=5, 2 pods:
+  # running capacity 10, so concurrency 40 - 10 = 30 waiting), driving
+  # HPA desiredReplicas ceil(30/10)=3 clamped to maxReplicaCount=2 and the
+  # LWS 1 -> 2 scale-out (F3). num_requests: 200 is fixed; there is no
+  # N=150 fallback (F3/F13) -- benchmark-image pre-pull is a mandatory
+  # pre-run prerequisite.
+  - name: pre-scale-trigger
+    load.type: concurrent
+    load.num_workers: 1
+    load.stages.0.concurrency_level: 40
+    load.stages.0.num_requests: 200
+
+  # T2 -- post-scale-fresh-traffic: runs from a distinct, freshly created
+  # harness Pod/process (step_07_deploy_harness.py creates a new Pod per
+  # treatment; a new Pod is a new OS process, so inference-perf's
+  # session/connection pool cannot straddle the T1/T2 boundary). Probes
+  # whether the freshly Ready group 1 is reachable to these new connections
+  # while group 0 also continues serving (F4). concurrency_level: 20 is
+  # documented only as producing approximately 20 first-wave fresh
+  # connections -- never as a structural guarantee of 20 distinct TCP
+  # connections, and never as an input to PASS/FAIL (F4/F5).
+  - name: post-scale-fresh-traffic
+    load.type: concurrent
+    load.num_workers: 1
+    load.stages.0.concurrency_level: 20
+    load.stages.0.num_requests: 60
