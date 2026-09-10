@@ -10,6 +10,7 @@ Welcome to the WVA documentation! This directory contains comprehensive guides f
 - **[Installation Guide](https://llm-d.ai/docs/guides/workload-autoscaling)** - Installing WVA on your cluster
 - **[Configuration](https://llm-d.ai/docs/architecture/advanced/autoscaling/workload-variant-autoscaling#configuration)** - Configuring WVA for your workloads
 - **[Architecture](https://llm-d.ai/docs/architecture/advanced/autoscaling)** - Understanding how WVA works under the hood
+- **[Monitoring](https://github.com/llm-d/llm-d/blob/main/docs/operations/observability/README.md)** - Dashboards, metrics, and alerting for a deployed cluster
 
 ### Design
 
@@ -30,6 +31,7 @@ Welcome to the WVA documentation! This directory contains comprehensive guides f
 - **[Development Setup](developer-guide/development.md)** - Setting up your dev environment
 - **[Testing](developer-guide/testing.md)** - Running tests and CI workflows
 - **[Debugging](developer-guide/debugging.md)** - Debugging techniques and tools
+- **[Monitoring (development and CI)](developer-guide/monitoring.md)** - The Grafana and Prometheus stack this repository installs for development
 - **[Contributing](../CONTRIBUTING.md)** - How to contribute to the project
 
 ### Benchmark Guide
