@@ -27,7 +27,7 @@ var _ = Describe("EngineQuery", func() {
 	})
 })
 
-var _ = Describe("SGLang query registration", func() {
+var _ = Describe("Engine-specific query registration", func() {
 	var registry *source.SourceRegistry
 
 	BeforeEach(func() {
@@ -50,6 +50,14 @@ var _ = Describe("SGLang query registration", func() {
 			Expect(get(inferenceengine.EngineVLLM, logical)).NotTo(BeNil(), "missing vLLM "+logical)
 			Expect(get(inferenceengine.EngineSGLang, logical)).NotTo(BeNil(), "missing SGLang "+logical)
 		}
+	})
+
+	It("uses vLLM's exported prefix-cache counter names", func() {
+		prefixCache := get(inferenceengine.EngineVLLM, QueryPrefixCacheHitRate).Template
+		Expect(prefixCache).To(ContainSubstring("vllm:prefix_cache_hits_total{"))
+		Expect(prefixCache).To(ContainSubstring("vllm:prefix_cache_queries_total{"))
+		Expect(prefixCache).NotTo(ContainSubstring("vllm:prefix_cache_hits{"))
+		Expect(prefixCache).NotTo(ContainSubstring("vllm:prefix_cache_queries{"))
 	})
 
 	It("uses sglang:* metric names in SGLang templates", func() {

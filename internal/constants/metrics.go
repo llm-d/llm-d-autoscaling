@@ -61,11 +61,11 @@ const (
 
 	// VLLMPrefixCacheHits is a counter of prefix cache block hits.
 	// Used with VLLMPrefixCacheQueries to compute prefix cache hit rate.
-	VLLMPrefixCacheHits = "vllm:prefix_cache_hits"
+	VLLMPrefixCacheHits = "vllm:prefix_cache_hits_total"
 
 	// VLLMPrefixCacheQueries is a counter of prefix cache block queries.
 	// Used with VLLMPrefixCacheHits to compute prefix cache hit rate.
-	VLLMPrefixCacheQueries = "vllm:prefix_cache_queries"
+	VLLMPrefixCacheQueries = "vllm:prefix_cache_queries_total"
 )
 
 // SGLang Input Metrics
@@ -125,7 +125,7 @@ const (
 
 	// SGLangCachedTokensTotal is a counter of prompt tokens served from the prefix cache.
 	// Used with SGLangPromptTokensTotal to compute the prefix cache hit rate, the
-	// unit-safe analog of vllm:prefix_cache_hits / vllm:prefix_cache_queries.
+	// unit-safe analog of vllm:prefix_cache_hits_total / vllm:prefix_cache_queries_total.
 	SGLangCachedTokensTotal = "sglang:cached_tokens_total"
 
 	// SGLangPromptTokensTotal is a counter of total prompt tokens.

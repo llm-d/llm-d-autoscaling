@@ -97,7 +97,7 @@ type ReplicaMetrics struct {
 	AvgInputTokens float64
 
 	// PrefixCacheHitRate is the fraction of prefix cache queries that were hits (0.0-1.0).
-	// Derived from rate(vllm:prefix_cache_hits[5m]) / rate(vllm:prefix_cache_queries[5m]).
+	// Derived from rate(vllm:prefix_cache_hits_total[5m]) / rate(vllm:prefix_cache_queries_total[5m]).
 	// Used to reduce estimated input token demand for scheduler-queued requests.
 	// Zero when prefix caching is disabled or metrics are unavailable.
 	PrefixCacheHitRate float64

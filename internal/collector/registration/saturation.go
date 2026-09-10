@@ -100,7 +100,7 @@ func RegisterSaturationQueries(sourceRegistry *source.SourceRegistry) {
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryPrefixCacheHitRate,
 		Type:        source.QueryTypePromQL,
-		Template:    `max by (instance, pod, llm_d_ai_variant) (rate(vllm:prefix_cache_hits{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]) / rate(vllm:prefix_cache_queries{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]))`,
+		Template:    `max by (instance, pod, llm_d_ai_variant) (rate(vllm:prefix_cache_hits_total{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]) / rate(vllm:prefix_cache_queries_total{namespace="{{.namespace}}",model_name="{{.modelID}}"}[5m]))`,
 		Params:      []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Prefix cache hit rate per instance (0.0-1.0, 5m rate)",
 	})
