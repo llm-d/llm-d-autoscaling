@@ -23,11 +23,10 @@ const ControllerInstanceEnvVar = "CONTROLLER_INSTANCE"
 // actually changes, instead of delete-and-reset every cycle (which would expose
 // a zero-value gap to a concurrent scrape of the scaling signal).
 //
-// TODO: entries are not pruned on VariantAutoscaling deletion, so the map grows
-// by one small entry per (variant, namespace) ever seen. This matches the
-// pre-existing behavior of the gauge series themselves (also not deleted on VA
-// removal — they expire via Prometheus staleness). Wire a deletion hook if/when
-// per-VA metric cleanup is added.
+// Entries are pruned by DeleteReplicaMetrics when the managing scaler is
+// removed. Without explicit deletion the Prometheus GaugeVec continues
+// exporting the last-seen value on every /metrics scrape; series do NOT
+// expire via Prometheus staleness while the controller process is alive.
 var (
 	replicaSeriesMu    sync.Mutex
 	replicaSeriesAccel = map[string]string{}
@@ -580,8 +579,14 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 		return l
 	}
 
-	// Set the current series first so a concurrent scrape never sees a gap.
+	// Update the tracking map and Set the Prometheus series under the same lock
+	// so that a concurrent DeleteReplicaMetrics cannot remove the map entry and
+	// then delete these series between our Set and our map write.
 	baseLabels := labelsFor(acceleratorType)
+	key := replicaSeriesKey(va.Name, va.Namespace)
+	replicaSeriesMu.Lock()
+	prev, had := replicaSeriesAccel[key]
+	replicaSeriesAccel[key] = acceleratorType
 	currentReplicas.With(baseLabels).Set(float64(current))
 	desiredReplicas.With(baseLabels).Set(float64(desired))
 	// Avoid division by 0 if current replicas is zero: set the ratio to the desired replicas.
@@ -591,14 +596,11 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 	} else {
 		desiredRatio.With(baseLabels).Set(float64(desired) / float64(current))
 	}
-
-	// If the accelerator label changed since the last emit for this VA, evict the
-	// stale prior series (done after Set, so there is no zero-value window).
-	key := replicaSeriesKey(va.Name, va.Namespace)
-	replicaSeriesMu.Lock()
-	prev, had := replicaSeriesAccel[key]
-	replicaSeriesAccel[key] = acceleratorType
 	replicaSeriesMu.Unlock()
+
+	// Evict the stale prior series if the accelerator label changed (done after
+	// Set so there is no zero-value window; safe to do outside the lock because
+	// we already wrote the new accel to the map).
 	if had && prev != acceleratorType {
 		stale := labelsFor(prev)
 		currentReplicas.Delete(stale)
@@ -606,6 +608,43 @@ func (m *MetricsEmitter) EmitReplicaMetrics(ctx context.Context, va *llmdOptv1al
 		desiredRatio.Delete(stale)
 	}
 	return nil
+}
+
+// DeleteReplicaMetrics removes all replica-gauge series for the named variant
+// from the /metrics endpoint and prunes its entry from the accelerator-tracking
+// map. Call this when a variant's managed scaler (HPA or ScaledObject) is
+// deleted or de-annotated so that stale series are evicted immediately rather
+// than persisting until a controller restart.
+//
+// The map removal and the Prometheus Delete calls are performed under the same
+// lock so that a concurrent EmitReplicaMetrics cannot interleave its own Set
+// between the two steps and produce a stale re-leaked series.
+//
+// If EmitReplicaMetrics was never called for this variant (no entry in the
+// tracking map), this is a no-op.
+func (m *MetricsEmitter) DeleteReplicaMetrics(ctx context.Context, variantName, namespace string) {
+	if currentReplicas == nil || desiredReplicas == nil || desiredRatio == nil {
+		return
+	}
+	key := replicaSeriesKey(variantName, namespace)
+	replicaSeriesMu.Lock()
+	defer replicaSeriesMu.Unlock()
+	accel, had := replicaSeriesAccel[key]
+	if !had {
+		return
+	}
+	delete(replicaSeriesAccel, key)
+	labels := prometheus.Labels{
+		constants.LabelVariantName:     variantName,
+		constants.LabelNamespace:       namespace,
+		constants.LabelAcceleratorType: accel,
+	}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	currentReplicas.Delete(labels)
+	desiredReplicas.Delete(labels)
+	desiredRatio.Delete(labels)
 }
 
 // RecordOptimizerActiveMetric records which optimizer is currently active.
