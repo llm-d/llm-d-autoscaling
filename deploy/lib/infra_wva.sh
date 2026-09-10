@@ -166,6 +166,31 @@ EOF
             -p "$(jq -n --arg cfg "$updated_config" '{data:{"config.yaml":$cfg}}')"
     fi
 
+    if [ "${ENABLE_COORDINATOR:-false}" = "true" ]; then
+        log_info "Enabling Coordinator in WVA ConfigMap (ENABLE_COORDINATOR=true)..."
+        # Same approach as scale-to-zero above: patch data["config.yaml"] in place
+        # with yq. The Coordinator flag is read once at manager startup, so this
+        # must land before the readiness wait below — a later patch would need a
+        # rollout restart and would race any specs already running.
+        #
+        # COORDINATOR_INTERVAL is shortened from the 15s default so a rebalance
+        # tick lands well inside the e2e Eventually windows.
+        local current_coord_config
+        current_coord_config=$(kubectl get configmap wva-manager-config -n "$WVA_NS" \
+            -o jsonpath='{.data.config\.yaml}')
+        if [ -z "$current_coord_config" ]; then
+            log_error "ConfigMap wva-manager-config has no data['config.yaml'] key"
+        fi
+
+        local updated_coord_config
+        updated_coord_config=$(echo "$current_coord_config" \
+            | yq '.EXPERIMENTAL_COORDINATOR_ENABLED = "true"' \
+            | yq ".COORDINATOR_INTERVAL = \"${COORDINATOR_INTERVAL:-5s}\"")
+
+        kubectl patch configmap wva-manager-config -n "$WVA_NS" --type=merge \
+            -p "$(jq -n --arg cfg "$updated_coord_config" '{data:{"config.yaml":$cfg}}')"
+    fi
+
     # Wait for WVA to be ready
     log_info "Waiting for WVA controller to be ready..."
     if kubectl wait --for=condition=Ready pod -l "$WVA_CONTROLLER_LABEL_SELECTOR" -n "$WVA_NS" --timeout=60s; then

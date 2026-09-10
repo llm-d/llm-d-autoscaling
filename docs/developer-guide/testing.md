@@ -166,6 +166,24 @@ This deploys:
 
 When `ENABLE_SCALE_TO_ZERO=true` (set by `make deploy-e2e-infra` when `SCALE_TO_ZERO_ENABLED=true`), **`install-epp.sh`** enables the **flowControl feature gate** on the EPP so it exposes `inference_extension_flow_control_queue_size`. The **InferenceObjective** `e2e-default` is created by the scale-from-zero tests (`test/e2e/fixtures`), not by the install scripts.
 
+### Coordinator (gpu-rebalance) tests
+
+The Coordinator is experimental and off by default. It reads `EXPERIMENTAL_COORDINATOR_ENABLED` **once at manager startup**, so it cannot be toggled per-spec — a mid-suite ConfigMap patch would need a rollout restart and would race any specs already running. Instead `deploy/lib/infra_wva.sh` yq-patches `EXPERIMENTAL_COORDINATOR_ENABLED=true` (plus a shorter `COORDINATOR_INTERVAL`) into `wva-manager-config` **before** the manager becomes Ready, gated on `ENABLE_COORDINATOR=true`.
+
+Because of that, the Coordinator specs run in their own job, under the `coordinator` Ginkgo label — deliberately outside the `full` filter, so the saturation-path specs are never exercised against a cluster with the Coordinator rewriting replica ceilings underneath them:
+
+```bash
+make test-e2e-coordinator-with-setup
+```
+
+or, against infrastructure you already deployed with `COORDINATOR_ENABLED=true`:
+
+```bash
+COORDINATOR_ENABLED=true make test-e2e-coordinator
+```
+
+The specs skip themselves with an explanatory message when `COORDINATOR_ENABLED` is false, so running them against a normally-deployed cluster reports a skip rather than a confusing failure.
+
 **Install script tuning (optional, same variables as `deploy/install.sh`):**
 
 - **`SKIP_HELM_REPO_UPDATE`**: When set to **`true`**, `helm repo update` is skipped during installs (faster, less network churn). Default runs `helm repo update` to refresh repo indexes.

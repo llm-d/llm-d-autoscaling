@@ -41,6 +41,15 @@ CONTROLLER_INSTANCE=${CONTROLLER_INSTANCE:-""}
 
 ENABLE_SCALE_TO_ZERO=${ENABLE_SCALE_TO_ZERO:-true}
 
+# EXPERIMENTAL: opt in to the Coordinator (gpu-rebalance). Off by default — the
+# manager reads EXPERIMENTAL_COORDINATOR_ENABLED once at startup, so infra_wva.sh
+# patches wva-manager-config before the manager becomes Ready. Only the dedicated
+# Coordinator e2e job should set this; leaving it on would have the Coordinator
+# rewriting replica ceilings underneath the saturation-path specs.
+ENABLE_COORDINATOR=${ENABLE_COORDINATOR:-false}
+COORDINATOR_INTERVAL=${COORDINATOR_INTERVAL:-5s}
+export ENABLE_COORDINATOR COORDINATOR_INTERVAL
+
 # Prometheus Configuration
 PROM_CA_CERT_PATH=${PROM_CA_CERT_PATH:-"/tmp/prometheus-ca.crt"}
 PROMETHEUS_SECRET_NAME=${PROMETHEUS_SECRET_NAME:-"prometheus-web-tls"}

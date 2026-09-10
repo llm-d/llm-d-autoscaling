@@ -19,6 +19,12 @@ import (
 const (
 	scaledObjectSuffix = "-so"
 
+	// coordinatorInferencePoolAnnotation mirrors gpurebalance.AnnotationInferencePool.
+	// It is duplicated rather than imported so the e2e fixtures keep depending only on
+	// internal/annotations, and so a rename in the plugin surfaces here as a failing
+	// selection assertion rather than a silently-still-compiling test.
+	coordinatorInferencePoolAnnotation = "llm-d.ai/epp-inference-pool"
+
 	kindLeaderWorkerSet = "LeaderWorkerSet"
 	kindDeployment      = "Deployment"
 	apiVersionLWS       = "leaderworkerset.x-k8s.io/v1"
@@ -77,6 +83,45 @@ func WithScaledObjectWVAAnnotations(modelID, cost string) ScaledObjectOption {
 		so.Annotations[annotations.ModelID] = modelID
 		so.Annotations[annotations.VariantCost] = cost
 	}
+}
+
+// WithScaledObjectCoordinatorManaged makes the ScaledObject a gpu-rebalance target.
+//
+// The Coordinator selects a ScaledObject only when it is annotated managed AND does
+// not carry a wva_desired_replicas trigger — a ScaledObject driven by WVA's own
+// desired-replicas signal is deliberately left alone (see IsScaledObjectUnderControl).
+// The default builder installs exactly that trigger, so this option replaces the
+// trigger list with a constant-value Prometheus trigger, and adds the inference-pool
+// annotation the plugin uses to look up the pool's EPP queue depth.
+func WithScaledObjectCoordinatorManaged(pool, prometheusURL string) ScaledObjectOption {
+	return func(so *kedav1alpha1.ScaledObject) {
+		if so.Annotations == nil {
+			so.Annotations = make(map[string]string)
+		}
+		so.Annotations[annotations.Managed] = "true"
+		so.Annotations[coordinatorInferencePoolAnnotation] = pool
+
+		so.Spec.Triggers = []kedav1alpha1.ScaleTriggers{
+			{
+				Type: "prometheus",
+				Name: "coordinator-e2e-constant",
+				Metadata: map[string]string{
+					"serverAddress":       prometheusURL,
+					"query":               "vector(1)",
+					"threshold":           "1",
+					"activationThreshold": "0",
+					"metricType":          "Value",
+					"unsafeSsl":           "true",
+				},
+			},
+		}
+	}
+}
+
+// PrometheusURLFor returns the in-cluster Prometheus address the ScaledObject
+// builder uses, so specs can pass it to WithScaledObjectCoordinatorManaged.
+func PrometheusURLFor(monitoringNamespace string) string {
+	return "https://kube-prometheus-stack-prometheus." + monitoringNamespace + ".svc.cluster.local:9090"
 }
 
 // CreateScaledObject creates a KEDA ScaledObject for WVA. Fails if it already exists.

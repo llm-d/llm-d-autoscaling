@@ -24,6 +24,8 @@ NUM_PROMPTS          ?= 3000
 ENVIRONMENT                 ?= kind-emulator
 USE_SIMULATOR               ?= true
 SCALE_TO_ZERO_ENABLED       ?= false
+COORDINATOR_ENABLED         ?= false
+COORDINATOR_INTERVAL        ?= 5s
 DEPLOY_ALERTING_RULES       ?= false
 SCALER_BACKEND              ?= keda  # keda (ScaledObject) or none (skip, use pre-installed backend)
 LLM_D_ROUTER_VERSION        ?= v0.9.0
@@ -212,6 +214,8 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (WVA + EPP; no model server 
 		ENVIRONMENT=$(ENVIRONMENT) \
 		SCALER_BACKEND=$(SCALER_BACKEND) \
 		ENABLE_SCALE_TO_ZERO=$(SCALE_TO_ZERO_ENABLED) \
+		ENABLE_COORDINATOR=$(COORDINATOR_ENABLED) \
+		COORDINATOR_INTERVAL=$(COORDINATOR_INTERVAL) \
 		DEPLOY_ALERTING_RULES=$(DEPLOY_ALERTING_RULES) \
 		WVA_IMAGE_REPO=$$IMAGE_REPO \
 		WVA_IMAGE_TAG=$$IMAGE_TAG \
@@ -222,6 +226,8 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (WVA + EPP; no model server 
 		ENVIRONMENT=$(ENVIRONMENT) \
 		SCALER_BACKEND=$(SCALER_BACKEND) \
 		ENABLE_SCALE_TO_ZERO=$(SCALE_TO_ZERO_ENABLED) \
+		ENABLE_COORDINATOR=$(COORDINATOR_ENABLED) \
+		COORDINATOR_INTERVAL=$(COORDINATOR_INTERVAL) \
 		DEPLOY_ALERTING_RULES=$(DEPLOY_ALERTING_RULES) \
 		./deploy/install.sh; \
 	fi
@@ -302,6 +308,7 @@ test-e2e-smoke: ## Run smoke e2e tests
 	WVA_E2E_SECONDARY_OVERLAY_PATH=$${WVA_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_WVA_SECONDARY_OVERLAY_PATH)} \
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
+	COORDINATOR_ENABLED=$(COORDINATOR_ENABLED) \
 	DEPLOY_ALERTING_RULES=$(DEPLOY_ALERTING_RULES) \
 	SCALER_BACKEND=keda \
 	MODEL_ID=$(MODEL_ID) \
@@ -355,6 +362,7 @@ test-e2e-full: ## Run full e2e test suite
 	WVA_E2E_SECONDARY_OVERLAY_PATH=$${WVA_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_WVA_SECONDARY_OVERLAY_PATH)} \
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
+	COORDINATOR_ENABLED=$(COORDINATOR_ENABLED) \
 	DEPLOY_ALERTING_RULES=$(DEPLOY_ALERTING_RULES) \
 	SCALER_BACKEND=keda \
 	KEDA_NAMESPACE=$(E2E_KEDA_NAMESPACE) \
@@ -391,6 +399,7 @@ test-e2e-multi-controller: ## Run multi-controller e2e tests
 	WVA_E2E_SECONDARY_OVERLAY_PATH=$${WVA_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_WVA_SECONDARY_OVERLAY_PATH)} \
 	USE_SIMULATOR=$(USE_SIMULATOR) \
 	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
+	COORDINATOR_ENABLED=$(COORDINATOR_ENABLED) \
 	DEPLOY_ALERTING_RULES=$(DEPLOY_ALERTING_RULES) \
 	SCALER_BACKEND=$(SCALER_BACKEND) \
 	MODEL_ID=$(MODEL_ID) \
@@ -406,6 +415,43 @@ test-e2e-multi-controller: ## Run multi-controller e2e tests
 # Convenience target that deploys infra + runs multi-controller tests.
 .PHONY: test-e2e-multi-controller-with-setup
 test-e2e-multi-controller-with-setup: deploy-e2e-infra test-e2e-multi-controller
+
+# Runs the Coordinator / gpu-rebalance subset. The Coordinator is read once at
+# manager startup, so it needs its own deploy with COORDINATOR_ENABLED=true and
+# therefore its own job — the "coordinator" label is deliberately outside the
+# "full" filter so the saturation-path specs never run against a cluster with the
+# Coordinator ticking.
+.PHONY: test-e2e-coordinator
+test-e2e-coordinator: ## Run Coordinator (gpu-rebalance) e2e tests
+	@echo "Running Coordinator e2e tests..."
+	$(eval FOCUS_ARGS := $(if $(FOCUS),-ginkgo.focus="$(FOCUS)",))
+	$(eval SKIP_ARGS := $(if $(SKIP),-ginkgo.skip="$(SKIP)",))
+	KUBECONFIG=$(KUBECONFIG) \
+	ENVIRONMENT=$(ENVIRONMENT) \
+	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
+	LLMD_NAMESPACE=$(E2E_EMULATED_LLMD_NAMESPACE) \
+	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
+	WVA_E2E_SECONDARY_OVERLAY_PATH=$${WVA_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_WVA_SECONDARY_OVERLAY_PATH)} \
+	USE_SIMULATOR=$(USE_SIMULATOR) \
+	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
+	COORDINATOR_ENABLED=$(COORDINATOR_ENABLED) \
+	DEPLOY_ALERTING_RULES=$(DEPLOY_ALERTING_RULES) \
+	SCALER_BACKEND=keda \
+	MODEL_ID=$(MODEL_ID) \
+	go test ./test/e2e/ -timeout 35m -v -ginkgo.v \
+		-ginkgo.label-filter="coordinator" $(FOCUS_ARGS) $(SKIP_ARGS); \
+	TEST_EXIT_CODE=$$?; \
+	echo ""; \
+	echo "=========================================="; \
+	echo "Test execution completed. Exit code: $$TEST_EXIT_CODE"; \
+	echo "=========================================="; \
+	exit $$TEST_EXIT_CODE
+
+# Convenience target that deploys Coordinator-enabled infra + runs the Coordinator tests.
+.PHONY: test-e2e-coordinator-with-setup
+test-e2e-coordinator-with-setup:
+	COORDINATOR_ENABLED=true SCALER_BACKEND=keda $(MAKE) deploy-e2e-infra
+	COORDINATOR_ENABLED=true $(MAKE) test-e2e-coordinator
 
 # Convenience target that deploys KEDA infra + runs full test suite.
 # Set DELETE_CLUSTER=true to delete Kind cluster after tests (default: keep cluster for debugging).
