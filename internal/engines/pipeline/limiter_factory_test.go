@@ -72,4 +72,36 @@ var _ = Describe("NewLimiterFromConfig", func() {
 		Expect(comp.Constituents()[0].Name()).To(Equal("cluster-quota"))
 		Expect(comp.Constituents()[1].Name()).To(Equal("namespace-quota"))
 	})
+
+	It("returns a namespace limiter for a namespace-inventory entry", func() {
+		cfg := configWithLimiters(config.QuotaLimiterConfig{
+			Name: "namespace-inventory", Type: string(config.LimiterTypeNamespaceInventory),
+			Exclude: []string{"kube-system"},
+			Selectors: map[string]config.NodeSelector{
+				"ns-prod": {MatchLabels: map[string]string{"team": "prod"}},
+			},
+		})
+
+		l, err := NewLimiterFromConfig(cfg, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(l).To(BeAssignableToTypeOf(&NamespaceLimiter{}))
+		Expect(l.Name()).To(Equal(NamespaceLimiterName))
+	})
+
+	It("surfaces an invalid node selector instead of building a limiter", func() {
+		// Parse-time validation rejects this, so reaching the factory means the
+		// config changed underneath a validated parse; fail loudly either way.
+		cfg := configWithLimiters(config.QuotaLimiterConfig{
+			Name: "namespace-inventory", Type: string(config.LimiterTypeNamespaceInventory),
+			Selectors: map[string]config.NodeSelector{
+				"ns-prod": {MatchExpressions: []config.NodeSelectorRequirement{{
+					Key: "team", Operator: "NotAnOperator", Values: []string{"prod"},
+				}}},
+			},
+		})
+
+		l, err := NewLimiterFromConfig(cfg, nil)
+		Expect(err).To(MatchError(ContainSubstring(`invalid node selector for namespace "ns-prod"`)))
+		Expect(l).To(BeNil())
+	})
 })

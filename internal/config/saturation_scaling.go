@@ -478,9 +478,20 @@ func (c *SaturationScalingConfig) validateLimiters() error {
 			}
 		case string(LimiterTypeQuota):
 			quotaOnes = append(quotaOnes, l)
+		case string(LimiterTypeNamespaceInventory):
+			// Physical capacity partitioned by node selectors, so quota caps are
+			// meaningless here; exclude is shared and stays allowed. The entry's
+			// own rules live on NamespaceInventoryConfig so the quota schema's
+			// rules never silently apply to it.
+			if l.Scope != "" || len(l.ClusterQuotas) > 0 || len(l.NamespaceQuotas) > 0 {
+				return fmt.Errorf("limiters[%d] (type %q): must not set quota fields (scope/quotas/namespaceQuotas)", i, l.Type)
+			}
+			if err := namespaceInventoryFromEntry(l).Validate(); err != nil {
+				return fmt.Errorf("limiters[%d] (type %q): %w", i, l.Type, err)
+			}
 		default:
-			return fmt.Errorf("limiters[%d]: unknown limiter type %q (valid: %q, %q, %q)",
-				i, l.Type, limiterTypeGPUInventory, LimiterTypeInventory, LimiterTypeQuota)
+			return fmt.Errorf("limiters[%d]: unknown limiter type %q (valid: %q, %q, %q, %q)",
+				i, l.Type, limiterTypeGPUInventory, LimiterTypeInventory, LimiterTypeQuota, LimiterTypeNamespaceInventory)
 		}
 	}
 	if len(quotaOnes) > 0 {

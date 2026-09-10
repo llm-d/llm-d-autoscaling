@@ -168,6 +168,12 @@ type Engine struct {
 	limiterSig     string
 	limiterMu      sync.Mutex
 
+	// nsInventoryV2Warn emits a one-time warning when the namespace-inventory
+	// limiter is active under a V2 analyzer: the V2 constraint path
+	// (ComputeConstraints/GreedyByScoreOptimizer) is type-keyed and cannot
+	// enforce per-namespace partitioning, so isolation applies to V1 only.
+	nsInventoryV2Warn sync.Once
+
 	// metricsRegistry is used to access metrics sources for request count queries
 	metricsRegistry *source.SourceRegistry
 
@@ -413,12 +419,18 @@ func (e *Engine) refreshLimiter(ctx context.Context) {
 }
 
 // limiterSignature is a deterministic fingerprint of the config inputs that
-// determine the GPU limiter, used to detect when a rebuild is needed. Quota
-// entry maps are marshaled with sorted keys by encoding/json, so equal configs
-// always produce equal signatures.
+// determine the GPU limiter, used to detect when a rebuild is needed. Entry maps
+// are marshaled with sorted keys by encoding/json, so equal configs always
+// produce equal signatures.
+//
+// Every mode's inputs must appear here: a mode whose entry is missing would keep
+// serving a stale limiter after an edit, silently contradicting the documented
+// no-restart behavior.
 func limiterSignature(cfg *config.Config) string {
 	entries, _ := json.Marshal(cfg.EffectiveQuotaEntries())
-	return string(cfg.EffectiveLimiterMode()) + "|" + string(entries)
+	nsEntry, _ := cfg.EffectiveNamespaceInventoryEntry()
+	nsInventory, _ := json.Marshal(nsEntry)
+	return string(cfg.EffectiveLimiterMode()) + "|" + string(entries) + "|" + string(nsInventory)
 }
 
 // currentGPULimiter returns the active GPU limiter, read under limiterMu so it is
@@ -783,7 +795,17 @@ func (e *Engine) optimizeV1(
 		}
 	}
 	if globalSaturationConfig.EnableLimiter && len(allDecisions) > 0 {
+		// The live-rebuilt limiter selected by Config.EffectiveLimiterMode. The
+		// namespace-inventory mode deliberately replaces the cluster-wide limiter
+		// rather than intersecting with it: nodes are assigned one-bucket-each, so
+		// per-bucket sums never exceed physical capacity and a separate
+		// cluster-total cap is redundant. One consequence is intentional — nodes
+		// matching no selector and no default contribute to no pool, so their
+		// capacity is unusable until they are labeled or a default selector is
+		// added.
+		limiter := e.currentGPULimiter()
 		logger.Info("Applying GPU limiter to scaling decisions",
+			"limiter", limiter.Name(),
 			"decisionCount", len(allDecisions))
 
 		decisionPtrs := make([]*domain.VariantDecision, len(allDecisions))
@@ -791,9 +813,22 @@ func (e *Engine) optimizeV1(
 			decisionPtrs[i] = &allDecisions[i]
 		}
 
-		if err := e.currentGPULimiter().Limit(ctx, decisionPtrs); err != nil {
+		if err := limiter.Limit(ctx, decisionPtrs); err != nil {
 			// skip record K8S events since there's no VA
-			logger.Error(err, "GPU limiter failed, proceeding with original decisions")
+			if e.Config.EffectiveLimiterMode() == config.LimiterTypeNamespaceInventory {
+				// Namespace inventory is a tenant-isolation control, and its
+				// Refresh runs inside Limit, so a transient node-discovery failure
+				// would otherwise apply unconstrained decisions and let one tenant
+				// take another's GPUs for the cycle. Fail closed: hold the current
+				// replica counts and retry next cycle. The other modes keep the
+				// established fail-open behavior.
+				logger.Error(err, "namespace-inventory limiter failed; holding scale-up this cycle to preserve isolation")
+				for i := range allDecisions {
+					allDecisions[i].TargetReplicas = allDecisions[i].CurrentReplicas
+				}
+			} else {
+				logger.Error(err, "GPU limiter failed, proceeding with original decisions")
+			}
 		} else {
 			for _, d := range decisionPtrs {
 				if d.WasLimited {
@@ -1064,7 +1099,17 @@ func (e *Engine) optimizeV2(
 		return nil
 	}
 
-	// Stage 2: Compute GPU constraints and call optimizer
+	// Stage 2: Compute GPU constraints and call optimizer.
+	// Namespace-scoped inventory is not yet enforced on the V2 constraint path:
+	// ResourceConstraints is type-keyed and cannot express per-namespace
+	// partitioning, so per-namespace isolation currently applies only to the V1
+	// saturation analyzer. Warn once so operators relying on it aren't misled.
+	// Enabling per-namespace enforcement on V2 is the tracked follow-up.
+	if e.Config.EffectiveLimiterMode() == config.LimiterTypeNamespaceInventory {
+		e.nsInventoryV2Warn.Do(func() {
+			logger.Info("namespace-scoped GPU inventory is configured but NOT enforced on the V2 optimizer path; per-namespace isolation applies only to the V1 saturation analyzer. GPU constraints on this path are cluster-wide.")
+		})
+	}
 	optimizer, constraints := e.selectV2Optimizer(ctx, requests)
 	// Scope-coupled rescale enablement (cluster + per-namespace) is resolved from
 	// config and handed to the GPU-aware optimizer for this cycle.
