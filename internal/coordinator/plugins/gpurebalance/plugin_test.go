@@ -120,6 +120,19 @@ func makeGPUQuota(name, ns string, gpus int64) *corev1.ResourceQuota {
 	}
 }
 
+// tickUntilDownscaleApplies drives the plugin for as many ticks as a lowered
+// ceiling must persist before the stabilizer writes it. Raising a ceiling lands
+// on the first tick, so only cases that expect a downgrade need this. See
+// damping.go for why the two directions are treated differently.
+func tickUntilDownscaleApplies(t *testing.T, p *Plugin, objs ...client.Object) {
+	t.Helper()
+	for i := range downscaleStabilizationTicks {
+		if err := p.Tick(context.Background(), objs); err != nil {
+			t.Fatalf("unexpected error on tick %d: %v", i+1, err)
+		}
+	}
+}
+
 func newPlugin(t *testing.T, queues map[string]float64, errs map[string]error, objs ...client.Object) (*Plugin, client.Client) {
 	t.Helper()
 	scheme := newTestScheme(t)
@@ -346,9 +359,7 @@ func TestRebalance_QueryError_TreatedAsZero(t *testing.T) {
 		hpaA, hpaB, makeGPUQuota("q", "ns", 10),
 	)
 
-	if err := p.Tick(context.Background(), []client.Object{hpaA, hpaB}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	tickUntilDownscaleApplies(t, p, hpaA, hpaB)
 	// Reserve one replica for each pool, then give the remaining eight to model-b.
 	if got := getMaxReplicas(t, c, hpaA); got != 1 {
 		t.Errorf("model-a maxReplicas = %d, want 1 (query error → treated as 0, clamped to min)", got)
@@ -463,9 +474,7 @@ func TestRebalance_ReservesHPAMinimum(t *testing.T) {
 		hpaA, hpaB, makeGPUQuota("q", "ns", 10),
 	)
 
-	if err := p.Tick(context.Background(), []client.Object{hpaA, hpaB}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	tickUntilDownscaleApplies(t, p, hpaA, hpaB)
 	if got := getMaxReplicas(t, c, hpaA); got != 7 {
 		t.Errorf("model-a maxReplicas = %d, want 7", got)
 	}
@@ -484,9 +493,7 @@ func TestRebalance_ReservesScaledObjectMinimum(t *testing.T) {
 		soA, soB, makeGPUQuota("q", "ns", 10),
 	)
 
-	if err := p.Tick(context.Background(), []client.Object{soA, soB}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	tickUntilDownscaleApplies(t, p, soA, soB)
 	if got := getMaxReplicaCount(t, c, soA); got != 7 {
 		t.Errorf("model-a maxReplicaCount = %d, want 7", got)
 	}
@@ -506,9 +513,7 @@ func TestRebalance_ReservesMixedMinimums(t *testing.T) {
 		hpaA, soB, makeGPUQuota("q", "ns", 12),
 	)
 
-	if err := p.Tick(context.Background(), []client.Object{hpaA, soB}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	tickUntilDownscaleApplies(t, p, hpaA, soB)
 	if got := getMaxReplicas(t, c, hpaA); got != 4 {
 		t.Errorf("model-a maxReplicas = %d, want 4", got)
 	}
@@ -537,9 +542,7 @@ func TestRebalance_AllocationNeverExceedsQuota(t *testing.T) {
 		hpaA, soB, hpaC, makeGPUQuota("q", "ns", quota),
 	)
 
-	if err := p.Tick(context.Background(), []client.Object{hpaA, soB, hpaC}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	tickUntilDownscaleApplies(t, p, hpaA, soB, hpaC)
 
 	gotA := getMaxReplicas(t, c, hpaA)
 	gotB := getMaxReplicaCount(t, c, soB)

@@ -31,6 +31,8 @@ const (
 type Plugin struct {
 	client  client.Client
 	promAPI promv1.API
+	// stab damps noise-driven ceiling changes across ticks. See damping.go.
+	stab *stabilizer
 }
 
 // +kubebuilder:rbac:groups="",resources=resourcequotas,verbs=get;list;watch
@@ -39,7 +41,7 @@ type Plugin struct {
 
 // New constructs the gpu-rebalance Plugin.
 func New(c client.Client, promAPI promv1.API) *Plugin {
-	return &Plugin{client: c, promAPI: promAPI}
+	return &Plugin{client: c, promAPI: promAPI, stab: newStabilizer()}
 }
 
 // Name returns the unique plugin identifier.
@@ -78,6 +80,18 @@ func (p *Plugin) Tick(ctx context.Context, selected []client.Object) error {
 	if len(byNamespace) == 0 {
 		return nil
 	}
+
+	// Drop damping state for scalers that no longer exist, so the map tracks the
+	// live set rather than every scaler ever seen. Done before rebalancing so a
+	// scaler deleted and quickly recreated starts from a clean streak instead of
+	// inheriting the old object's pending downgrade.
+	seen := make(map[string]struct{})
+	for ns, entries := range byNamespace {
+		for _, e := range entries {
+			seen[scalerKey(ns, e.displayKind, e.obj)] = struct{}{}
+		}
+	}
+	p.stab.retain(seen)
 
 	for ns, entries := range byNamespace {
 		if err := p.rebalanceNamespace(ctx, log, ns, entries); err != nil {
@@ -195,22 +209,29 @@ func (p *Plugin) rebalanceNamespace(ctx context.Context, log logr.Logger, ns str
 		targets[maxWeightIdx] += int32(rem)
 	}
 
-	// TODO: the current patch-on-every-tick approach causes wobble. Instantaneous
-	// queue depth is noisy, so small fluctuations (e.g. q=270 vs q=286) move the
-	// floor/ceil boundary each cycle, producing 1-replica flips every 15s. Each
-	// flip triggers pod churn which perturbs the queue and drives the next flip.
-	// Fix with two complementary guards:
-	//   1. Minimum delta: skip the patch when abs(new - current) < N replicas so
-	//      noise-driven micro-adjustments are ignored.
-	//   2. Per-HPA cooldown: after patching an HPA, skip it for the next K ticks
-	//      so the HPA and its pods have time to converge before the next reading.
-	// An alternative to (2) is EWMA smoothing of the queue metric across ticks,
-	// which dampens burst noise without adding a hard cooldown delay.
-
+	// Ceilings are recomputed from an instantaneous queue reading, so they are
+	// noisy. shouldPatch decides whether a computed change is worth acting on:
+	// increases go through immediately, decreases must persist across several
+	// ticks before they can evict pods. See damping.go for why the directions
+	// are treated differently.
 	for i, e := range entries {
 		if targets[i] == e.currentMax {
+			// Still report agreement so a pending downgrade streak is cleared.
+			p.stab.shouldPatch(scalerKey(ns, e.displayKind, e.obj), e.currentMax, targets[i])
 			continue
 		}
+
+		key := scalerKey(ns, e.displayKind, e.obj)
+		if !p.stab.shouldPatch(key, e.currentMax, targets[i]) {
+			log.V(1).Info("Holding max replica ceiling; lower target has not persisted long enough",
+				"kind", e.displayKind, "name", e.obj.GetName(), "namespace", ns,
+				"pool", e.pool,
+				"current", e.currentMax, "computed", targets[i],
+				"queue", queues[i], "quota", quota,
+			)
+			continue
+		}
+
 		log.Info("Setting max replica ceiling",
 			"kind", e.displayKind, "name", e.obj.GetName(), "namespace", ns,
 			"pool", e.pool,
