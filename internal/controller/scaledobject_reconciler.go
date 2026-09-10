@@ -27,6 +27,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
 // ScaledObjectReconciler tracks namespaces for annotation-based WVA discovery via KEDA
@@ -35,7 +36,8 @@ import (
 // scalers. Registered only when the KEDA CRD is detected at startup.
 type ScaledObjectReconciler struct {
 	client.Client
-	Datastore datastore.Datastore
+	Datastore      datastore.Datastore
+	MetricsEmitter *metrics.MetricsEmitter
 }
 
 // +kubebuilder:rbac:groups=keda.sh,resources=scaledobjects,verbs=get;list;watch
@@ -49,6 +51,7 @@ func (r *ScaledObjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err := r.Get(ctx, req.NamespacedName, so); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.Datastore.NamespaceUntrack("AnnotatedScaler", req.Name, req.Namespace)
+			r.MetricsEmitter.DeleteReplicaMetrics(req.Name, req.Namespace)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -56,6 +59,7 @@ func (r *ScaledObjectReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	if !so.DeletionTimestamp.IsZero() || !annotations.IsManaged(so) {
 		r.Datastore.NamespaceUntrack("AnnotatedScaler", req.Name, req.Namespace)
+		r.MetricsEmitter.DeleteReplicaMetrics(req.Name, req.Namespace)
 	} else {
 		r.Datastore.NamespaceTrack("AnnotatedScaler", req.Name, req.Namespace)
 	}

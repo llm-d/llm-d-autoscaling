@@ -142,3 +142,93 @@ var _ = Describe("EmitReplicaMetrics", func() {
 		Expect(getLabelValue(s[0], constants.LabelControllerInstance)).To(Equal("ctrl-a"))
 	})
 })
+
+var _ = Describe("DeleteReplicaMetrics", func() {
+	var (
+		registry *prometheus.Registry
+		emitter  *MetricsEmitter
+		ctx      context.Context
+	)
+
+	BeforeEach(func() {
+		resetMetrics()
+		registry = prometheus.NewRegistry()
+		Expect(InitMetrics(registry)).To(Succeed())
+		emitter = NewMetricsEmitter()
+		ctx = context.Background()
+		_ = ctx // used by EmitReplicaMetrics
+	})
+
+	series := func(name string) []*dto.Metric {
+		mfs, err := registry.Gather()
+		Expect(err).NotTo(HaveOccurred())
+		for _, mf := range mfs {
+			if mf.GetName() == name {
+				return mf.GetMetric()
+			}
+		}
+		return nil
+	}
+
+	It("evicts all three gauge series for a removed variant", func() {
+		va := newReplicaTestVA("va-x", "ns")
+		Expect(emitter.EmitReplicaMetrics(ctx, va, 2, 3, "A100")).To(Succeed())
+
+		Expect(series(constants.WVADesiredReplicas)).To(HaveLen(1))
+		Expect(series(constants.WVACurrentReplicas)).To(HaveLen(1))
+		Expect(series(constants.WVADesiredRatio)).To(HaveLen(1))
+
+		emitter.DeleteReplicaMetrics("va-x", "ns")
+
+		Expect(series(constants.WVADesiredReplicas)).To(BeEmpty(), "desired_replicas series must be evicted")
+		Expect(series(constants.WVACurrentReplicas)).To(BeEmpty(), "current_replicas series must be evicted")
+		Expect(series(constants.WVADesiredRatio)).To(BeEmpty(), "desired_ratio series must be evicted")
+	})
+
+	It("prunes the accelerator-tracking map entry", func() {
+		va := newReplicaTestVA("va-y", "ns")
+		Expect(emitter.EmitReplicaMetrics(ctx, va, 1, 2, "H100")).To(Succeed())
+
+		key := replicaSeriesKey("va-y", "ns")
+		replicaSeriesMu.Lock()
+		_, had := replicaSeriesAccel[key]
+		replicaSeriesMu.Unlock()
+		Expect(had).To(BeTrue(), "map must contain the entry before deletion")
+
+		emitter.DeleteReplicaMetrics("va-y", "ns")
+
+		replicaSeriesMu.Lock()
+		_, still := replicaSeriesAccel[key]
+		replicaSeriesMu.Unlock()
+		Expect(still).To(BeFalse(), "map entry must be pruned after deletion")
+	})
+
+	It("does not evict a different VA's series in the same namespace", func() {
+		Expect(emitter.EmitReplicaMetrics(ctx, newReplicaTestVA("va-keep", "ns"), 1, 2, "A100")).To(Succeed())
+		Expect(emitter.EmitReplicaMetrics(ctx, newReplicaTestVA("va-del", "ns"), 1, 3, "A100")).To(Succeed())
+
+		Expect(series(constants.WVADesiredReplicas)).To(HaveLen(2))
+
+		emitter.DeleteReplicaMetrics("va-del", "ns")
+
+		remaining := series(constants.WVADesiredReplicas)
+		Expect(remaining).To(HaveLen(1), "only the deleted variant's series should be removed")
+		Expect(getLabelValue(remaining[0], constants.LabelVariantName)).To(Equal("va-keep"))
+	})
+
+	It("is a no-op when EmitReplicaMetrics was never called for the variant", func() {
+		// No emit; delete should not panic or affect other series.
+		Expect(emitter.EmitReplicaMetrics(ctx, newReplicaTestVA("other", "ns"), 1, 2, "A100")).To(Succeed())
+		emitter.DeleteReplicaMetrics("never-emitted", "ns")
+		Expect(series(constants.WVADesiredReplicas)).To(HaveLen(1), "unrelated series must survive a no-op delete")
+	})
+
+	It("evicts series when the accelerator label was unresolved at emit time", func() {
+		va := newReplicaTestVA("va-unresolved", "ns")
+		Expect(emitter.EmitReplicaMetrics(ctx, va, 1, 2, "")).To(Succeed())
+
+		emitter.DeleteReplicaMetrics("va-unresolved", "ns")
+
+		Expect(series(constants.WVADesiredReplicas)).To(BeEmpty(), "unresolved-accel series must be evicted")
+	})
+})

@@ -27,6 +27,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/annotations"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/datastore"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 )
 
 // HPAReconciler tracks namespaces for annotation-based WVA discovery via HPA objects.
@@ -34,7 +35,8 @@ import (
 // loop can scope its List calls to namespaces that contain managed scalers.
 type HPAReconciler struct {
 	client.Client
-	Datastore datastore.Datastore
+	Datastore      datastore.Datastore
+	MetricsEmitter *metrics.MetricsEmitter
 }
 
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch
@@ -48,6 +50,7 @@ func (r *HPAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if err := r.Get(ctx, req.NamespacedName, hpa); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.Datastore.NamespaceUntrack("AnnotatedScaler", req.Name, req.Namespace)
+			r.MetricsEmitter.DeleteReplicaMetrics(req.Name, req.Namespace)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -55,6 +58,7 @@ func (r *HPAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 
 	if !hpa.DeletionTimestamp.IsZero() || !annotations.IsManaged(hpa) {
 		r.Datastore.NamespaceUntrack("AnnotatedScaler", req.Name, req.Namespace)
+		r.MetricsEmitter.DeleteReplicaMetrics(req.Name, req.Namespace)
 	} else {
 		r.Datastore.NamespaceTrack("AnnotatedScaler", req.Name, req.Namespace)
 	}
