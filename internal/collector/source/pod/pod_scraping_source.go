@@ -131,6 +131,14 @@ func (p *PodScrapingSource) Refresh(ctx context.Context, spec source.RefreshSpec
 	// Aggregate results
 	aggregated := p.aggregateResults(results)
 
+	// Every ready pod failed to scrape. The aggregated result is otherwise
+	// indistinguishable from a successful scrape of genuinely idle pods (empty
+	// Values, nil Error), which lets consumers read a total collection failure
+	// as "no activity". Surface it as an error so they can tell the two apart.
+	if len(results) == 0 {
+		aggregated.Error = fmt.Errorf("failed to scrape all %d ready pod(s)", len(pods))
+	}
+
 	// Cache the aggregated result under the canonical "all_metrics" key.
 	cacheKey := source.BuildCacheKey("all_metrics", nil)
 	p.cache.Set(cacheKey, *aggregated, p.config.DefaultTTL)

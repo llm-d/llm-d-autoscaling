@@ -597,6 +597,7 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 			Expect(err).NotTo(HaveOccurred())
 			Expect(results1).To(HaveKey("all_metrics"))
 			Expect(results1["all_metrics"].Values).To(HaveLen(2)) // 2 metrics from pod1
+			Expect(results1["all_metrics"].HasError()).To(BeFalse())
 
 			// Verify metrics have pod label
 			for _, value := range results1["all_metrics"].Values {
@@ -656,6 +657,9 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 			Expect(results).To(HaveKey("all_metrics"))
 			// Should have empty or no metrics due to unreachable pod
 			Expect(results["all_metrics"].Values).To(BeEmpty())
+			// Every pod failed, so the empty result must carry an error rather
+			// than looking identical to a successful scrape of idle pods.
+			Expect(results["all_metrics"].HasError()).To(BeTrue())
 		})
 
 		It("should handle authentication failures", func() {
@@ -714,6 +718,58 @@ vllm_num_requests_waiting{namespace="test-ns"} 3
 			Expect(results).To(HaveKey("all_metrics"))
 			// Should have no metrics due to auth failure
 			Expect(results["all_metrics"].Values).To(BeEmpty())
+			// A 401 from every pod is a collection failure, not an idle pool.
+			Expect(results["all_metrics"].HasError()).To(BeTrue())
+		})
+
+		It("should not set an error when only some pods fail to scrape", func() {
+			var port1 int32
+			_, err := fmt.Sscanf(mockServer1.URL, "http://127.0.0.1:%d", &port1)
+			Expect(err).NotTo(HaveOccurred())
+
+			// readyPod1 is served by mockServer1; this one is not reachable at all.
+			unreachablePod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "epp-pod-unreachable",
+					Namespace: "test-ns",
+					Labels: map[string]string{
+						"inferencepool": "test-pool-epp",
+					},
+				},
+				Status: corev1.PodStatus{
+					PodIP: "192.0.2.1", // TEST-NET-1, never routable
+					Conditions: []corev1.PodCondition{
+						{
+							Type:   corev1.PodReady,
+							Status: corev1.ConditionTrue,
+						},
+					},
+				},
+			}
+
+			client := fakeClient.
+				WithObjects(service, readyPod1, unreachablePod).
+				Build()
+
+			config := PodScrapingSourceConfig{
+				ServiceName:          "test-pool-epp",
+				ServiceNamespace:     "test-ns",
+				MetricsPort:          port1,
+				MetricsPath:          "/metrics",
+				MetricsScheme:        "http",
+				ScrapeTimeout:        1 * time.Second,
+				MaxConcurrentScrapes: 10,
+				BearerToken:          "test-token",
+			}
+			source, err := NewPodScrapingSource(ctx, client, config)
+			Expect(err).NotTo(HaveOccurred())
+
+			results, err := source.Refresh(ctx, sourcepkg.RefreshSpec{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(results).To(HaveKey("all_metrics"))
+			// Partial data is still usable, so no error is reported.
+			Expect(results["all_metrics"].Values).NotTo(BeEmpty())
+			Expect(results["all_metrics"].HasError()).To(BeFalse())
 		})
 	})
 

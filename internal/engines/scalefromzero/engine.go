@@ -289,8 +289,24 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		return err
 	}
 
-	// Check for pending requests using EPP flowcontrol queue size metrics
+	// Check for pending requests using EPP flowcontrol queue size metrics.
+	// A missing or errored result means the queue depth is unknown, not zero:
+	// concluding "no pending requests" here would leave a variant with queued
+	// work scaled to zero, logged identically to a genuinely idle one.
 	result := results["all_metrics"]
+	if result == nil {
+		err := fmt.Errorf("EPP metrics source returned no all_metrics result for pool %s", namespacedPoolName)
+		metrics.IncMetricsCollectionErrors(constants.QueryTypeQueueLength, "missing_result")
+		logger.Error(err, "Cannot determine pending requests", "variant", va.Name, "namespace", va.Namespace)
+		return err
+	}
+	if result.HasError() {
+		reason := prometheus.CategorizePrometheusError(result.Error)
+		metrics.IncMetricsCollectionErrors(constants.QueryTypeQueueLength, reason)
+		logger.Error(result.Error, "Cannot determine pending requests", "variant", va.Name, "namespace", va.Namespace)
+		return fmt.Errorf("collecting EPP metrics for pool %s: %w", namespacedPoolName, result.Error)
+	}
+
 	pendingRequestExist := false
 	for _, value := range result.Values {
 		metricName := value.Labels["__name__"]
