@@ -92,4 +92,49 @@ var _ = Describe("live GPU limiter rebuild", func() {
 		e.refreshLimiter(ctx)
 		Expect(e.GPULimiter.Name()).To(Equal("keep-me"), "a failed rebuild must not drop the limiter")
 	})
+
+	It("rebuilds when a namespace-inventory entry's selectors or exclude change", func() {
+		// The signature must cover every mode's inputs; a mode left out of it
+		// would keep serving a stale limiter after an edit, contradicting the
+		// documented no-restart behavior.
+		nsCfg := func(team string, exclude ...string) map[string]config.SaturationScalingConfig {
+			return map[string]config.SaturationScalingConfig{
+				"default": {Limiters: []config.QuotaLimiterConfig{{
+					Type: string(config.LimiterTypeNamespaceInventory), Name: "namespace-inventory",
+					Exclude: exclude,
+					Selectors: map[string]config.NodeSelector{
+						"ns-prod": {MatchLabels: map[string]string{"team": team}},
+					},
+				}}},
+			}
+		}
+
+		cfg := config.NewTestConfig()
+		cfg.UpdateSaturationConfig(nsCfg("prod"))
+		e := &Engine{Config: cfg, GPULimiter: pipeline.NewNoOpLimiter("initial")}
+
+		builds := 0
+		e.SetLimiterBuilder(func() (pipeline.Limiter, error) {
+			builds++
+			return pipeline.NewNoOpLimiter("rebuilt"), nil
+		})
+
+		// Seeded signature, no change yet.
+		e.refreshLimiter(ctx)
+		Expect(builds).To(Equal(0))
+
+		// Selector value changes: same mode, no quota entries, must still rebuild.
+		cfg.UpdateSaturationConfig(nsCfg("prod-v2"))
+		e.refreshLimiter(ctx)
+		Expect(builds).To(Equal(1))
+
+		// Exclude list changes: must also rebuild.
+		cfg.UpdateSaturationConfig(nsCfg("prod-v2", "kube-system"))
+		e.refreshLimiter(ctx)
+		Expect(builds).To(Equal(2))
+
+		// No change: no rebuild.
+		e.refreshLimiter(ctx)
+		Expect(builds).To(Equal(2))
+	})
 })
