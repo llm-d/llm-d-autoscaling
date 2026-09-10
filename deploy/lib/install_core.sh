@@ -70,6 +70,8 @@ main() {
 
     deploy_monitoring_stack
 
+    deploy_scaler_backend
+
     # Deploy WVA prerequisites first (environment-specific).
     if [ "$DEPLOY_WVA" = "true" ]; then
         deploy_wva_prerequisites
@@ -81,8 +83,6 @@ main() {
     else
         log_info "Skipping WVA deployment (DEPLOY_WVA=false)"
     fi
-
-    deploy_scaler_backend
 
     verify_deployment
 
