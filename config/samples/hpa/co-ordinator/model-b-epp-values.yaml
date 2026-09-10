@@ -20,6 +20,7 @@ router:
     replicas: 1
     flags:
       v: 2
+      metrics-endpoint-auth: false
     resources:
       requests:
         cpu: 100m
@@ -27,11 +28,6 @@ router:
       limits:
         cpu: 500m
         memory: 512Mi
-    monitoring:
-      prometheus:
-        enabled: true
-        auth:
-          enabled: false
     pluginsConfigFile: model-b-plugins.yaml
     pluginsCustomConfig:
       model-b-plugins.yaml: |
@@ -56,6 +52,13 @@ router:
           - pluginRef: no-hit-lru-scorer
             weight: 2
   proxy:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
     args:
     - --service-node
     - envoy-sidecar

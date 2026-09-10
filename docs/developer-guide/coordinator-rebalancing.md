@@ -2,24 +2,24 @@
 
 This POC demonstrates GPU starvation and Coordinator-driven rebalancing across two
 models sharing a GPU `ResourceQuota` on a kind cluster. Each model has its own EPP,
-InferencePool, HPA, and llm-d-inference-sim workload.
+InferencePool, KEDA ScaledObject, and llm-d-inference-sim workload.
 
 ## Architecture
 
 ```
 multi-model-gateway (nginx, port 9002)
-  /model-a/...  →  model-a EPP  →  InferencePool model-a  →  llm-d-sim A  ← HPA A
-  /model-b/...  →  model-b EPP  →  InferencePool model-b  →  llm-d-sim B  ← HPA B
+  /model-a/...  →  model-a EPP  →  InferencePool model-a  →  llm-d-sim A
+  /model-b/...  →  model-b EPP  →  InferencePool model-b  →  llm-d-sim B
 
 Prometheus  ←  ServiceMonitor per EPP
               ←  inference_extension_flow_control_queue_size{inference_pool="model-a|b"}
-HPA  ←  external metric via Prometheus Adapter
-WVA Coordinator  →  patches HPA spec.maxReplicas proportionally to queue depth
+KEDA  ←  Prometheus trigger on ScaledObject  →  generated HPA
+WVA Coordinator  →  patches ScaledObject spec.maxReplicaCount
 ```
 
-Each model has its own dedicated GAIE EPP instance and InferencePool. A shared EPP
-is incorrect — the EPP uses load-based scoring, not model-name filtering, so it would
-route ~50% of model-a requests to model-b pods and vice versa.
+Each model has its own dedicated llm-d Router EPP instance and InferencePool. A
+shared EPP is incorrect — the EPP uses load-based scoring, not model-name filtering,
+so it would route ~50% of model-a requests to model-b pods and vice versa.
 
 ## Prerequisites
 
@@ -36,28 +36,31 @@ make create-kind-cluster CLUSTER_NODES=1 CLUSTER_GPUS=10 CLUSTER_GPU_TYPE=nvidia
 make docker-build IMG=wva-local:poc
 kind load docker-image wva-local:poc --name kind-wva-gpu-cluster
 
-# 3. Deploy WVA controller + kube-prometheus-stack + Prometheus Adapter
+# 3. Deploy WVA + monitoring + KEDA
 make deploy-e2e-infra IMG=wva-local:poc SKIP_BUILD=true \
-  SCALER_BACKEND=prometheus-adapter LLMD_NS=llm-d-sim
+  SCALER_BACKEND=keda LLMD_NS=llm-d-sim
 
 # 4. Enable the Coordinator (experimental feature, off by default)
 make poc-enable-coordinator
 
-# 5. Install per-model EPPs, sim workloads, gateway, and adapter rules
+# 5. Install per-model EPPs, sim workloads, gateway, and ScaledObjects
 make poc-install
 
 # 6. Verify everything is healthy
 make poc-status
 
-# 7. Reproduce model starvation (applies ResourceQuota, strips HPA annotations)
+# 7. Reproduce model starvation
 make poc-starvation
 
-# 8. Activate the Coordinator (re-add HPA annotations), watch rebalance
+# 8. Activate the Coordinator and watch rebalancing
 make poc-rebalance
 
 # 9. Tear down
 make destroy-kind-cluster
 ```
+
+The EPP metrics endpoint is unauthenticated in this local POC. Use authenticated
+scraping on shared clusters.
 
 ## Experiment setup
 
@@ -69,13 +72,13 @@ make destroy-kind-cluster
 | ResourceQuota (`gpu-quota`) | `requests.nvidia.com/gpu: 10` |
 | Namespace | `llm-d-sim` |
 
-### HPAs (both models identical)
+### ScaledObjects (both models identical)
 
 | Field | Value |
 |---|---|
-| `minReplicas` | 1 |
-| `maxReplicas` | 10 (ceiling overridden by Coordinator once annotation is present) |
-| Metric | External: `model_a/b_epp_queue_size`, target `Value: 1` |
+| `minReplicaCount` | 1 |
+| `maxReplicaCount` | 10 (updated by the Coordinator after opt-in) |
+| Metric | EPP queue depth, target `Value: 1` |
 | `scaleUp.stabilizationWindowSeconds` | 0 (immediate) |
 | `scaleUp` policy | +4 pods per 15s |
 | `scaleDown.stabilizationWindowSeconds` | 120s |
@@ -86,9 +89,9 @@ making the starvation effect visible quickly in a sim environment.
 
 ### Phase 1 — model-a starvation (`starvation-load-a` job)
 
-`make poc-starvation` applies the ResourceQuota, recreates both HPAs **without** the
-`llm-d.ai/epp-inference-pool` annotation (so the Coordinator skips them), then
-launches `starvation-load-a`:
+`make poc-starvation` applies the ResourceQuota and recreates both ScaledObjects
+without the `llm-d.ai/epp-inference-pool` annotation, then launches
+`starvation-load-a`:
 
 - **Burst**: 80 concurrent requests to model-a fired immediately
 - **Drip**: 10 req/s to model-a for 240 seconds
@@ -111,18 +114,16 @@ demand — starvation.
 
 ### Rebalance (`poc-rebalance`)
 
-`make poc-rebalance` re-adds the `llm-d.ai/epp-inference-pool` annotation to both
-HPAs. On the next Coordinator tick (~15s) it reads both EPP queue depths, computes
-proportional `maxReplicas`, and patches both HPAs. Kubernetes immediately enforces the
-new ceilings: model-a pods above its new limit are terminated, freeing GPU slots for
-model-b pods to schedule.
+`make poc-rebalance` adds the `llm-d.ai/epp-inference-pool` annotation to both
+ScaledObjects. On the next Coordinator tick (~15s), it updates each
+`spec.maxReplicaCount`; KEDA copies the new ceiling to the generated HPA. This
+frees GPU slots for model-b pods to schedule.
 
 ### Scale-down after load ends
 
-When a model's queue hits 0 the Coordinator sets its `maxReplicas` to 1 (0% share →
-clamped to `minReplicas`). Because `currentReplicas > spec.maxReplicas`, Kubernetes
-enforces the ceiling immediately, bypassing `scaleDown.stabilizationWindowSeconds`.
-Scale-down completes within ~15s of the queue clearing.
+When a model's queue hits 0, the Coordinator lowers its maximum to the configured
+minimum (1 in this demo). KEDA propagates the ceiling to the HPA, which scales down
+without waiting for the stabilization window.
 
 ## How the Coordinator works
 
@@ -130,16 +131,21 @@ The Coordinator runs a 15-second loop. On each tick it:
 
 1. Reads the namespace `ResourceQuota` GPU budget
 2. Queries each EPP's `inference_extension_flow_control_queue_size` metric
-3. Patches each HPA's `spec.maxReplicas` proportionally:
+3. Reserves every scaler's configured minimum
+4. Distributes the remaining quota by queue weight
+5. Patches the ScaledObject's maximum:
 
 ```
-maxReplicas(pool) = round( queue(pool) / sum(all queues) × gpu_quota )
-                    clamped to [minReplicas, absolute_max]
+remaining = gpu_quota - sum(minimum(pool))
+maximum(pool) = minimum(pool)
+              + floor(queue(pool) / sum(all queues) * remaining)
 ```
 
-The `llm-d.ai/epp-inference-pool` annotation on each HPA is the on/off gate:
-- annotation absent → Coordinator skips the HPA
-- annotation present → Coordinator manages `spec.maxReplicas`
+Any rounding remainder goes to the highest-weight pool. If the configured minima
+already exceed the quota, the Coordinator leaves the namespace unchanged.
+
+The `llm-d.ai/epp-inference-pool` annotation opts a ScaledObject into rebalancing.
+The Coordinator patches the ScaledObject rather than the KEDA-owned HPA.
 
 `poc-starvation` strips the annotation; `poc-rebalance` adds it back.
 
@@ -153,11 +159,10 @@ conflict the Coordinator re-reads the object and re-applies its computed target
 
 | Area | Status | Detail |
 |---|---|---|
-| Scale-to-zero | TODO | When a pool's queue hits 0 the Coordinator sets `maxReplicas=1`, not 0. Full scale-to-zero requires `spec.minReplicas=0` on the HPA, cold-start handling at the EPP, and a drain window before zeroing. |
+| Scale-to-zero | TODO | When a pool's queue hits 0 the Coordinator sets `maxReplicaCount=1`, not 0. Full scale-to-zero requires `spec.minReplicaCount=0` on the ScaledObject, cold-start handling at the EPP, and a drain window before zeroing. |
 | Multiple ResourceQuotas | TODO | Only the first quota with a GPU field is used. The effective limit should be the minimum across all quotas in the namespace. |
-| `minReplicas` floor | TODO | The allocation floor is hardcoded to 1. If an HPA has `spec.minReplicas > 1`, patching `maxReplicas` below it produces an invalid object. Floor should be `max(1, hpa.Spec.MinReplicas)`. |
-| n HPAs > quota | TODO | When more HPAs exist than GPU slots, every pool is clamped to 1 and total allocation exceeds quota. Top-N ranking by queue depth is needed. |
-| Wobble | TODO | Noisy queue readings cause 1-replica flips every tick. A minimum-delta guard and per-HPA cooldown (or EWMA smoothing) are needed. |
+| GPU units per replica | TODO | The POC treats one replica as one GPU. Multi-GPU replicas require converting the GPU quota into per-scaler replica capacity before allocation. |
+| Wobble | TODO | Noisy queue readings cause 1-replica flips every tick. A minimum-delta guard and per-scaler cooldown (or EWMA smoothing) are needed. |
 | Stale patch | Done | Ceiling patches use `MergeFromWithOptimisticLock` with a bounded conflict retry, so a concurrent `maxReplicas` change is no longer silently overwritten. |
 | Pool name collision | TODO | Queue query has no namespace label; pools with the same name in different namespaces inflate each other's readings. |
 
@@ -168,8 +173,9 @@ conflict the Coordinator re-reads the object and re-applies its computed target
 | File | Purpose |
 |---|---|
 | `base/kustomization.yaml` | Lists all base resources |
-| `base/model-a-hpa.yaml` | HPA for model-a — no `epp-inference-pool` annotation (starvation state) |
-| `base/model-b-hpa.yaml` | HPA for model-b — no `epp-inference-pool` annotation (starvation state) |
+| `base/epp-servicemonitor.yaml` | Scrapes queue metrics from both EPP services |
+| `base/model-a-hpa.yaml` | Legacy direct-HPA fixture; deleted by the KEDA overlay |
+| `base/model-b-hpa.yaml` | Legacy direct-HPA fixture; deleted by the KEDA overlay |
 | `base/model-a-decode.yaml` | llm-d-sim Deployment + Service for model-a |
 | `base/model-b-decode.yaml` | llm-d-sim Deployment + Service for model-b |
 | `base/multi-model-gateway.yaml` | nginx path-based gateway (port 9002) |
@@ -181,13 +187,20 @@ conflict the Coordinator re-reads the object and re-applies its computed target
 |---|---|
 | `overlays/rebalance/kustomization.yaml` | Applies base + patches `epp-inference-pool` annotation onto both HPAs |
 
+### KEDA overlays
+
+| File | Purpose |
+|---|---|
+| `overlays/keda/` | Replaces the direct HPAs with ScaledObjects |
+| `overlays/keda-rebalance/` | Opts both ScaledObjects into rebalancing |
+
 ### Top-level
 
 | File | Purpose |
 |---|---|
-| `model-a-epp-values.yaml` | GAIE standalone Helm values for model-a EPP |
-| `model-b-epp-values.yaml` | GAIE standalone Helm values for model-b EPP |
-| `prometheus-adapter-epp-rules.yaml` | Adapter rules: EPP queue → external metrics |
+| `model-a-epp-values.yaml` | Router standalone Helm values for the local model-a EPP |
+| `model-b-epp-values.yaml` | Router standalone Helm values for the local model-b EPP |
+| `prometheus-adapter-epp-rules.yaml` | Legacy direct-HPA adapter rules; unused by the KEDA flow |
 | `starvation-load-a.yaml` | Load job for model-a |
 | `starvation-load-b.yaml` | Load job for model-b |
 | `poc.mk` | All make targets for this POC |

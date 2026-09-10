@@ -3,12 +3,11 @@
 POC_NS       ?= llm-d-sim
 POC_DIR      := config/samples/hpa/co-ordinator
 POC_WVA_NS  := workload-variant-autoscaler-system
-POC_MON_NS  := workload-variant-autoscaler-monitoring
-GAIE_VERSION ?= v1.5.0
+POC_KEDA_NS ?= keda-system
 LLM_D_ROUTER_VERSION ?= v0.9.0
 
 .PHONY: poc-install
-poc-install: ## [POC] Install per-model EPPs, sim workloads, gateway, and Prometheus Adapter rules
+poc-install: ## [POC] Install EPPs, workloads, gateway, and KEDA ScaledObjects
 	@echo ""
 	@echo "================================================================"
 	@echo "  POC Install: model-a + model-b EPPs, workloads, gateway"
@@ -40,8 +39,8 @@ poc-install: ## [POC] Install per-model EPPs, sim workloads, gateway, and Promet
 	  --namespace $(POC_NS) \
 	  -f $(POC_DIR)/model-b-epp-values.yaml
 	@echo ""
-	@echo "--- Step 4: Deploy sim workloads and gateway ---"
-	@kubectl apply -k $(POC_DIR)/base
+	@echo "--- Step 4: Deploy sim workloads, gateway, and KEDA ScaledObjects ---"
+	@kubectl apply -k $(POC_DIR)/overlays/keda
 	@echo ""
 	@echo "--- Step 5: Wait for EPPs and workloads to be ready ---"
 	@echo "  Waiting for model-a-epp..."
@@ -58,13 +57,8 @@ poc-install: ## [POC] Install per-model EPPs, sim workloads, gateway, and Promet
 	@kubectl rollout restart deployment/multi-model-gateway -n $(POC_NS)
 	@kubectl rollout status deployment/multi-model-gateway -n $(POC_NS) --timeout=60s
 	@echo ""
-	@echo "--- Step 6: Add EPP queue rules to Prometheus Adapter ---"
-	@helm upgrade prometheus-adapter prometheus-community/prometheus-adapter \
-	  -n $(POC_MON_NS) \
-	  --reuse-values \
-	  -f $(POC_DIR)/prometheus-adapter-epp-rules.yaml
-	@kubectl rollout restart deployment/prometheus-adapter -n $(POC_MON_NS)
-	@kubectl rollout status deployment/prometheus-adapter -n $(POC_MON_NS) --timeout=180s
+	@echo "--- Step 6: Verify KEDA ---"
+	@kubectl rollout status deployment/keda-operator -n $(POC_KEDA_NS) --timeout=180s
 	@echo ""
 	@echo "--- Step 7: Prime EPP flow control metrics ---"
 	@echo "  Sending one priming request per EPP (metric is not registered until first request)..."
@@ -83,17 +77,11 @@ poc-install: ## [POC] Install per-model EPPs, sim workloads, gateway, and Promet
 	@echo "  Waiting 30s for Prometheus to scrape the new metrics..."
 	@sleep 30
 	@echo ""
-	@echo "--- Step 8: Verify external metrics are reachable ---"
-	@for metric in model_a_epp_queue_size model_b_epp_queue_size; do \
-	  val=$$(kubectl get --raw \
-	    "/apis/external.metrics.k8s.io/v1beta1/namespaces/$(POC_NS)/$$metric" \
-	    2>/dev/null); \
-	  if echo "$$val" | grep -q '"value"'; then \
-	    echo "  $$metric: READY"; \
-	  else \
-	    echo "  $$metric: NOT READY (run 'make poc-status' in ~60s once Prometheus scrapes the EPPs)"; \
-	  fi; \
-	done
+	@echo "--- Step 8: Verify ScaledObjects ---"
+	@kubectl wait --for=condition=Ready \
+	  scaledobject/model-a-scaler scaledobject/model-b-scaler \
+	  -n $(POC_NS) --timeout=180s
+	@kubectl get scaledobject -n $(POC_NS)
 	@echo ""
 	@echo "================================================================"
 	@echo "  Install complete. Run 'make poc-status' to verify."
@@ -152,6 +140,12 @@ poc-status: ## [POC] Status report: cluster health, WVA, HPAs, ResourceQuota, Co
 	@kubectl get resourcequota -n $(POC_NS) 2>/dev/null \
 	  || echo "  NONE — Coordinator will skip (no GPU quota to split)"
 	@echo ""
+	@if kubectl get scaledobject -n $(POC_NS) >/dev/null 2>&1; then \
+	  echo "=== ScaledObjects ($(POC_NS)) ==="; \
+	  kubectl get scaledobject -n $(POC_NS) \
+	    -o custom-columns='SCALEDOBJECT:.metadata.name,MIN:.spec.minReplicaCount,MAX:.spec.maxReplicaCount,READY:.status.conditions[?(@.type=="Ready")].status'; \
+	  echo ""; \
+	fi
 	@echo "=== HPAs ($(POC_NS)) ==="
 	@kubectl get hpa -n $(POC_NS) \
 	  -o custom-columns='HPA:.metadata.name,MAX:.spec.maxReplicas,CURRENT:.status.currentReplicas,DESIRED:.status.desiredReplicas' \
@@ -193,8 +187,10 @@ poc-starvation: ## [POC] Reproduce GPU starvation: reset → phase-1 model-a loa
 	@echo "  Removing stale load jobs..."
 	@kubectl delete job starvation-load-a starvation-load-b \
 	  -n $(POC_NS) --ignore-not-found=true 2>/dev/null; true
-	@echo "  Removing existing HPAs (clears stabilisation history)..."
-	@kubectl delete hpa model-a-hpa model-b-hpa -n $(POC_NS) --ignore-not-found=true 2>/dev/null; true
+	@echo "  Removing existing scalers (clears stabilisation history)..."
+	@kubectl delete scaledobject model-a-scaler model-b-scaler \
+	  -n $(POC_NS) --ignore-not-found=true --wait=true 2>/dev/null || true
+	@kubectl delete hpa model-a-hpa model-b-hpa -n $(POC_NS) --ignore-not-found=true --wait=true 2>/dev/null; true
 	@echo "  Scaling both deployments to 1..."
 	@kubectl scale deployment model-a-decode model-b-decode --replicas=1 -n $(POC_NS)
 	@echo "  Waiting for both deployments to reach 1 ready replica (timeout 120s)..."
@@ -212,8 +208,11 @@ poc-starvation: ## [POC] Reproduce GPU starvation: reset → phase-1 model-a loa
 	    echo "  [$$T""s] waiting... model-a=$$A model-b=$$B"; \
 	    sleep 5; \
 	  done
-	@echo "  Applying base state (quota + HPAs without coordinator annotation)..."
-	@kubectl apply -k $(POC_DIR)/base
+	@echo "  Applying ScaledObjects without coordinator annotations..."
+	@kubectl apply -k $(POC_DIR)/overlays/keda
+	@kubectl wait --for=condition=Ready \
+	  scaledobject/model-a-scaler scaledobject/model-b-scaler \
+	  -n $(POC_NS) --timeout=180s
 	@echo ""
 	@echo "--- Baseline (1 pod each, 2/10 GPUs used) ---"
 	@kubectl get hpa -n $(POC_NS) \
@@ -305,9 +304,8 @@ poc-rebalance: ## [POC] Apply Coordinator + GPU quota → watch rebalancing reso
 	    | grep "model-[ab]-decode" | wc -l | tr -d ' '); \
 	  echo "  Pending model pods: $$PEND"
 	@echo ""
-	@echo "--- Step 1: Activate Coordinator for these HPAs ---"
-	@echo "  Applying rebalance overlay — adds epp-inference-pool annotation to both HPAs"
-	@kubectl apply -k $(POC_DIR)/overlays/rebalance
+	@echo "--- Step 1: Activate Coordinator for these ScaledObjects ---"
+	@kubectl apply -k $(POC_DIR)/overlays/keda-rebalance
 	@echo "  ResourceQuota (still in effect from starvation):"
 	@kubectl get resourcequota -n $(POC_NS)
 	@echo ""
@@ -338,7 +336,7 @@ poc-rebalance: ## [POC] Apply Coordinator + GPU quota → watch rebalancing reso
 	  COORD=$$(kubectl logs -n $(POC_WVA_NS) \
 	    -l app.kubernetes.io/name=workload-variant-autoscaler \
 	    --tail=5 2>/dev/null \
-	    | grep -iE "Setting maxReplicas|contention" | tail -1); \
+	    | grep -iE "Setting max replica ceiling|contention" | tail -1); \
 	  echo "  [$$(printf '%3d' $$((i*5)))s]  model-a: max=$$A_MAX run=$$A_RUN pend=$$A_PEND  |  model-b: max=$$B_MAX run=$$B_RUN pend=$$B_PEND"; \
 	  if [ -n "$$COORD" ]; then echo "         ↳ $$COORD"; fi; \
 	done
@@ -362,7 +360,7 @@ poc-rebalance: ## [POC] Apply Coordinator + GPU quota → watch rebalancing reso
 	@kubectl logs -n $(POC_WVA_NS) \
 	  -l app.kubernetes.io/name=workload-variant-autoscaler \
 	  --tail=60 2>/dev/null \
-	  | grep -iE "gpu-rebalance|Setting maxReplicas|contention" \
+	  | grep -iE "gpu-rebalance|Setting max replica ceiling|contention" \
 	  | tail -10 | sed 's/^/  /' \
 	  || echo "  (none)"
 	@echo ""

@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../keda
+
+patches:
+  - patch: |-
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      metadata:
+        name: model-a-scaler
+        namespace: llm-d-sim
+        annotations:
+          llm-d.ai/epp-inference-pool: "model-a"
+  - patch: |-
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      metadata:
+        name: model-b-scaler
+        namespace: llm-d-sim
+        annotations:
+          llm-d.ai/epp-inference-pool: "model-b"

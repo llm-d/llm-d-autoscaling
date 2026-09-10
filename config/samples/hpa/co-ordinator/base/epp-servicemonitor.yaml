@@ -1,0 +1,22 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: epp-queue-metrics
+  namespace: workload-variant-autoscaler-monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - llm-d-sim
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - model-a-epp
+          - model-b-epp
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 5s
