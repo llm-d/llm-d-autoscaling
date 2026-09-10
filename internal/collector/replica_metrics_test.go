@@ -853,6 +853,41 @@ func TestCollectReplicaMetrics_Freshness(t *testing.T) {
 			t.Fatalf("expected FreshnessStatus=stale despite an absent metric, got %+v", m.Metadata)
 		}
 	})
+
+	// Regression test for issue #360: a pod that emits a queue value but whose
+	// KV cache query returned nothing (a partial scrape failure) must be
+	// flagged via KvCacheUsageMissing, not silently reported as KvCacheUsage=0
+	// indistinguishable from a genuinely idle pod.
+	t.Run("KvCacheUsageMissing set when the KV query has no value for the pod", func(t *testing.T) {
+		m := collect(fixture(time.Now(), "kv_cache_usage"))[0]
+		if !m.KvCacheUsageMissing {
+			t.Errorf("expected KvCacheUsageMissing=true when kv_cache_usage is absent, got false")
+		}
+		if m.KvCacheUsage != 0 {
+			t.Errorf("expected KvCacheUsage=0 placeholder, got %v", m.KvCacheUsage)
+		}
+		if m.QueueLengthMissing {
+			t.Errorf("expected QueueLengthMissing=false when queue_length is present")
+		}
+	})
+
+	t.Run("QueueLengthMissing set when the queue query has no value for the pod", func(t *testing.T) {
+		m := collect(fixture(time.Now(), "queue_length"))[0]
+		if !m.QueueLengthMissing {
+			t.Errorf("expected QueueLengthMissing=true when queue_length is absent, got false")
+		}
+		if m.KvCacheUsageMissing {
+			t.Errorf("expected KvCacheUsageMissing=false when kv_cache_usage is present")
+		}
+	})
+
+	t.Run("neither flag set when both metrics are present", func(t *testing.T) {
+		m := collect(fixture(time.Now()))[0]
+		if m.KvCacheUsageMissing || m.QueueLengthMissing {
+			t.Errorf("expected both Missing flags false when both metrics are present, got KvCacheUsageMissing=%v QueueLengthMissing=%v",
+				m.KvCacheUsageMissing, m.QueueLengthMissing)
+		}
+	})
 }
 
 // TestCollectReplicaMetrics_SGLangCacheConfig verifies the SGLang cache-config

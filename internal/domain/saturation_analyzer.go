@@ -60,6 +60,18 @@ type ReplicaMetrics struct {
 	// Metadata contains freshness information (optional)
 	Metadata *ReplicaMetricsMetadata `json:"metadata,omitempty"`
 
+	// KvCacheUsageMissing is true when the KV cache usage query returned no
+	// value for this replica this scrape. KvCacheUsage is 0 in that case (the
+	// collector's placeholder), but that 0 is not a real reading — it must not
+	// be interpreted as "empty capacity" downstream. See issue #360.
+	KvCacheUsageMissing bool
+
+	// QueueLengthMissing is true when the queue length query returned no value
+	// for this replica this scrape. QueueLength is 0 in that case (the
+	// collector's placeholder), but that 0 is not a real reading — it must not
+	// be interpreted as "no queue" downstream. See issue #360.
+	QueueLengthMissing bool
+
 	// --- Fields for Saturation Analyzer V2 and Queueing Model Analyzer ---
 
 	// NumGpuBlocks is the total number of KV cache blocks allocated on GPU.

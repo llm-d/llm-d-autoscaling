@@ -159,10 +159,19 @@ func (a *Analyzer) analyzeVariant(
 	var totalSpareQueue float64
 	var totalKvUsage float64
 	var nonSaturatedCount int
+	var kvUsageSamples int
 
 	for _, metric := range metrics {
-		// Check if replica is saturated
-		isSaturated := metric.KvCacheUsage >= config.KvCacheThreshold ||
+		// A replica whose KV or queue metric could not be scraped this cycle
+		// reads as 0 (the collector's placeholder for "unknown"), which looks
+		// identical to a genuinely idle replica. Treating that as saturated
+		// is the conservative call: it can only bias toward scaling up or
+		// blocking a scale-down, never the reverse. Defaulting it to "empty"
+		// (the pre-fix behavior) risked an unsafe scale-down on a pod that was
+		// actually full. See issue #360.
+		metricsMissing := metric.KvCacheUsageMissing || metric.QueueLengthMissing
+		isSaturated := metricsMissing ||
+			metric.KvCacheUsage >= config.KvCacheThreshold ||
 			float64(metric.QueueLength) >= config.QueueLengthThreshold
 
 		if isSaturated {
@@ -177,11 +186,16 @@ func (a *Analyzer) analyzeVariant(
 			nonSaturatedCount++
 		}
 
-		// Track max usage and total usage across all replicas
-		if metric.KvCacheUsage > analysis.MaxKvCacheUsage {
-			analysis.MaxKvCacheUsage = metric.KvCacheUsage
+		// Track max/total KV usage across replicas with a real reading only —
+		// a missing-metric placeholder of 0 must not dilute MaxKvCacheUsage or
+		// AvgKvCacheUsage downward.
+		if !metric.KvCacheUsageMissing {
+			if metric.KvCacheUsage > analysis.MaxKvCacheUsage {
+				analysis.MaxKvCacheUsage = metric.KvCacheUsage
+			}
+			totalKvUsage += metric.KvCacheUsage
+			kvUsageSamples++
 		}
-		totalKvUsage += metric.KvCacheUsage
 		if metric.QueueLength > analysis.MaxQueueLength {
 			analysis.MaxQueueLength = metric.QueueLength
 		}
@@ -195,9 +209,9 @@ func (a *Analyzer) analyzeVariant(
 		analysis.AvgSpareQueueLength = totalSpareQueue / float64(nonSaturatedCount)
 	}
 
-	// Calculate mean KV cache usage across all replicas for Utilization field
-	if len(metrics) > 0 {
-		analysis.AvgKvCacheUsage = totalKvUsage / float64(len(metrics))
+	// Calculate mean KV cache usage across replicas with a real reading
+	if kvUsageSamples > 0 {
+		analysis.AvgKvCacheUsage = totalKvUsage / float64(kvUsageSamples)
 	}
 
 	return analysis

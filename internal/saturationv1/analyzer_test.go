@@ -609,3 +609,119 @@ func TestAnalyzeVariant_AvgKvCacheUsage(t *testing.T) {
 		})
 	}
 }
+
+// TestAnalyzeVariant_MissingMetricsTreatedAsSaturated is a regression test for
+// issue #360: a replica whose KV cache or queue metric was not scraped this
+// cycle reports KvCacheUsage/QueueLength as 0 (the collector's placeholder).
+// Before the fix, that 0 was indistinguishable from a genuinely idle replica,
+// so a saturated pod suffering a temporary scrape failure was misread as
+// having full spare capacity. The analyzer must instead treat a missing
+// metric as saturated (fail conservative) and must exclude the placeholder 0
+// from the KV usage average/max so it isn't dragged down by data that was
+// never really collected.
+func TestAnalyzeVariant_MissingMetricsTreatedAsSaturated(t *testing.T) {
+	analyzer := &Analyzer{}
+	cfg := config.SaturationScalingConfig{
+		KvCacheThreshold:     0.80,
+		QueueLengthThreshold: 5,
+		KvSpareTrigger:       0.10,
+		QueueSpareTrigger:    3,
+	}
+
+	tests := []struct {
+		name                    string
+		metrics                 []domain.ReplicaMetrics
+		expectSaturatedPods     []string
+		expectNonSaturatedCount int
+		expectedAvgKvUsage      float64
+		expectedMaxKvUsage      float64
+	}{
+		{
+			name: "pod with missing KV metric is saturated despite reading 0",
+			metrics: []domain.ReplicaMetrics{
+				{PodName: "pod-1", VariantName: "v1", KvCacheUsage: 0, KvCacheUsageMissing: true, QueueLength: 1},
+				{PodName: "pod-2", VariantName: "v1", KvCacheUsage: 0.40, QueueLength: 1},
+			},
+			expectSaturatedPods:     []string{"pod-1"},
+			expectNonSaturatedCount: 1,
+			expectedAvgKvUsage:      0.40, // pod-1's placeholder 0 is excluded
+			expectedMaxKvUsage:      0.40,
+		},
+		{
+			name: "pod with missing queue metric is saturated despite reading 0",
+			metrics: []domain.ReplicaMetrics{
+				{PodName: "pod-1", VariantName: "v1", KvCacheUsage: 0.30, QueueLength: 0, QueueLengthMissing: true},
+				{PodName: "pod-2", VariantName: "v1", KvCacheUsage: 0.30, QueueLength: 1},
+			},
+			expectSaturatedPods:     []string{"pod-1"},
+			expectNonSaturatedCount: 1,
+			expectedAvgKvUsage:      0.30, // pod-1's KV reading was real, so it still counts
+			expectedMaxKvUsage:      0.30,
+		},
+		{
+			name: "all replicas missing metrics yields zero-sample average, not zero usage",
+			metrics: []domain.ReplicaMetrics{
+				{PodName: "pod-1", VariantName: "v1", KvCacheUsage: 0, KvCacheUsageMissing: true, QueueLength: 0, QueueLengthMissing: true},
+			},
+			expectSaturatedPods:     []string{"pod-1"},
+			expectNonSaturatedCount: 0,
+			expectedAvgKvUsage:      0.0, // no real sample exists to average
+			expectedMaxKvUsage:      0.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			analysis := analyzer.analyzeVariant(context.Background(), "v1", tt.metrics, cfg)
+
+			if len(analysis.SaturatedReplicas) != len(tt.expectSaturatedPods) {
+				t.Fatalf("expected SaturatedReplicas=%v, got %v", tt.expectSaturatedPods, analysis.SaturatedReplicas)
+			}
+			for i, pod := range tt.expectSaturatedPods {
+				if analysis.SaturatedReplicas[i] != pod {
+					t.Errorf("expected SaturatedReplicas[%d]=%s, got %s", i, pod, analysis.SaturatedReplicas[i])
+				}
+			}
+			if analysis.NonSaturatedCount != tt.expectNonSaturatedCount {
+				t.Errorf("expected NonSaturatedCount=%d, got %d", tt.expectNonSaturatedCount, analysis.NonSaturatedCount)
+			}
+			if analysis.AvgKvCacheUsage != tt.expectedAvgKvUsage {
+				t.Errorf("expected AvgKvCacheUsage=%.2f, got %.2f", tt.expectedAvgKvUsage, analysis.AvgKvCacheUsage)
+			}
+			if analysis.MaxKvCacheUsage != tt.expectedMaxKvUsage {
+				t.Errorf("expected MaxKvCacheUsage=%.2f, got %.2f", tt.expectedMaxKvUsage, analysis.MaxKvCacheUsage)
+			}
+		})
+	}
+}
+
+// TestAnalyzeModelSaturation_MissingMetricsBlockUnsafeScaleDown is a
+// regression test for issue #360 at the model-level decision: before the fix,
+// a saturated pod with a temporarily missing KV metric was counted as
+// non-saturated with full spare capacity, which could report scale-down as
+// safe when it was not.
+func TestAnalyzeModelSaturation_MissingMetricsBlockUnsafeScaleDown(t *testing.T) {
+	analyzer := NewAnalyzer()
+	cfg := config.SaturationScalingConfig{
+		KvCacheThreshold:     0.80,
+		QueueLengthThreshold: 5,
+		KvSpareTrigger:       0.10,
+		QueueSpareTrigger:    3,
+	}
+
+	// Two replicas: one genuinely healthy, one actually saturated but its KV
+	// metric failed to scrape this cycle (mamy-CS's scenario from #360).
+	metrics := []domain.ReplicaMetrics{
+		{PodName: "healthy", VariantName: "v1", KvCacheUsage: 0.30, QueueLength: 1},
+		{PodName: "saturated-but-unscraped", VariantName: "v1", KvCacheUsage: 0, KvCacheUsageMissing: true, QueueLength: 0, QueueLengthMissing: true},
+	}
+
+	analysis, err := analyzer.AnalyzeModelSaturation(context.Background(), "test-model", "test-ns", metrics, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if analysis.ScaleDownSafe {
+		t.Errorf("expected ScaleDownSafe=false when a replica's metrics are missing, got true")
+	}
+}
