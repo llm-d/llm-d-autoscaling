@@ -36,16 +36,23 @@ var _ = Describe("Anchor refactor combine characterization goldens (saturation +
 
 	It("freezes the two-analyzer scale-up decision set (throughput demand dominates)", func() {
 		// A [saturation, throughput] ballot, both voting (Enabled) and live.
-		// Saturation binds the anchor (identity + sizing); throughput contributes
-		// only to the combine's cross-analyzer bottleneck. Single non-disaggregated
-		// variant "v" with 2 live replicas (satisfies the all-live constraint).
+		// Saturation supplies the anchor's identity; the per-variant sizing
+		// binder is refreshed each allocation iteration to whichever entry has
+		// the larger current replica-demand for that (role, variant) — here
+		// throughput, since its implied replica count exceeds saturation's (see
+		// refreshAnchorSizing). Single
+		// non-disaggregated variant "v" with 2 live replicas (satisfies the
+		// all-live constraint).
 		//
 		//   saturation: RC=5000  -> ceil(5000/10000)  = 1 additional replica
 		//   throughput: RC=25000 -> ceil(25000/10000) = 3 additional replicas
 		//
 		// The scale-up bottleneck is the cross-analyzer MAX, so throughput drives
-		// the joint commit to +3 -> target 5. RequiredCapacity/SpareCapacity/
-		// Utilization come from the saturation-bound anchor (RC=5000, SC=0, u=0.8).
+		// the joint commit to +3 -> target 5. RequiredCapacity/SpareCapacity stay
+		// saturation's (model-level RC/SC are per-analyzer, unaffected by the
+		// per-variant sizing refresh). Utilization is now throughput's — the
+		// (role,v) sizing binder for "v" — which throughput leaves at its
+		// zero value (u=0), not saturation's u=0.8.
 		build := func() ModelScalingRequest {
 			sat := &domain.AnalyzerResult{
 				ModelID:          "combine",
@@ -92,10 +99,14 @@ var _ = Describe("Anchor refactor combine characterization goldens (saturation +
 				},
 			}
 		}
-		// captured from main@9906dac5: cross-analyzer bottleneck MAX(1, 3)=3
-		// additional -> 2+3=5; anchor (saturation-bound) RC=5000, SC=0, u=0.8.
+		// Replicas/RC/SC captured from main@9906dac5 (unaffected by the sizing
+		// refresh): cross-analyzer bottleneck MAX(1, 3)=3 additional -> 2+3=5;
+		// RC=5000, SC=0 (saturation's, per-analyzer). Utilization=0 is the
+		// per-variant sizing refresh: throughput's replica-demand (3) exceeds
+		// saturation's (1), so throughput becomes "v"'s (role,v) sizing binder
+		// and its unset Utilization (zero value) replaces saturation's 0.8.
 		want := map[string]goldenDecision{
-			"v": {Replicas: 5, RequiredCapacity: 5000, SpareCapacity: 0, Utilization: 0.8},
+			"v": {Replicas: 5, RequiredCapacity: 5000, SpareCapacity: 0, Utilization: 0},
 		}
 
 		ca := NewCostAwareOptimizer().Optimize(ctx, []ModelScalingRequest{build()}, nil)

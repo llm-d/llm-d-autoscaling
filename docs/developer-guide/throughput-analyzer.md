@@ -457,7 +457,7 @@ Per replica `r`:
 ```
 IL_eff    = AvgInputTokens × (1 − PrefixCacheHitRate)
 KVreq     = IL_eff + AvgOutputTokens / 2      # time-averaged KV footprint per request
-N_dec_sat = DefaultKSat × KV_max / KVreq      # in-flight requests at k_sat
+N_dec_sat = k_sat × KV_max / KVreq            # in-flight requests at k_sat
 μ_dec_sat = N_dec_sat / ITL(k_sat)            # decode tokens/sec at saturation operating point
 ```
 
@@ -467,8 +467,22 @@ a raw spec/status replica count. This `n` becomes `ReplicaCount_v` in the Scalin
 formulas below, mirroring the saturation analyzer's `readyCount`; still-booting KV=0 replicas
 are excluded here and counted separately via `PendingReplicas_v` below instead.
 
-`DefaultKSat = 0.85` — the KV utilization at which μ_dec_sat is evaluated. This is a
-per-analyzer constant pending alignment with the EPP system-wide k_sat (see open items).
+`k_sat` — the KV utilization at which μ_dec_sat is evaluated, i.e. the definition of a
+"full" replica. It is **configuration, not a constant**: `resolveKSat` reads
+`SaturationScalingConfig.KvCacheThreshold` (default `0.80`) from the analyzer input, so TA
+and the saturation analyzer size a replica against the same k. When the input carries no
+saturation config, `fallbackKSat = 0.80` mirrors that default;
+`TestFallbackKSatMatchesConfigDefault` keeps the two from drifting.
+
+It is **not** `ScaleUpThreshold` (0.85) or `ScaleDownBoundary` (0.70). Those are watermarks —
+margins around the steady state that the engine applies to `RequiredCapacity`/`SpareCapacity`
+after `Analyze` returns — and they never enter per-replica capacity. TA's k_sat previously
+mirrored `ScaleUpThreshold`, which overstated μ_dec_sat by 0.55% at the default config and
+would have diverged further from any tuned `KvCacheThreshold`.
+
+Alignment with the EPP system-wide k_sat is still open (see open items): tracking saturation's
+configured value is half of it, and nothing yet holds the EPP's own notion of full to the
+same number.
 
 ## Demand Estimation
 
@@ -636,7 +650,8 @@ See the Known Regression section above.
 
 The `k* ≥ 0.30` guard prevents false positives at low load where GPS is noisy and N_dec is small.
 
-**Near-saturation diagnostics.** When `k* ≥ DefaultKSat − 0.10` (i.e. k* ≥ 0.75), GPS is
+**Near-saturation diagnostics.** When `k* ≥ k_sat − 0.10` (i.e. k* ≥ 0.70 at the default
+k_sat — the margin is a constant, the k it is measured from is not), GPS is
 near-oracle quality: a discrepancy between μ_model and GPS_obs is a strong indicator of a
 model error. In this case, `checkVariantGPSMismatch` logs additional root-cause diagnostics:
 
@@ -672,7 +687,7 @@ use the same decode-rate framework.
 
 | Constant | Default | Description |
 |---|---|---|
-| `DefaultKSat` | 0.85 | KV utilization at which μ_dec_sat is evaluated |
+| `fallbackKSat` | 0.80 | k_sat used only when the input carries no saturation config; mirrors `config.DefaultKvCacheThreshold` |
 | `DefaultBaselineITLSec` | 0.006 | B in tier-2 ITL model (H100 near-zero-load baseline) |
 | `DefaultQueueDrainFactor` | 2.0 | Bounds queueing time to ≤ factor × ITL(k_sat) × OL |
 | `DefaultWindowMaxSize` | 20 | Max (k*, ITL) pairs in ObservationWindow |
@@ -689,7 +704,8 @@ use the same decode-rate framework.
 | `DefaultNearKSatNDecResidualThreshold` | 0.20 | N_dec cross-check residual above which shape mismatch is flagged |
 
 **Open items:**
-- `DefaultKSat = 0.85` is per-analyzer; needs alignment with EPP system-wide k_sat
+- `k_sat` now follows `SaturationScalingConfig.KvCacheThreshold`, so TA and saturation agree;
+  alignment with the EPP's own system-wide k_sat is still open
 - `DefaultBaselineITLSec = 0.006` is H100-specific; may need hardware-aware defaults
 
 ## References

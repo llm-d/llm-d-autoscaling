@@ -995,6 +995,74 @@ var _ = Describe("CostAwareOptimizer", func() {
 			Expect(m2["A100"]).To(Equal(5), "finite cap wins even when the sentinel is seen first")
 		})
 	})
+
+	Context("The From-Zero Admission Ceiling", func() {
+
+		// The ceiling a from-zero-admitted variant is held to. The
+		// admitting write site is deferred (see ReasonFromZeroAdmission), so the tag
+		// is set directly here rather than obtained from bindingAnchor -- these
+		// assert the ceiling mechanism, which is what landed.
+		//
+		// costGreedyRolePick is where it is observable. fairShareRolePick also
+		// grants, but gates on available[vc.AcceleratorName] first, and a
+		// never-measured variant's AcceleratorName is empty for the same reason its
+		// Cost is zero -- both come from saturation's zero-replica lookup -- so it is
+		// skipped there regardless. Separate pre-existing gap, and not this
+		// ceiling's to close.
+		admittedVariants := []domain.VariantCapacity{
+			{VariantName: "measured", AcceleratorName: "A100", Cost: 5.0, ReplicaCount: 2, PerReplicaCapacity: 8000, Reason: "P1-obs"},
+			{VariantName: "newcomer", PerReplicaCapacity: 1, Reason: ReasonFromZeroAdmission},
+		}
+		// No MaxReplicas on either: the configuration the ceiling has to survive.
+		// Folded into the existing headroom branch it would not exist here, because
+		// that branch is behind a nil-guard and costGreedyRolePick returns
+		// math.MaxInt outside it.
+		admittedStates := buildStateMap([]domain.VariantReplicaState{
+			{VariantName: "measured", CurrentReplicas: 2, GPUsPerReplica: 1},
+			{VariantName: "newcomer", CurrentReplicas: 0, GPUsPerReplica: 1},
+		})
+
+		It("caps the admitted variant at one replica with no MaxReplicas set", func() {
+			// It is picked first, which is worth stating plainly because the
+			// intuitive expectation is last: PRC = 1 makes cost efficiency degenerate to Cost, and a
+			// never-measured variant's Cost arrives as 0, so the ratio is 0/1 = 0 and
+			// it sorts ahead of every priced variant. No sentinel value repairs that --
+			// any positive PRC divides a zero numerator -- and the ordering recovers on
+			// its own once the zero-replica cost lookup is fixed, which is out of
+			// scope here. Until then the ceiling is not one guard among several, it is
+			// the only one.
+			targets := map[string]int{"measured": 2, "newcomer": 0}
+
+			v, capN := costGreedyRolePick(domain.RoleBoth, nil, admittedVariants, admittedStates, nil, targets)
+			Expect(v).To(Equal("newcomer"), "cost 0 over a positive PRC sorts ahead of any priced variant")
+			Expect(capN).To(Equal(1), "and the ceiling is the only thing bounding what it may take")
+		})
+
+		It("skips the variant once the ceiling is met, rather than capping it at zero", func() {
+			// The bound is on the target, not on one iteration, so an allocator coming
+			// round again buys nothing more. It must skip and move on: a picker that
+			// *returns* cap 0 makes the caller compute deltaUtil == 0 and break out of
+			// the whole model's allocation, taking every variant behind it down too.
+			// Hence the assertion is about the OTHER variant.
+			targets := map[string]int{"measured": 2, "newcomer": 1}
+
+			v, capN := costGreedyRolePick(domain.RoleBoth, nil, admittedVariants, admittedStates, nil, targets)
+			Expect(v).To(Equal("measured"), "an exhausted ceiling skips the variant, it does not zero-cap it")
+			Expect(capN).To(BeNumerically(">", 0))
+		})
+
+		It("leaves an untagged variant's headroom exactly as it was", func() {
+			// The ceiling reads through a shared helper that every grant site now uses,
+			// so this pins the other branch of it: without the tag, behaviour is the
+			// MaxReplicas check verbatim, MaxInt and all.
+			plain := []domain.VariantCapacity{{VariantName: "measured", Cost: 5.0, PerReplicaCapacity: 8000}}
+			targets := map[string]int{"measured": 2}
+
+			v, capN := costGreedyRolePick(domain.RoleBoth, nil, plain, admittedStates, nil, targets)
+			Expect(v).To(Equal("measured"))
+			Expect(capN).To(Equal(math.MaxInt), "no MaxReplicas and no tag means unbounded, as before")
+		})
+	})
 })
 
 func decisionMap(decisions []domain.VariantDecision) map[string]domain.VariantDecision {
@@ -1111,6 +1179,277 @@ var _ = Describe("namespace constraint merge helpers", func() {
 		It("clamps available to 0 when usage exceeds limit", func() {
 			_, _, avail := poolTotals(map[string]ResourcePool{"A100": {Limit: 2, Used: 5}})
 			Expect(avail).To(Equal(0))
+		})
+	})
+})
+
+// shedEntry builds a live ballot entry for the scale-down loop: the role-spare
+// balance the loop draws down, the belief weight the combine gives its votes, and
+// the per-variant capacities it is willing to price. A variant absent from prcs is
+// one this analyzer does not size — that absence is itself under test.
+func shedEntry(name string, score float64, spare map[string]float64, prcs ...any) NamedAnalyzerResult {
+	var caps []domain.VariantCapacity
+	for i := 0; i+1 < len(prcs); i += 2 {
+		caps = append(caps, domain.VariantCapacity{
+			VariantName:        prcs[i].(string),
+			PerReplicaCapacity: prcs[i+1].(float64),
+		})
+	}
+	return NamedAnalyzerResult{
+		Name:      name,
+		Result:    &domain.AnalyzerResult{VariantCapacities: caps},
+		RoleSpare: spare,
+		Score:     score,
+		Live:      true,
+		Enabled:   true,
+	}
+}
+
+// Every fixture here drives scaleDownRoleIterated end-to-end, on purpose. The
+// defect these pin is not reachable through a direct safeRemovalReplicasForRole
+// call: a hand-built RoleSpare[role] = 0 is a state the pipeline never presents at
+// role entry, because needsScaleDownForRole skips the whole role first. Such a
+// test is green before and after the fix, for the wrong reason. What is reachable
+// is mid-loop — applyDeallocationForRole drives a spare to 0 after one variant has
+// shed, and the role gate is never re-checked — so the loop is the unit.
+var _ = Describe("the scale-down loop's role-level veto and shed ordering", func() {
+	var ctx context.Context
+
+	BeforeEach(func() { ctx = context.Background() })
+
+	intPtr := func(n int) *int { return &n }
+
+	Context("a live analyzer's exhausted role spare vetoes the rest of the role", func() {
+
+		It("holds the next variant when the objector cannot price it (PRC absence)", func() {
+			// v1 (cost 15) sheds before v2 (cost 5). The objector sizes v1 only, so
+			// removing one v1 replica takes its role spare to exactly 0 — and on v2
+			// votesFromRoleSpare would drop it for having no per-variant capacity,
+			// silently discarding an explicit "nothing left in this role".
+			anchor := []domain.VariantCapacity{
+				{VariantName: "v1", AcceleratorName: "A100", Cost: 15, PerReplicaCapacity: 100},
+				{VariantName: "v2", AcceleratorName: "A100", Cost: 5, PerReplicaCapacity: 200},
+			}
+			states := map[string]domain.VariantReplicaState{
+				"v1": {VariantName: "v1", CurrentReplicas: 3, GPUsPerReplica: 1},
+				"v2": {VariantName: "v2", CurrentReplicas: 3, GPUsPerReplica: 1},
+			}
+			targets := map[string]int{"v1": 3, "v2": 3}
+			s := []NamedAnalyzerResult{
+				shedEntry("objector", 1, map[string]float64{domain.RoleBoth: 100}, "v1", 100.0),
+				shedEntry("wide", 1, map[string]float64{domain.RoleBoth: 1000}, "v1", 100.0, "v2", 200.0),
+			}
+
+			scaleDownRoleIterated(ctx, s, anchor, targets, states)
+
+			Expect(targets["v1"]).To(Equal(2), "one replica of the expensive variant comes off first")
+			Expect(s[0].RoleSpare[domain.RoleBoth]).To(Equal(0.0),
+				"the objector's spare is exhausted mid-loop: this is the state the entry gate cannot see")
+			Expect(targets["v2"]).To(Equal(3),
+				"v2 is held: an exhausted role spare blocks the whole role, not only the variants its owner prices")
+		})
+
+		It("holds the next variant when the objector is outscored", func() {
+			// The objector sizes BOTH variants here, so PRC absence is not in play.
+			// Its 0 vote is still not a veto after dominance weighting: with e = 0 and
+			// a higher-scored voter reporting spare, the correction pulls the combined
+			// value positive and floor() returns a removable count. Only a veto holds.
+			anchor := []domain.VariantCapacity{
+				{VariantName: "v1", AcceleratorName: "A100", Cost: 15, PerReplicaCapacity: 500},
+				{VariantName: "v2", AcceleratorName: "A100", Cost: 5, PerReplicaCapacity: 100},
+			}
+			states := map[string]domain.VariantReplicaState{
+				// minReplicas on v1 keeps it holding replicas after its shed, so the
+				// cheapest-at-1 protection stays out of v2's outcome.
+				"v1": {VariantName: "v1", CurrentReplicas: 3, GPUsPerReplica: 1, MinReplicas: intPtr(2)},
+				"v2": {VariantName: "v2", CurrentReplicas: 3, GPUsPerReplica: 1},
+			}
+			targets := map[string]int{"v1": 3, "v2": 3}
+			s := []NamedAnalyzerResult{
+				shedEntry("objector", 1, map[string]float64{domain.RoleBoth: 500}, "v1", 500.0, "v2", 100.0),
+				shedEntry("trusted", 3, map[string]float64{domain.RoleBoth: 1000}, "v1", 100.0, "v2", 100.0),
+			}
+
+			scaleDownRoleIterated(ctx, s, anchor, targets, states)
+
+			Expect(targets["v1"]).To(Equal(2))
+			Expect(s[0].RoleSpare[domain.RoleBoth]).To(Equal(0.0))
+			Expect(targets["v2"]).To(Equal(3),
+				"a vote cannot encode a veto: the objector is outscored 3:1 and would be overruled as a voter")
+		})
+
+		It("still lets removal proceed when the role key is missing (abstain)", func() {
+			// Same numbers as the outscored fixture, one difference: the objector's
+			// RoleSpare does not carry this role at all. A missing key is an ABSTAIN —
+			// the analyzer never sized the role, so it has no basis to block it — where
+			// a present, non-positive key is a veto. This is the pair that pins the
+			// present-and-exhausted veto and the missing-key abstain as different
+			// statements rather than two spellings of one.
+			anchor := []domain.VariantCapacity{
+				{VariantName: "v1", AcceleratorName: "A100", Cost: 15, PerReplicaCapacity: 500},
+				{VariantName: "v2", AcceleratorName: "A100", Cost: 5, PerReplicaCapacity: 100},
+			}
+			states := map[string]domain.VariantReplicaState{
+				"v1": {VariantName: "v1", CurrentReplicas: 3, GPUsPerReplica: 1, MinReplicas: intPtr(2)},
+				"v2": {VariantName: "v2", CurrentReplicas: 3, GPUsPerReplica: 1},
+			}
+			targets := map[string]int{"v1": 3, "v2": 3}
+			s := []NamedAnalyzerResult{
+				shedEntry("abstainer", 1, map[string]float64{"prefill": 1234}, "v1", 500.0, "v2", 100.0),
+				shedEntry("trusted", 3, map[string]float64{domain.RoleBoth: 1000}, "v1", 100.0, "v2", 100.0),
+			}
+
+			scaleDownRoleIterated(ctx, s, anchor, targets, states)
+
+			Expect(targets["v1"]).To(Equal(2))
+			Expect(targets["v2"]).To(Equal(0), "an abstention does not block removal")
+			// The abstain has to survive the loop, not just its first iteration: a bare
+			// `m[role] -= x` inside applyDeallocationForRole would materialize the key
+			// at 0 and the fabricated entry would veto v2.
+			Expect(s[0].RoleSpare).NotTo(HaveKey(domain.RoleBoth),
+				"an abstained role must not be materialized by the deallocation bookkeeping")
+			Expect(s[0].RoleSpare["prefill"]).To(Equal(1234.0), "an unrelated role's balance is untouched")
+		})
+	})
+
+	Context("the scale-down path never refreshes the anchor's sizing", func() {
+
+		It("leaves every anchor sizing field alone across a multi-variant, multi-iteration shed", func() {
+			// Multi-variant and multi-iteration are both required: a single removal is
+			// green whether or not the property holds. The voters' sizing deliberately
+			// disagrees with the anchor's on all five fields refreshAnchorSizing writes,
+			// so an invocation could not be silent. len(s) == 2 keeps the helper past its
+			// own single-voter early-out, so nothing but the absence of the call is
+			// keeping this green.
+			voterCaps := func(prc1, prc2 float64) []domain.VariantCapacity {
+				return []domain.VariantCapacity{
+					{VariantName: "v1", PerReplicaCapacity: prc1, Reason: "voter-sizing", TotalDemand: 7, Utilization: 0.9},
+					{VariantName: "v2", PerReplicaCapacity: prc2, Reason: "voter-sizing", TotalDemand: 7, Utilization: 0.9},
+				}
+			}
+			anchor := []domain.VariantCapacity{
+				{VariantName: "v1", AcceleratorName: "A100", Cost: 15, ReplicaCount: 3,
+					PerReplicaCapacity: 111, Reason: "anchor-sizing", TotalDemand: 999, Utilization: 0.5, TotalCapacity: 333},
+				{VariantName: "v2", AcceleratorName: "A100", Cost: 5, ReplicaCount: 3,
+					PerReplicaCapacity: 222, Reason: "anchor-sizing", TotalDemand: 888, Utilization: 0.25, TotalCapacity: 666},
+			}
+			before := append([]domain.VariantCapacity(nil), anchor...)
+			states := map[string]domain.VariantReplicaState{
+				"v1": {VariantName: "v1", CurrentReplicas: 3, GPUsPerReplica: 1},
+				"v2": {VariantName: "v2", CurrentReplicas: 3, GPUsPerReplica: 1},
+			}
+			targets := map[string]int{"v1": 3, "v2": 3}
+			s := []NamedAnalyzerResult{
+				{Name: "a", Live: true, Enabled: true, Score: 1,
+					Result:    &domain.AnalyzerResult{VariantCapacities: voterCaps(300, 400)},
+					RoleSpare: map[string]float64{domain.RoleBoth: 100000}},
+				{Name: "b", Live: true, Enabled: true, Score: 1,
+					Result:    &domain.AnalyzerResult{VariantCapacities: voterCaps(350, 450)},
+					RoleSpare: map[string]float64{domain.RoleBoth: 100000}},
+			}
+
+			scaleDownRoleIterated(ctx, s, anchor, targets, states)
+
+			Expect(targets["v1"]).To(Equal(0), "first iteration sheds the expensive variant")
+			Expect(targets["v2"]).To(Equal(1), "second iteration sheds the cheap one down to its floor")
+			Expect(anchor).To(Equal(before), "scale-down must not re-size the anchor: populate once, never refresh")
+		})
+	})
+
+	Context("shed ordering — coverage per GPU freed", func() {
+
+		It("orders same-cost variants by coverage per GPU, not by raw capacity", func() {
+			// b's replicas are four times the size of a's. Raw capacity says shed a
+			// first (100 < 200); per GPU returned, a gives up 100 and b gives up 50, so
+			// b is the cheaper thing to shed and goes first.
+			roleVCs := []domain.VariantCapacity{
+				{VariantName: "a", Cost: 10, PerReplicaCapacity: 100},
+				{VariantName: "b", Cost: 10, PerReplicaCapacity: 200},
+			}
+			states := map[string]domain.VariantReplicaState{
+				"a": {VariantName: "a", GPUsPerReplica: 1},
+				"b": {VariantName: "b", GPUsPerReplica: 4},
+			}
+			s := []NamedAnalyzerResult{
+				shedEntry("x", 1, nil, "a", 100.0, "b", 200.0),
+				shedEntry("y", 1, nil, "a", 80.0, "b", 150.0),
+			}
+
+			sorted := sortVariantsForScaleDown(s, roleVCs, states)
+
+			Expect([]string{sorted[0].VariantName, sorted[1].VariantName}).To(Equal([]string{"b", "a"}))
+		})
+
+		It("combines the analyzers' estimates with a maximum, not a sum", func() {
+			// Equal GPUsPerReplica isolates the combine. Maxima: a = 100, b = 150, so
+			// a sheds first. Sums: a = 200, b = 160, which would shed b first. The sum
+			// also grows with the number of configured analyzers, so under it a new
+			// voter could reorder the shed with no observation having changed.
+			roleVCs := []domain.VariantCapacity{
+				{VariantName: "a", Cost: 10, PerReplicaCapacity: 100},
+				{VariantName: "b", Cost: 10, PerReplicaCapacity: 150},
+			}
+			states := map[string]domain.VariantReplicaState{
+				"a": {VariantName: "a", GPUsPerReplica: 1},
+				"b": {VariantName: "b", GPUsPerReplica: 1},
+			}
+			s := []NamedAnalyzerResult{
+				shedEntry("x", 1, nil, "a", 100.0, "b", 150.0),
+				shedEntry("y", 1, nil, "a", 100.0, "b", 10.0),
+			}
+
+			sorted := sortVariantsForScaleDown(s, roleVCs, states)
+
+			Expect([]string{sorted[0].VariantName, sorted[1].VariantName}).To(Equal([]string{"a", "b"}))
+		})
+
+		It("ignores Score, which is a sizing belief weight and not an ordering key", func() {
+			// The maximum fixture's ballot, with the scores spread 100:1 the other way.
+			// Unweighted the maxima are a = 100 and b = 150, so a still sheds first.
+			// Weighting by Score — as either a max or a sum — puts a above b and would
+			// flip the shed, so this fixture fails against any score-weighted key.
+			roleVCs := []domain.VariantCapacity{
+				{VariantName: "a", Cost: 10, PerReplicaCapacity: 100},
+				{VariantName: "b", Cost: 10, PerReplicaCapacity: 150},
+			}
+			states := map[string]domain.VariantReplicaState{
+				"a": {VariantName: "a", GPUsPerReplica: 1},
+				"b": {VariantName: "b", GPUsPerReplica: 1},
+			}
+			s := []NamedAnalyzerResult{
+				shedEntry("x", 0.1, nil, "a", 100.0, "b", 150.0),
+				shedEntry("y", 10, nil, "a", 100.0, "b", 10.0),
+			}
+
+			sorted := sortVariantsForScaleDown(s, roleVCs, states)
+
+			Expect([]string{sorted[0].VariantName, sorted[1].VariantName}).To(Equal([]string{"a", "b"}))
+		})
+
+		It("drives the shed order end-to-end: the larger-replica variant goes first", func() {
+			// Same shapes as the ordering fixture, now through the loop. Both variants
+			// have the same cost, so the tie-break alone decides who sheds — and the
+			// first shed exhausts x's role spare, so whoever goes first is the only one
+			// that moves. Coverage per GPU sheds b (a is held at 2); raw capacity or a
+			// score-weighted sum would shed a to 0 and hold b.
+			anchor := []domain.VariantCapacity{
+				{VariantName: "a", AcceleratorName: "A100", Cost: 10, PerReplicaCapacity: 100},
+				{VariantName: "b", AcceleratorName: "A100", Cost: 10, PerReplicaCapacity: 200},
+			}
+			states := map[string]domain.VariantReplicaState{
+				"a": {VariantName: "a", CurrentReplicas: 2, GPUsPerReplica: 1},
+				"b": {VariantName: "b", CurrentReplicas: 2, GPUsPerReplica: 4},
+			}
+			targets := map[string]int{"a": 2, "b": 2}
+			s := []NamedAnalyzerResult{
+				shedEntry("x", 1, map[string]float64{domain.RoleBoth: 200}, "a", 100.0, "b", 200.0),
+				shedEntry("y", 1, map[string]float64{domain.RoleBoth: 200}, "a", 80.0, "b", 150.0),
+			}
+
+			scaleDownRoleIterated(ctx, s, anchor, targets, states)
+
+			Expect(targets["b"]).To(Equal(1), "b sheds first: it gives up the least coverage per GPU freed")
+			Expect(targets["a"]).To(Equal(2), "whoever sheds second finds x's spare spent and gets nothing")
 		})
 	})
 })

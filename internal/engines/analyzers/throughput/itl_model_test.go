@@ -45,7 +45,7 @@ var _ = Describe("FitITLModel", func() {
 	Describe("successful fit", func() {
 		It("recovers A and B from a perfect linear dataset", func() {
 			kValues := []float64{0.20, 0.30, 0.40, 0.50, 0.60, 0.70}
-			m, ok := FitITLModel(makeObs(kValues, 0.073, 0.006))
+			m, ok := FitITLModel(makeObs(kValues, 0.073, 0.006), fallbackKSat)
 			Expect(ok).To(BeTrue())
 			Expect(m.A).To(BeNumerically("~", 0.073, 1e-6))
 			Expect(m.B).To(BeNumerically("~", 0.006, 1e-6))
@@ -53,7 +53,7 @@ var _ = Describe("FitITLModel", func() {
 
 		It("recovers A and B with only 2 observations", func() {
 			obs := makeObs([]float64{0.20, 0.80}, 0.05, 0.008)
-			m, ok := FitITLModel(obs)
+			m, ok := FitITLModel(obs, fallbackKSat)
 			Expect(ok).To(BeTrue())
 			Expect(m.A).To(BeNumerically("~", 0.05, 1e-6))
 			Expect(m.B).To(BeNumerically("~", 0.008, 1e-6))
@@ -61,7 +61,7 @@ var _ = Describe("FitITLModel", func() {
 
 		It("produces a positive slope for monotonically increasing ITL", func() {
 			kValues := []float64{0.20, 0.40, 0.60, 0.80}
-			m, ok := FitITLModel(makeObs(kValues, 0.10, 0.002))
+			m, ok := FitITLModel(makeObs(kValues, 0.10, 0.002), fallbackKSat)
 			Expect(ok).To(BeTrue())
 			Expect(m.A).To(BeNumerically(">", 0))
 		})
@@ -69,16 +69,16 @@ var _ = Describe("FitITLModel", func() {
 
 	Describe("degenerate inputs", func() {
 		It("returns false for fewer than 2 observations", func() {
-			_, ok := FitITLModel(nil)
+			_, ok := FitITLModel(nil, fallbackKSat)
 			Expect(ok).To(BeFalse())
 
-			_, ok = FitITLModel(makeObs([]float64{0.50}, 0.073, 0.006))
+			_, ok = FitITLModel(makeObs([]float64{0.50}, 0.073, 0.006), fallbackKSat)
 			Expect(ok).To(BeFalse())
 		})
 
 		It("returns false when all k values are identical (zero k-spread)", func() {
 			obs := makeObs([]float64{0.50, 0.50, 0.50, 0.50}, 0.073, 0.006)
-			_, ok := FitITLModel(obs)
+			_, ok := FitITLModel(obs, fallbackKSat)
 			Expect(ok).To(BeFalse())
 		})
 
@@ -89,14 +89,14 @@ var _ = Describe("FitITLModel", func() {
 				{K: 0.50, ITLSec: 0.030},
 				{K: 0.80, ITLSec: 0.030},
 			}
-			_, ok := FitITLModel(obs)
+			_, ok := FitITLModel(obs, fallbackKSat)
 			Expect(ok).To(BeFalse())
 		})
 
 		It("returns false when fitted slope A is negative (inverted)", func() {
 			// ITL decreasing with k — physically implausible.
 			obs := makeObs([]float64{0.20, 0.50, 0.80}, -0.05, 0.10)
-			_, ok := FitITLModel(obs)
+			_, ok := FitITLModel(obs, fallbackKSat)
 			Expect(ok).To(BeFalse())
 		})
 	})
@@ -104,7 +104,7 @@ var _ = Describe("FitITLModel", func() {
 	Describe("prediction accuracy", func() {
 		It("ITLAt matches the fitted model's prediction", func() {
 			kValues := []float64{0.20, 0.35, 0.50, 0.65, 0.80}
-			m, ok := FitITLModel(makeObs(kValues, 0.073, 0.006))
+			m, ok := FitITLModel(makeObs(kValues, 0.073, 0.006), fallbackKSat)
 			Expect(ok).To(BeTrue())
 			Expect(m.ITLAt(0.85)).To(BeNumerically("~", 0.073*0.85+0.006, 1e-6))
 		})
@@ -113,31 +113,40 @@ var _ = Describe("FitITLModel", func() {
 
 var _ = Describe("validITLModel", func() {
 	It("accepts a finite, positive-slope model with positive ITL at saturation", func() {
-		Expect(validITLModel(0.073, 0.006)).To(BeTrue())
+		Expect(validITLModel(0.073, 0.006, fallbackKSat)).To(BeTrue())
 	})
 
 	It("rejects NaN A", func() {
-		Expect(validITLModel(math.NaN(), 0.006)).To(BeFalse())
+		Expect(validITLModel(math.NaN(), 0.006, fallbackKSat)).To(BeFalse())
 	})
 
 	It("rejects Inf A", func() {
-		Expect(validITLModel(math.Inf(1), 0.006)).To(BeFalse())
+		Expect(validITLModel(math.Inf(1), 0.006, fallbackKSat)).To(BeFalse())
 	})
 
 	It("rejects a flat slope (A <= itlSlopeEpsilon)", func() {
-		Expect(validITLModel(0, 0.006)).To(BeFalse())
+		Expect(validITLModel(0, 0.006, fallbackKSat)).To(BeFalse())
 	})
 
 	It("rejects NaN B", func() {
-		Expect(validITLModel(0.073, math.NaN())).To(BeFalse())
+		Expect(validITLModel(0.073, math.NaN(), fallbackKSat)).To(BeFalse())
 	})
 
 	It("rejects Inf B", func() {
-		Expect(validITLModel(0.073, math.Inf(1))).To(BeFalse())
+		Expect(validITLModel(0.073, math.Inf(1), fallbackKSat)).To(BeFalse())
 	})
 
 	It("rejects a non-positive ITL at saturation", func() {
-		// A*DefaultKSat + B <= 0 with a valid positive A.
-		Expect(validITLModel(0.01, -1.0)).To(BeFalse())
+		// A*kSat + B <= 0 with a valid positive A.
+		Expect(validITLModel(0.01, -1.0, fallbackKSat)).To(BeFalse())
+	})
+
+	It("evaluates the saturation guard at the k it is given, not a fixed one", func() {
+		// A*k + B crosses zero at k = 0.5, so the same (A, B) is usable at a
+		// higher k_sat and not at a lower one. Pins the threading: a k_sat that
+		// stopped reaching this guard would make both cases agree.
+		const a, b = 1.0, -0.5
+		Expect(validITLModel(a, b, 0.8)).To(BeTrue(), "ITL(0.8) = 0.3 > 0")
+		Expect(validITLModel(a, b, 0.4)).To(BeFalse(), "ITL(0.4) = -0.1 <= 0")
 	})
 })

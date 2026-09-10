@@ -163,10 +163,32 @@ These parameters apply when `analyzerName: "saturation"` is set or when the `ana
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `analyzerName` | string | Legacy selector for the V2 token-based analyzer: set to `"saturation"`. Empty string uses V1. Prefer the `analyzers:` list, which the shipped default uses. | `""` |
-| `priority` | float64 | Multiplier for this model's scaling urgency in fair-share GPU allocation | 1.0 |
+| `priority` | float64 | Multiplier for this model's scaling urgency in fair-share GPU allocation. To deprioritize a model, use a small positive value, **not** `0` — see below | 1.0 |
 | `analyzers` | list | Multi-analyzer pipeline registration — see [Multi-Analyzer Registration](#multi-analyzer-registration) | `[{name: "saturation", score: 1.0}]` |
 
-> `scaleUpThreshold` and `scaleDownBoundary` are honored only for saturation on this branch; see the `multi-analyzer-threshold` PR for the universal post-step that calibrates RC/SC across all analyzers.
+> `scaleUpThreshold` and `scaleDownBoundary` are honored for **every** analyzer: the engine
+> recalibrates each analyzer's `RequiredCapacity` / `SpareCapacity` — at model level and per role — in
+> a post-step after `Analyze()` returns, using either the analyzer's own registered override or these
+> model-level values. See
+> [multi-analyzer-pipeline.md](multi-analyzer-pipeline.md#data-model-analyzerresult--namedanalyzerresult).
+
+**Deprioritizing a model: write a small positive `priority`, never `0`.** Writing `priority: 0` does
+not deprioritize anything — it is erased twice over. Defaulting rewrites an exact `0` to `1.0`, so an
+explicit zero silently becomes *normal* priority, the opposite of the intent; and in a per-model
+override an exact `0` is treated as "unset" and skipped, leaving whatever the global config had. The
+way to express *last in line, take what you need, I will use the leftovers* is a small positive value
+such as `0.00001`:
+
+```yaml
+priority: 0.00001   # deprioritize: sorts behind every other model, still eligible
+```
+
+It survives defaulting, passes validation, applies as an override, and orders the model behind every
+other model in the fair-share loop while leaving it eligible for whatever the others do not take —
+it is served in single-replica steps once the higher-priority models have been satisfied or dropped,
+rather than being excluded. **This idiom is the feature's only spelling, not a workaround:** the `0`
+handling is how `omitempty` scalars are defaulted throughout this config, so please do not file it as
+a bug or "fix" the defaulting — the fix would break every config that omits the field.
 
 ### Default Configuration
 
@@ -259,7 +281,7 @@ registration order and invokes its `Analyze` method.
 >   behavior is unchanged from single-analyzer operation.
 > - `[saturation, throughput]` → both vote; saturation binds the anchor.
 > - `[throughput]` only → throughput binds the anchor; saturation still runs as
->   the identity/(a) carrier but does not vote.
+>   the identity carrier but does not vote.
 >
 > Saturation always runs to supply per-variant identity metadata regardless of
 > which config is active; what the `analyzers` list changes is whether it
@@ -271,7 +293,7 @@ Pre-registered:
 
 - The V2 saturation analyzer is pre-registered by `NewEngine` under
   `interfaces.SaturationAnalyzerName`. It always runs — supplying the
-  identity/(a) carrier — but drives the optimizer only when it votes (the
+  identity carrier — but drives the optimizer only when it votes (the
   default config, or when its name is enabled).
 
 External analyzers are registered from `cmd/main.go` via:
@@ -315,10 +337,22 @@ is selected and the engine falls back to V1 (see
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
 | `name` | string | Analyzer name (must match a `RegisterAnalyzer` call) | required |
-| `enabled` | bool | Reserved — placeholder for future combine logic | `true` |
-| `score` | float64 | Reserved — placeholder for future combine logic | `1.0` |
+| `enabled` | bool | Whether this analyzer votes in the combine at all (an enabled-but-stale analyzer is also excluded — see [How results combine](multi-analyzer-pipeline.md#how-results-combine)) | `true` |
+| `score` | float64 | Belief weight over this analyzer's replica votes — see below | `1.0` |
 | `scaleUpThreshold` | float64 | Per-analyzer override for the scale-up threshold; honored by the engine post-step (see Universal Threshold Post-Step below) | global `scaleUpThreshold` |
 | `scaleDownBoundary` | float64 | Per-analyzer override for the scale-down boundary; honored by the engine post-step (see Universal Threshold Post-Step below) | global `scaleDownBoundary` |
+
+#### What `score` means
+
+`score` is a **belief weight over votes**: how much to trust one analyzer's replica opinion against another's when they disagree about the same `(variant, role)`. It is applied at exactly one place — inside the optimizer's combine ([How results combine](multi-analyzer-pipeline.md#how-results-combine)) — and nowhere else.
+
+It is **not** a priority and **not** a budget multiplier. Scaling happens in two stages: combine the analyzers' votes into one replica number per `(variant, role)` using `score`, then fair-share GPUs across models using each model's `priority`. `score` belongs to the first stage only, so raising it never enlarges a model's claim on the cluster — it only changes which analyzer's replica count the model's own combine lands on. (The unrelated `K2Priority` in the queueing-model analyzer is a name collision; it is not this field and has nothing to do with the combine.)
+
+**`1.0` everywhere reproduces the plain max/min exactly.** That is the default and what every shipped config uses, so the weighting is inert unless you deliberately turn it on. With uniform scores the combine is the plain cross-analyzer maximum on scale-up and minimum on scale-down.
+
+**Raising one analyzer's score pulls the combined number toward that analyzer's own vote, and never outside the votes cast.** The result always lands in `[min vote, max vote]` — the combine cannot invent a replica count no analyzer asked for. Concretely, if the throughput analyzer's demand implies 10 replicas at `score: 1.0` and saturation's implies 5 at `score: 2.0`, the combine yields 8.33 → **9 replicas**: still driven by throughput's larger demand, but pulled down because saturation is trusted twice as much. Trust the conservative voter more on scale-down and the result simply stays at the safe end; there is no configuration that makes the combine less safe than the most conservative live analyzer's vote plus the pull of a better-trusted dissenter.
+
+**When would I change it?** When two analyzers measure genuinely different things and one is known to be better calibrated for your workload — for example a request-rate model you trust while a KV-cache model is still being tuned. Prefer fixing the mis-calibrated analyzer's own configuration first; `score` is the escape hatch for when you cannot. Leave it at the default if you have no specific reason, and change one analyzer at a time: because only the *excess* over the binding analyzer's score has any effect, raising every analyzer's score together changes nothing.
 
 ### Analyzer responsibilities and the universal threshold post-step
 
@@ -444,6 +478,8 @@ totals := aggregation.AggregateByRole(variantCapacities)
 
 `AggregateByRole` canonicalizes empty role to `interfaces.RoleBoth`.
 
+These helpers aggregate **one analyzer's own** variant capacities into that analyzer's result. They are not the cross-analyzer combine: reducing several analyzers' competing replica opinions to one number is the optimizer's job, done by the single `combineVotes` core and its three collectors — see [How results combine](multi-analyzer-pipeline.md#how-results-combine).
+
 #### Engine post-step formula
 
 After each analyzer's `Analyze()` returns, the engine applies the universal threshold formula at **every scope** — model level and each `RoleCapacity` entry:
@@ -464,15 +500,23 @@ The asymmetry — anticipated supply for scale-up, steady-state `TotalSupply` fo
 ### Saturation as the Identity Carrier
 
 The saturation analyzer executes on every cycle regardless of the `analyzers`
-config — its `VariantCapacities` carry the (a)/identity fields (`Cost`,
+config — its `VariantCapacities` carry the identity fields (`Cost`,
 `AcceleratorName`, `Role`, replica counts) the optimizer needs for variant
 selection and GPU accounting, for every configured variant including those at
 zero replicas. Running is unconditional; *voting* is opt-in. Saturation
 contributes its `RequiredCapacity` / `SpareCapacity` to the combine math only
 when it votes — the default single-analyzer config, or when its name is
 enabled. In a `[throughput]`-only config it is present purely as the identity
-carrier: it supplies (a) for the anchor merge but is pruned from the voting
-subset and neither drives scale-up nor vetoes scale-down.
+carrier: it supplies identity for the anchor merge but is pruned from the voting
+subset (Enabled && Live, VG-up) and neither drives scale-up nor vetoes
+scale-down.
+
+Being the identity carrier does not make saturation a sizing fallback: when
+the binding analyzer omits a variant, the anchor never borrows saturation's
+own sizing for it, even when saturation is enabled — a binder-unknown variant
+abstains (`PerReplicaCapacity = 0`) rather than mixing metric scales across
+variants within one anchor. When the binder binds, every sized variant is
+the binder's, uniformly.
 
 ### Resilience
 
@@ -787,7 +831,8 @@ The controller validates all configuration entries on load. Invalid entries are 
 3. **KvSpareTrigger:** Must be between 0.0 and 1.0
 4. **QueueSpareTrigger:** Must be ≥ 0
 5. **Consistency:** `kvCacheThreshold` must be ≥ `kvSpareTrigger`
-6. **Priority:** Must be ≥ 0
+6. **Priority:** Must be ≥ 0 (an exact `0` passes, but it is defaulted back to `1.0` rather than
+   deprioritizing — see the [`priority` field](#v2-analyzer-parameters))
 7. **V2 thresholds** (when set): `scaleUpThreshold` and `scaleDownBoundary` must be in (0, 1],
    and `scaleUpThreshold` must be > `scaleDownBoundary`. Per-analyzer overrides are range-checked too.
 8. **Limiters:** each `type` must be `gpu-inventory`/`inventory` or `quota`; a `gpu-inventory` entry

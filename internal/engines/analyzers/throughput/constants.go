@@ -49,11 +49,23 @@ const (
 	// is unavailable or zero-padded and are flagged as a sanity issue.
 	DefaultMinTokensPerRequest = 1.0
 
-	// DefaultKSat is the KV utilization fraction at which per-replica capacity is
-	// evaluated. Mirrors DefaultScaleUpThreshold in saturation config so that the
-	// throughput analyzer and saturation analyzer agree on the definition of "full".
-	// TODO: unify with the system-wide k_sat used by the EPP and saturation analyzer.
-	DefaultKSat = 0.85
+	// fallbackKSat is the k_sat used when the input carries no saturation config to
+	// read one from. Per-replica capacity is evaluated at the configured k_sat
+	// (resolveKSat); this is only the no-config path.
+	//
+	// It must equal config.DefaultKvCacheThreshold, which is the value
+	// ApplyDefaults writes into KvCacheThreshold when the field is unset, so that
+	// every path agrees on the definition of "full". The literal is duplicated
+	// rather than imported because internal/config is a lower layer than the
+	// analyzers (see throughputAnalyzerName in config.go, the same duplication in
+	// the opposite direction); TestFallbackKSatMatchesConfigDefault pins the two
+	// together so a change to either fails here.
+	//
+	// Not to be confused with a watermark: ScaleUpThreshold (0.85) and
+	// ScaleDownBoundary (0.70) are margins around the steady state, applied by the
+	// engine to required/spare capacity after Analyze returns. This constant
+	// previously held 0.85 for exactly that reason and was wrong.
+	fallbackKSat = 0.80
 
 	// DefaultBaselineITLSec is the hardware baseline inter-token latency (seconds/token)
 	// used in tier-2 estimation when the OLS window is not yet ready.
@@ -86,10 +98,11 @@ const (
 	// small and percentage errors on GPS are unreliable.
 	DefaultGPSMinKForVerification = 0.30
 
-	// DefaultNearKSatMargin is the margin below DefaultKSat at which a replica is
-	// considered "near saturation" for GPS sanity diagnostics. At k* above
-	// DefaultKSat - DefaultNearKSatMargin the GPS signal is near-oracle quality:
-	// any model–GPS discrepancy is a strong indicator of a model error.
+	// DefaultNearKSatMargin is the margin below the resolved k_sat at which a
+	// replica is considered "near saturation" for GPS sanity diagnostics. At k*
+	// above k_sat - DefaultNearKSatMargin the GPS signal is near-oracle quality:
+	// any model–GPS discrepancy is a strong indicator of a model error. A genuine
+	// margin, unlike the k_sat it is measured from, so it stays a constant.
 	DefaultNearKSatMargin = 0.10
 
 	// DefaultNearKSatITLResidualThreshold is the fractional ITL residual above which
@@ -121,4 +134,16 @@ const (
 	// previously-live variant now at zero replicas: its per-replica capacity is the
 	// persisted last-good value, not a fresh fit. Not produced by resolveITLModel.
 	itlReasonScaleFromZero = "T-sfz"
+
+	// roleUnmodeledReason marks a RoleCapacity (not a VariantCapacity) whose
+	// TotalDemand is structurally zero because this analyzer has no demand
+	// model for the role at all -- set on prefill in aggregateRoleCapacities.
+	// Duplicated from pipeline.ReasonRoleUnmodeled rather than imported: this
+	// package cannot import internal/engines/pipeline (pipeline imports
+	// internal/config for its quota/enforcer plumbing, and internal/config's
+	// own in-package tests import this package for the k_sat drift guard --
+	// the same test-binary import cycle resolveKSat's interface trick works
+	// around, but a bare string constant has no equivalent trick). Pinned
+	// against drift by TestRoleUnmodeledReasonMatchesPipeline.
+	roleUnmodeledReason = "role-unmodeled"
 )

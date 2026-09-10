@@ -30,7 +30,11 @@ func (m ITLModel) ITLAt(k float64) float64 {
 // meaningfully-positive slope, finite intercept, and positive ITL at saturation.
 // Shared by the Tier-1 OLS fit (FitITLModel) and the Tier-2 constrained fit
 // (resolveITLModel) so the two validation paths cannot drift apart.
-func validITLModel(a, b float64) bool {
+//
+// kSat is the saturation point the last guard evaluates at; it is passed in
+// rather than read from a constant so that a model is validated at the same k the
+// supply computation will later evaluate it at (see resolveKSat).
+func validITLModel(a, b, kSat float64) bool {
 	// Defensive guard: NaN/+Inf a both slip past the a <= 0 check below, and a non-zero
 	// sumK can leave b finite so the b guard would not catch them. Symmetric with the b guard.
 	if math.IsNaN(a) || math.IsInf(a, 0) {
@@ -49,8 +53,8 @@ func validITLModel(a, b float64) bool {
 		return false
 	}
 	// Guard: ensure ITL at saturation is positive. A noisy fit can yield negative
-	// b (valid a>0), making ITLAt(DefaultKSat) near-zero and inflating supply.
-	if a*DefaultKSat+b <= 0 {
+	// b (valid a>0), making ITLAt(kSat) near-zero and inflating supply.
+	if a*kSat+b <= 0 {
 		return false
 	}
 	return true
@@ -63,7 +67,11 @@ func validITLModel(a, b float64) bool {
 //   - fewer than 2 observations are provided
 //   - k-spread across observations is zero (degenerate — no discriminating signal)
 //   - the fitted (A, B) fails validITLModel (inverted/flat/non-finite/non-positive-at-saturation)
-func FitITLModel(obs []ITLObservation) (ITLModel, bool) {
+//
+// kSat is the saturation point the validity check evaluates at; callers pass the
+// resolved k_sat so a fit is accepted or rejected against the same k that will be
+// used to price it.
+func FitITLModel(obs []ITLObservation, kSat float64) (ITLModel, bool) {
 	n := float64(len(obs))
 	if n < 2 {
 		return ITLModel{}, false
@@ -85,7 +93,7 @@ func FitITLModel(obs []ITLObservation) (ITLModel, bool) {
 	A := (n*sumKITL - sumK*sumITL) / denom
 	B := (sumITL - A*sumK) / n
 
-	if !validITLModel(A, B) {
+	if !validITLModel(A, B, kSat) {
 		return ITLModel{}, false
 	}
 

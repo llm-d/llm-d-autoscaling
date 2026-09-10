@@ -21,7 +21,7 @@ import (
 type NamedAnalyzerResult struct {
 	Name              string
 	Result            *domain.AnalyzerResult
-	Score             float64            // per-analyzer weight from AnalyzerScoreConfig; used for fair-share priority
+	Score             float64            // belief weight from AnalyzerScoreConfig: how far the per-(variant, role) combine pulls toward this analyzer's replica vote; 0 reads as the 1.0 default. Not a priority and not a budget multiplier
 	Remaining         float64            // mutable remaining required capacity; P-scope for disaggregated, model-scope otherwise
 	Spare             float64            // mutable remaining spare capacity; model-scope (non-disaggregated only)
 	RoleSpare         map[string]float64 // per-role mutable spare; set by initRoleState; nil for non-disaggregated
@@ -36,20 +36,23 @@ type NamedAnalyzerResult struct {
 	Live bool
 
 	// Enabled indicates the analyzer votes in the combine (RC/SC) math for this cycle.
-	// Saturation is present as the identity/(a) carrier even when it does not vote
+	// Saturation is present as the identity carrier even when it does not vote
 	// (e.g. a throughput-only config), so "present in the ballot" != "votes".
-	// Set by the engine each cycle. votingResults prunes the ballot to Enabled
-	// entries before combine math; the anchor build (bindingAnchor) reads the full
-	// ballot so a non-voting saturation entry can still supply (a)/fallback (b).
+	// Set by the engine each cycle. votingResults prunes the ballot to Enabled &&
+	// Live entries before combine math (VG-up); the anchor build (bindingAnchor)
+	// reads the full ballot so a non-voting saturation entry can still supply identity.
 	Enabled bool
 }
 
 // ModelScalingRequest bundles the analyzer result with variant state for one model.
 // The optimizer receives a slice of these — one per model — and produces decisions.
 type ModelScalingRequest struct {
-	ModelID         string
-	Namespace       string
-	AnalyzerResults []NamedAnalyzerResult // per-analyzer slice; order is not significant (see bindingAnchor / votingResults)
+	ModelID   string
+	Namespace string
+	// AnalyzerResults is the per-analyzer ballot. votingResults' combine math is
+	// order-independent, but bindingAnchor's binder tie-break is not: among
+	// qualifying non-saturation entries, the lowest ballot index binds.
+	AnalyzerResults []NamedAnalyzerResult
 	VariantStates   []domain.VariantReplicaState
 	Priority        float64 // Model priority (default 1.0)
 	Disaggregated   bool    // true when model has prefill+decode variants

@@ -42,12 +42,16 @@ func (f RescaleFlags) enabledForScope(namespace string, namespaceScoped bool) bo
 }
 
 // rescaleInput is one model's contribution to the priority-weighted water-filling.
-// All GPU quantities are whole GPUs; Demand is in the analyzer's own unit and is
-// used only inside the weight ratio (priority x demand), so its unit cancels.
+// All GPU quantities are whole GPUs. Demand must be in GPU units, not an
+// analyzer's own natural unit (tokens, request-rate): the water-fill compares
+// weight_i = priority_i * demand_i ACROSS models directly (computeRescaleTargets'
+// share := remaining * weight / totalWeight), so two models bound by different
+// analyzers would be incommensurable otherwise (Bug #3) -- unlike a same-model
+// ratio, the unit does not cancel across models.
 type rescaleInput struct {
 	ID        string
 	Priority  float64 // model priority multiplier (>= 0)
-	Demand    float64 // model demand for the weight (any unit; ratio only)
+	Demand    float64 // model demand-in-GPUs for the weight (must be GPU units -- see above)
 	FloorGPUs int     // reserved: sum over variants of minReplicas x gpusPerReplica
 	CapGPUs   int     // upper bound: min(demand-in-GPUs, maxReplicas x gpusPerReplica); >= FloorGPUs
 }
@@ -340,18 +344,20 @@ func (o *GreedyByScoreOptimizer) rescaleModelDecisions(
 	freeThisCycle *int,
 ) []domain.VariantDecision {
 	anchor := bindingAnchor(req.AnalyzerResults)
-	// applyRescale drops anchor-less requests before grouping, so this is
-	// unreachable today. Guard it anyway, as every other bindingAnchor call site
-	// does: the anchor is now derived per call rather than read from a stored
-	// field, and it returns nil for a stale, non-informative, or ambiguously bound
-	// ballot — a much wider set of inputs than the old "entry absent" case. A
-	// dereference here would panic the optimize goroutine.
 	if anchor == nil {
+		// Every sibling topology helper (modelCurrentGPUs, rescaleInputsForGroup,
+		// roleCurrentGPUs, roleFloorGPUs) nil-guards its own bindingAnchor call; this
+		// one is safe today only because applyRescale pre-filters anchor != nil before
+		// dispatching here -- a local guard removes that fragile coupling.
 		return nil
 	}
 	stateMap := buildStateMap(req.VariantStates)
 	vcMap := buildCapacityMap(anchor.VariantCapacities)
 	targets := initTargets(req.VariantStates)
+
+	// Combine (RC/SC and role-demand) math consumes only the voting subset of
+	// the ballot; the anchor supplies the variant topology.
+	s := votingResults(req.AnalyzerResults)
 
 	// Split the model's GPU target across its roles by role demand (a P/D model
 	// must keep both roles served), then reclaim/fill each role toward its share.
@@ -362,7 +368,7 @@ func (o *GreedyByScoreOptimizer) rescaleModelDecisions(
 	floorByRole := make(map[string]int, len(roles))
 	for _, role := range roles {
 		curByRole[role] = roleCurrentGPUs(req, accType, role)
-		demByRole[role] = roleDemandGPUs(anchor, stateMap, accType, role)
+		demByRole[role] = roleDemandGPUs(anchor, s, stateMap, accType, role)
 		floorByRole[role] = roleFloorGPUs(req, accType, role)
 	}
 	tgtByRole := distributeGPUsByWeight(targetGPUs, roles, demByRole, curByRole, floorByRole)
@@ -371,8 +377,8 @@ func (o *GreedyByScoreOptimizer) rescaleModelDecisions(
 		rt, rc := tgtByRole[role], curByRole[role]
 		switch {
 		case rt < rc:
-			// Combine (RC/SC) math (scale-down score-weighted tie-break) consumes only
-			// the voting subset of the ballot; the anchor supplies the variant topology.
+			// Combine (RC/SC) math and the shed ordering both consume only the voting
+			// subset of the ballot; the anchor supplies the variant topology.
 			reclaimRole(ctx, votingResults(req.AnalyzerResults), anchor.VariantCapacities, role, stateMap, targets, rc-rt)
 		case rt > rc:
 			want := rt - rc
@@ -405,7 +411,7 @@ func reclaimRole(
 	deltaGPUs int,
 ) {
 	remaining := deltaGPUs
-	sorted := sortVariantsForScaleDown(s, variantsForRole(variants, role))
+	sorted := sortVariantsForScaleDown(s, variantsForRole(variants, role), stateMap)
 	scaleDownVariantSet(ctx, sorted, targets, stateMap,
 		func(vc domain.VariantCapacity) int {
 			g := gpusPerReplicaFromState(stateMap, vc.VariantName)
@@ -434,6 +440,9 @@ func fillRole(
 		if wantGPUs-spent <= 0 {
 			break
 		}
+		// Unpriced on this topology: no per-replica capacity means no conversion
+		// from replicas to served demand, so this variant cannot absorb any part
+		// of wantGPUs. It contributes no fill and is charged nothing.
 		if vc.PerReplicaCapacity <= 0 {
 			continue
 		}
@@ -442,8 +451,15 @@ func fillRole(
 			continue
 		}
 		st := stateMap[vc.VariantName]
+		// The ceiling is on the target, not on this loop: an allocator that comes
+		// round again finds targets[v] already at the bound and buys nothing more.
+		// Hoisted because it does not depend on the loop, and read through the
+		// helper because this loop is otherwise unbounded whenever MaxReplicas is
+		// unset -- which is where a from-zero variant would absorb the whole
+		// role's GPUs one unit of capacity at a time.
+		maxTarget, bounded := maxTargetReplicas(vc, st)
 		for wantGPUs-spent >= g {
-			if st.MaxReplicas != nil && *st.MaxReplicas > 0 && targets[vc.VariantName] >= *st.MaxReplicas {
+			if bounded && targets[vc.VariantName] >= maxTarget {
 				break
 			}
 			targets[vc.VariantName]++
@@ -499,6 +515,7 @@ func rescaleInputsForGroup(reqs []ModelScalingRequest, accType string, budget in
 			continue
 		}
 		stateMap := buildStateMap(req.VariantStates)
+		s := votingResults(req.AnalyzerResults)
 
 		floorGPUs, maxGPUs, maxBounded := 0, 0, true
 		for _, vc := range anchor.VariantCapacities {
@@ -517,7 +534,7 @@ func rescaleInputsForGroup(reqs []ModelScalingRequest, accType string, budget in
 			}
 		}
 
-		demandGPUs := modelDemandGPUs(anchor, stateMap, accType)
+		demandGPUs := modelDemandGPUs(anchor, s, stateMap, accType)
 		capGPUs := demandGPUs
 		if maxBounded {
 			capGPUs = min(capGPUs, maxGPUs)
@@ -529,7 +546,7 @@ func rescaleInputsForGroup(reqs []ModelScalingRequest, accType string, budget in
 		inputs = append(inputs, rescaleInput{
 			ID:        modelKey(req),
 			Priority:  req.Priority,
-			Demand:    anchor.TotalDemand,
+			Demand:    float64(demandGPUs), // GPU units (Bug #3) -- comparable across models
 			FloorGPUs: floorGPUs,
 			CapGPUs:   capGPUs,
 		})
@@ -540,40 +557,47 @@ func rescaleInputsForGroup(reqs []ModelScalingRequest, accType string, budget in
 
 // modelDemandGPUs is the model's demand-in-GPUs summed across its roles on accType
 // (a P/D model needs GPUs for both prefill and decode).
-func modelDemandGPUs(anchor *domain.AnalyzerResult, stateMap map[string]domain.VariantReplicaState, accType string) int {
+func modelDemandGPUs(anchor *domain.AnalyzerResult, s []NamedAnalyzerResult, stateMap map[string]domain.VariantReplicaState, accType string) int {
 	total := 0
 	for _, role := range modelRolesOnType(anchor.VariantCapacities, accType) {
-		total += roleDemandGPUs(anchor, stateMap, accType, role)
+		total += roleDemandGPUs(anchor, s, stateMap, accType, role)
 	}
 	return total
 }
 
-// roleDemandGPUs converts a role's token demand to a GPU count via the role's most
-// cost-efficient variant's per-replica capacity. The synthetic "both" role uses the
-// model-level TotalDemand; a P/D role uses its RoleCapacities demand.
-func roleDemandGPUs(anchor *domain.AnalyzerResult, stateMap map[string]domain.VariantReplicaState, accType, role string) int {
-	demand := anchor.TotalDemand
-	if role != domain.RoleBoth {
-		if rc, ok := anchor.RoleCapacities[role]; ok {
-			demand = rc.TotalDemand
-		}
-	}
-	best := 0.0
+// roleDemandGPUs converts a role's token demand to a GPU count via the
+// cheapest variant on accType, combined across every voting entry rather than
+// read off the anchor alone (Bug #3). It runs no loop of its own: the ballot
+// comes from votesFromTotalDemand (whose doc comment carries the participation
+// rules — an entry that doesn't decompose the role, or has no PRC for v*,
+// contributes nothing), combineVotes reduces it, and the result is rounded up
+// once here. anchor still supplies the topology (which variants exist on
+// accType, their PRC for the cost sort) and v* itself; s supplies each voting
+// entry's own demand and PRC for v*. With a single voter this collapses to that
+// voter's own demand/PRC, byte-identical to the previous anchor-only
+// computation.
+func roleDemandGPUs(anchor *domain.AnalyzerResult, s []NamedAnalyzerResult, stateMap map[string]domain.VariantReplicaState, accType, role string) int {
+	var bestVariant string
 	bestGPUs := 1
 	for _, vc := range sortByCostEfficiencyAsc(variantsForRole(variantsOnType(anchor.VariantCapacities, accType), role)) {
+		// Unpriced on this topology, so it cannot serve as the role's reference.
+		// The reference variant is the conversion factor demand is priced
+		// through, and a variant with no per-replica capacity supplies none.
 		if vc.PerReplicaCapacity <= 0 {
 			continue
 		}
-		best = vc.PerReplicaCapacity
+		bestVariant = vc.VariantName
 		bestGPUs = gpusPerReplicaFromState(stateMap, vc.VariantName)
 		break
 	}
-	if best <= 0 {
+	if bestVariant == "" {
 		return 0
 	}
-	replicas := int(math.Ceil(demand / best))
-	if replicas < 0 {
-		replicas = 0
+	replicas := 0
+	if value, binder := combineVotes(votesFromTotalDemand(s, role, bestVariant), true); binder >= 0 {
+		if n := int(math.Ceil(value)); n > 0 {
+			replicas = n
+		}
 	}
 	return replicas * bestGPUs
 }

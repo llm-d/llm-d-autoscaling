@@ -281,8 +281,9 @@ Quotas are **hard ceilings applied on top of** the optimizer's fair-share loop,
 not inputs to it. Two properties follow from that:
 
 - The fair-share mean each round is the **average of the active models' remaining
-  fair-share metric** (priority × score × unmet demand — see the worked-example
-  caveat below) — it is **not** `cluster GPUs / number of active models`, and
+  fair-share metric** (priority × the model's outstanding claim **in GPUs** — see
+  the worked-example caveat below; analyzer score does not enter it)
+  — it is **not** `cluster GPUs / number of active models`, and
   **not** quota-weighted. The cluster GPU total is only the loop's stop condition
   (fair-sharing halts once the aggregate budget is exhausted). Quotas only clamp
   each model after the mean is computed.
@@ -314,8 +315,8 @@ Worked example — cluster of 8 GPUs, three models:
 | M2    | 4     | 4     |
 | M3    | 4     | 4     |
 
-- **Round 1:** the mean is the average of the models' remaining demand,
-  ≈ (3 + 4 + 4) / 3 ≈ 3.67. M1 is capped at its quota of 2 (below its demand of 3),
+- **Round 1:** the mean is the average of the models' remaining claims, in GPUs,
+  ≈ (3 + 4 + 4) / 3 ≈ 3.67. M1 is capped at its quota of 2 (below its claim of 3),
   so part of its fair-share slot goes unused; M2 and M3 pull toward the mean under
   their own quotas.
 - **Round 2:** with M1 satisfied at 2, the remaining cluster budget (8 − 2 = 6) is
@@ -325,8 +326,10 @@ Final allocation: **M1 = 2, M2 ≈ 3, M3 ≈ 3** (total 8). The outcome respects
 quota and exhausts the cluster budget; the multi-round path is why a
 quota-constrained model's slack flows to later rounds rather than to its
 round-mates. (The exact per-round means come from the fair-share metric —
-priority × score × demand — so treat the numbers here as an illustration of the
-*path*, not an exact trace.)
+priority × claim-in-GPUs — so treat the numbers here as an illustration of the
+*path*, not an exact trace. The table's "Wants" column is already a GPU count,
+which is why the illustration survives the currency change; a real trace also
+converts each analyzer's own metric into GPUs before comparing models.)
 
 ## Interaction with `TypeInventory`
 

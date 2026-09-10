@@ -107,9 +107,12 @@ type ScaleToZeroEnvelope struct {
 // so that externally-registered analyzers (see Engine.RegisterAnalyzer) work.
 const limiterTypeGPUInventory = "gpu-inventory"
 
-// AnalyzerScoreConfig configures an individual analyzer's weight in the
-// composite scoring function. Per-analyzer threshold overrides are optional;
-// when nil, the global top-level thresholds are used.
+// AnalyzerScoreConfig configures an individual analyzer's participation in the
+// optimizer's cross-analyzer combine: whether it votes (Enabled) and how much
+// its vote is believed against the others' (Score). Score is a belief weight
+// over replica votes, not a priority and not a budget multiplier — model
+// priority is what weights fair share. Per-analyzer threshold overrides are
+// optional; when nil, the global top-level thresholds are used.
 //
 // Type and Parameters implement the ScalingPolicy plugin envelope (Phase 1 of
 // the proposal in llm-d/llm-d-workload-variant-autoscaler#1245):
@@ -224,6 +227,21 @@ func (c *SaturationScalingConfig) GetAnalyzerName() string {
 		return "saturation"
 	}
 	return c.AnalyzerName
+}
+
+// KSat returns the KV-utilization fraction at which a replica counts as full —
+// the system-wide k_sat. This is the definition of "full" that shapes
+// per-replica capacity, and it is deliberately NOT ScaleUpThreshold or
+// ScaleDownBoundary: those two are margins around the steady state that the
+// engine applies to required/spare capacity after an analyzer returns.
+//
+// Exposed as a method so an analyzer in a higher layer can read k_sat without
+// importing this package. internal/config is below the analyzers (see
+// throughputAnalyzerName in config.go), and the throughput analyzer's own
+// in-package tests are on the other side of that line, so a direct import is a
+// test-binary import cycle rather than a layering preference.
+func (c *SaturationScalingConfig) KSat() float64 {
+	return c.KvCacheThreshold
 }
 
 // IsV2 returns true if this config selects the V2 token-based analyzer path.

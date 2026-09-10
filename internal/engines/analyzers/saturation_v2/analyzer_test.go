@@ -934,6 +934,12 @@ var _ = Describe("aggregateByRole", func() {
 		// RC/SC are left zero; engine post-step sets them.
 		Expect(decode.SpareCapacity).To(BeZero())
 		Expect(decode.RequiredCapacity).To(BeZero())
+
+		// Saturation is role-complete for every role its variants declare, so
+		// it is never structurally blind the way TA is for prefill -- no role
+		// ever carries pipeline.ReasonRoleUnmodeled.
+		Expect(prefill.Reason).To(Equal(""))
+		Expect(decode.Reason).To(Equal(""))
 	})
 
 	It("should handle mixed roles including 'both'", func() {

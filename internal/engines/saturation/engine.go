@@ -208,7 +208,7 @@ type Engine struct {
 	// analyzersSnapshot is the frozen, registration-ordered view that
 	// runAnalyzersAndScore iterates. Built from analyzers in StartOptimizeLoop
 	// before the goroutine launches. Saturation always runs to supply the
-	// identity/(a) carrier; each enabled analyzer's result is consumed — it
+	// identity carrier; each enabled analyzer's result is consumed — it
 	// votes in the combine math and may bind the anchor. Iteration order is not
 	// significant: the anchor is derived on demand and the combine consumes only
 	// the voting subset.

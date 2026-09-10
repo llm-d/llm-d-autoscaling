@@ -201,6 +201,28 @@ func (a *ThroughputAnalyzer) Observe(
 // (TotalSupply, TotalAnticipatedSupply, TotalDemand); RC/SC per role are also
 // left zero for the engine post-step. Prefill TotalDemand is negligible after
 // the OL guard in computeLocalDemand.
+// resolveKSat returns the KV-utilization fraction at which per-replica capacity
+// is evaluated. It is saturation's configured k_sat, so both analyzers agree on
+// what "full" means. It is NOT a scale-up/scale-down watermark — those are
+// margins the engine applies to RC/SC after Analyze() returns.
+//
+// Read through a structural interface rather than a type assertion on
+// *config.SaturationScalingConfig: this package cannot import internal/config
+// (that package's in-package tests import this one, so the edge is a test-binary
+// import cycle). Any config exposing KSat() satisfies it.
+//
+// TODO: unify with the system-wide k_sat used by the EPP. Tracking saturation's
+// configured value is half of it; the EPP has its own notion of full and nothing
+// yet holds the two to one number.
+func resolveKSat(cfg domain.AnalyzerConfig) float64 {
+	if p, ok := cfg.(interface{ KSat() float64 }); ok {
+		if k := p.KSat(); k > 0 {
+			return k
+		}
+	}
+	return fallbackKSat
+}
+
 func (a *ThroughputAnalyzer) Analyze(
 	ctx context.Context,
 	input domain.AnalyzerInput,
@@ -210,6 +232,10 @@ func (a *ThroughputAnalyzer) Analyze(
 	}
 
 	now := time.Now()
+
+	// Resolved once and threaded down: every site that evaluates capacity "at
+	// saturation" must use the same k, and the same one saturation uses.
+	kSat := resolveKSat(input.Config)
 
 	// Build lookup tables from VariantStates before taking any locks.
 	pendingByVariant := make(map[string]int, len(input.VariantStates))
@@ -282,7 +308,7 @@ func (a *ThroughputAnalyzer) Analyze(
 		// upward → systematic under-provisioning. Supply counting (computeVariantSupply,
 		// computeDemand) uses the unfiltered variantMetrics to include booting replicas.
 		healthyMetrics := filterHealthyForShape(variantMetrics)
-		model, reason, ok := a.resolveITLModel(ctx, state, healthyMetrics, input.Namespace, input.ModelID, variantName)
+		model, reason, ok := a.resolveITLModel(ctx, state, healthyMetrics, input.Namespace, input.ModelID, variantName, kSat)
 		if !ok {
 			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: no ITL model available, skipping variant",
 				"namespace", input.Namespace,
@@ -292,12 +318,12 @@ func (a *ThroughputAnalyzer) Analyze(
 			continue
 		}
 
-		itlSat := model.ITLAt(DefaultKSat)
+		itlSat := model.ITLAt(kSat)
 		if itlSat <= 0 {
 			continue
 		}
 
-		supply, perReplicaSupply, nKV := computeVariantSupply(variantMetrics, shape, itlSat)
+		supply, perReplicaSupply, nKV := computeVariantSupply(variantMetrics, shape, itlSat, kSat)
 		if supply == 0 {
 			continue
 		}
@@ -342,7 +368,7 @@ func (a *ThroughputAnalyzer) Analyze(
 			nDecodeVariants++
 		}
 
-		if checkVariantGPSMismatch(ctx, healthyMetrics, shape, model, input.Namespace, input.ModelID, variantName) {
+		if checkVariantGPSMismatch(ctx, healthyMetrics, shape, model, input.Namespace, input.ModelID, variantName, kSat) {
 			anyGPSMismatch = true
 			state.consecutiveGPSMismatches++
 			if state.consecutiveGPSMismatches >= DefaultGPSMismatchClearThreshold {
@@ -566,11 +592,11 @@ func (a *ThroughputAnalyzer) getOrCreateVariantState(key string) *variantState {
 // re-deriving an ITL model here; resolveITLModel is only consulted for variants with live replicas.
 //
 // Must be called with a.mu held.
-func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variantState, metrics []domain.ReplicaMetrics, namespace, modelID, variantName string) (ITLModel, string, bool) {
+func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variantState, metrics []domain.ReplicaMetrics, namespace, modelID, variantName string, kSat float64) (ITLModel, string, bool) {
 	// Tier 1: OLS fit.
 	if state.observationWindow.Ready() {
 		obs := state.observationWindow.Observations()
-		if model, ok := FitITLModel(obs); ok {
+		if model, ok := FitITLModel(obs, kSat); ok {
 			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: tier-1 OLS fit",
 				"namespace", namespace, "modelID", modelID, "variant", variantName,
 				"A", model.A, "B", model.B, "samples", len(obs),
@@ -607,7 +633,7 @@ func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variant
 	}
 	if n > 0 && sumK2 > 0 {
 		A := numerator / sumK2
-		if validITLModel(A, baselineB) {
+		if validITLModel(A, baselineB, kSat) {
 			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: tier-2 constrained OLS fit",
 				"namespace", namespace, "modelID", modelID, "variant", variantName,
 				"A", A, "B", baselineB, "replicas", int(n),
@@ -713,10 +739,12 @@ func estimateQueueDemand(sq *domain.SchedulerQueueMetrics, itlSat, drainFactor f
 
 // computeVariantSupply computes the aggregate μ_dec_sat supply for a variant.
 //
-// Per replica: N_dec_sat = DefaultKSat × KV_max / KVreq; μ_dec_sat = N_dec_sat / itlSat.
+// Per replica: N_dec_sat = kSat × KV_max / KVreq; μ_dec_sat = N_dec_sat / itlSat.
+// kSat enters twice — here and in the itlSat the caller computed at the same k —
+// so a change to it moves numerator and denominator together.
 // Returns (totalSupply Σμ_dec_sat, perReplicaSupply mean(μ_dec_sat), nKV count of
 // KV-capable replicas). All are zero when no replica has KV capacity data.
-func computeVariantSupply(metrics []domain.ReplicaMetrics, shape WorkloadShape, itlSat float64) (total, perReplica float64, nKV int) {
+func computeVariantSupply(metrics []domain.ReplicaMetrics, shape WorkloadShape, itlSat, kSat float64) (total, perReplica float64, nKV int) {
 	var sum float64
 	var n int
 	for _, m := range metrics {
@@ -724,7 +752,7 @@ func computeVariantSupply(metrics []domain.ReplicaMetrics, shape WorkloadShape, 
 			continue
 		}
 		kvMax := float64(m.TotalKvCapacityTokens)
-		nSat := DefaultKSat * kvMax / shape.KVreq
+		nSat := kSat * kvMax / shape.KVreq
 		sum += nSat / itlSat
 		n++
 	}
@@ -801,7 +829,7 @@ func safeDivide(num, denom float64) float64 {
 // Returns true when any replica exceeds DefaultGPSMismatchThresholdPct at k* ≥
 // DefaultGPSMinKForVerification, indicating the ITL model may be wrong.
 //
-// When a mismatch is detected near saturation (k* ≥ DefaultKSat − DefaultNearKSatMargin),
+// When a mismatch is detected near saturation (k* ≥ kSat − DefaultNearKSatMargin),
 // additional diagnostics are logged to distinguish between two root causes:
 //   - ITL model drift / bad data points: observed AvgITL deviates from ITL(k*).
 //   - Shape mismatch: ITL fits well but GPS × AvgITL disagrees with KV-derived N_dec,
@@ -812,6 +840,7 @@ func checkVariantGPSMismatch(
 	shape WorkloadShape,
 	model ITLModel,
 	namespace, modelID, variantName string,
+	kSat float64,
 ) bool {
 	if shape.KVreq <= 0 {
 		return false
@@ -850,7 +879,7 @@ func checkVariantGPSMismatch(
 		)
 
 		// Near k_sat: run deeper diagnostics to identify root cause.
-		if m.KvUsageInstant < DefaultKSat-DefaultNearKSatMargin || m.AvgITL <= 0 {
+		if m.KvUsageInstant < kSat-DefaultNearKSatMargin || m.AvgITL <= 0 {
 			continue
 		}
 		itlResidual := math.Abs(m.AvgITL-itlAtK) / m.AvgITL
@@ -938,12 +967,21 @@ func aggregateRoleCapacities(vcs []domain.VariantCapacity, arrivalDemandByRole, 
 
 	result := make(map[string]domain.RoleCapacity, len(byRole))
 	for role, t := range byRole {
-		result[role] = domain.RoleCapacity{
+		rc := domain.RoleCapacity{
 			Role:                   role,
 			TotalSupply:            t.TotalSupply,
 			TotalAnticipatedSupply: t.TotalAnticipatedSupply,
 			TotalDemand:            arrivalDemandByRole[role] + queueDemandByRole[role],
 		}
+		if role == domain.RolePrefill {
+			// distributeDemandByRole excludes prefill by construction (this
+			// analyzer has no demand model for it), so TotalDemand above is
+			// unconditionally 0 -- a structural absence, not a measurement.
+			// Tag it so ballot-construction functions abstain rather than
+			// vote a real zero.
+			rc.Reason = roleUnmodeledReason
+		}
+		result[role] = rc
 	}
 	return result
 }

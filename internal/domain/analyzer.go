@@ -87,6 +87,12 @@ type RoleCapacity struct {
 	TotalAnticipatedSupply float64
 	RequiredCapacity       float64
 	SpareCapacity          float64
+	// Reason explains a TotalDemand/RequiredCapacity/SpareCapacity that is
+	// structurally, not measurably, degenerate for this role — e.g. an
+	// analyzer with no demand model for the role at all. Ballot-construction
+	// functions abstain rather than vote on a Reason match; empty means the
+	// values are a real measurement. Set by the analyzer, read by the pipeline.
+	Reason string
 }
 
 // AnalyzerResult is the common output produced by all analyzers.

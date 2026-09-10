@@ -15,7 +15,7 @@ import (
 // End-to-end companion to the throughput analyzer's scale-from-zero complement:
 // the analyzer re-emits a PRC-only VariantCapacity for a previously-live variant
 // now at zero replicas, and the pipeline must consume it. The saturation entry is
-// present only as the (a)/identity carrier (not voting), so bindingAnchor merges
+// present only as the identity carrier (not voting), so bindingAnchor merges
 // its per-variant identity (Cost/AcceleratorName/Role/ReplicaCount) with the
 // throughput analyzer's per-replica capacity. A previously-live-now-zero variant
 // then has a positive merged PerReplicaCapacity and is a viable scale-up target,
@@ -30,7 +30,7 @@ var _ = Describe("scale-from-zero selection under a throughput-only ballot", fun
 	})
 
 	// taOnlyBallot builds a [TA]-only ballot for one model:
-	//   - saturation entry present as the (a) carrier only (Enabled:false): it emits
+	//   - saturation entry present as the identity carrier only (Enabled:false): it emits
 	//     both variants' identity (cost/accelerator/role/replica-count) but does not
 	//     vote or bind.
 	//   - throughput entry as the sole voting+binding analyzer: model-level demand
@@ -70,7 +70,7 @@ var _ = Describe("scale-from-zero selection under a throughput-only ballot", fun
 				{
 					Name:    domain.SaturationAnalyzerName,
 					Result:  satIdentity,
-					Enabled: false, // (a) carrier only — does not vote or bind
+					Enabled: false, // identity carrier only — does not vote or bind
 					Live:    false,
 				},
 				{
