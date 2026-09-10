@@ -8,6 +8,8 @@ parms = "parms"
 # Short code fragments / false positives
 ot = "ot"
 vas = "vas"
+# sed branch label in `sed ':a; N; $!ba; s/\n/:/g'` (branch to label `a`)
+ba = "ba"
 # "mis-" prefix used as a hyphenated modifier (mis-classified, mis-attributed)
 mis = "mis"
 # Valid English variant (unparseable vs unparsable)
