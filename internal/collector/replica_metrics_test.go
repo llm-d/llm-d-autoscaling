@@ -37,6 +37,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/domain"
@@ -574,6 +575,129 @@ func TestCollectReplicaMetrics_ErrorMetrics(t *testing.T) {
 			t.Errorf("Expected error metric for query_type=%s but was not found", queryType)
 		}
 	}
+}
+
+// TestCollectReplicaMetrics_AllQueryResultsFailed verifies the issue #1151
+// scenario: the source's Refresh returns err == nil while every query result
+// carries an error (e.g. the Prometheus backend is down). The collector must
+// treat this as an unavailable backend instead of an empty-but-successful
+// scrape, so collection fails and downstream metrics-unavailable handling
+// (events, fallbacks) kicks in.
+func TestCollectReplicaMetrics_AllQueryResultsFailed(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	if err := metrics.InitMetrics(registry); err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+
+	mockSource := &mockMetricsSource{
+		refreshFunc: func(ctx context.Context, spec source.RefreshSpec) (map[string]*source.MetricResult, error) {
+			// Every requested query "executes" but fails — err stays nil, the
+			// failures live inside each MetricResult.
+			results := make(map[string]*source.MetricResult, len(spec.Queries))
+			for _, name := range spec.Queries {
+				results[name] = &source.MetricResult{
+					QueryName: name,
+					Error:     errors.New("connection refused"),
+				}
+			}
+			return results, nil
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := llmdVariantAutoscalingV1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, record.NewFakeRecorder(100), nil)
+
+	_, err := collector.CollectReplicaMetrics(
+		context.Background(),
+		"test-model",
+		"test-namespace",
+		make(map[string]scaletarget.ScaleTargetAccessor),
+		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
+		nil,
+		make(map[string]float64),
+	)
+	require.Error(t, err, "all queries failing must fail collection even when Refresh returns err == nil")
+	assert.Contains(t, err.Error(), "metrics backend may be unavailable")
+}
+
+// TestCollectReplicaMetrics_PartialQueryResultFailure verifies that a failed
+// non-critical query (avg TTFT) does not fail the whole collection, but is
+// recorded in the wva_metrics_collection_errors_total counter with its
+// categorized query type so operators can distinguish a broken query from
+// absent data.
+func TestCollectReplicaMetrics_PartialQueryResultFailure(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	if err := metrics.InitMetrics(registry); err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+
+	mockSource := &mockMetricsSource{
+		refreshFunc: func(ctx context.Context, spec source.RefreshSpec) (map[string]*source.MetricResult, error) {
+			results := make(map[string]*source.MetricResult, len(spec.Queries))
+			for _, name := range spec.Queries {
+				result := &source.MetricResult{QueryName: name, Values: []source.MetricValue{}}
+				if name == registration.QueryAvgTTFT {
+					result.Error = errors.New("query timed out")
+				}
+				results[name] = result
+			}
+			return results, nil
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := llmdVariantAutoscalingV1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	collector := NewReplicaMetricsCollector(mockSource, k8sClient, record.NewFakeRecorder(100), nil)
+
+	replicaMetrics, err := collector.CollectReplicaMetrics(
+		context.Background(),
+		"test-model",
+		"test-namespace",
+		make(map[string]scaletarget.ScaleTargetAccessor),
+		make(map[string]*llmdVariantAutoscalingV1alpha1.VariantAutoscaling),
+		nil,
+		make(map[string]float64),
+	)
+	require.NoError(t, err, "a failed non-critical query must not fail collection")
+	require.Empty(t, replicaMetrics)
+
+	// The failure must be recorded in the error counter under the latency
+	// query type (avg TTFT maps to constants.QueryTypeLatency).
+	metricFamilies, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var latencyErrCount float64
+	found := false
+	for _, mf := range metricFamilies {
+		if mf.GetName() != constants.WVAMetricsCollectionErrorsTotal {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			var queryType string
+			for _, label := range m.GetLabel() {
+				if label.GetName() == constants.LabelQueryType {
+					queryType = label.GetValue()
+					break
+				}
+			}
+			if queryType == constants.QueryTypeLatency {
+				found = true
+				latencyErrCount = m.GetCounter().GetValue()
+			}
+		}
+	}
+	if !found {
+		t.Errorf("Expected error metric for query_type=%s but was not found", constants.QueryTypeLatency)
+	}
+	assert.Equal(t, 1.0, latencyErrCount, "expected exactly one recorded latency query failure")
 }
 
 // TestCollectReplicaMetrics_ThroughputKeyMerge verifies that when the KV-cache

@@ -2,7 +2,9 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"math"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -184,6 +186,60 @@ var _ = Describe("PrometheusSource", func() {
 			Expect(capturedQuery).To(ContainSubstring(`model_name="x\",namespace=\"other\""`))
 			// Should not contain unescaped injection (extra namespace=)
 			Expect(capturedQuery).NotTo(MatchRegexp(`namespace="other"`))
+		})
+
+		It("should return an error when all queries fail (issue #1151)", func() {
+			// Prometheus is down: every query fails. Refresh must surface this as
+			// a top-level error, not just as per-result Error fields that callers
+			// checking only the returned error would miss.
+			mockAPI.queryFunc = func(ctx context.Context, query string, ts time.Time, opts ...v1.Option) (model.Value, v1.Warnings, error) {
+				return nil, nil, errors.New("connection refused")
+			}
+
+			results, err := source.Refresh(ctx, sourcepkg.RefreshSpec{
+				Queries: []string{"test_query"},
+				Params:  map[string]string{"namespace": "test-ns"},
+			})
+
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("all 1 Prometheus queries failed"))
+			// Results are still returned so callers can inspect per-query errors.
+			Expect(results).To(HaveKey("test_query"))
+			Expect(results["test_query"].Error).To(HaveOccurred())
+		})
+
+		It("should not return an error when only some queries fail", func() {
+			// Partial failure: the failed query's error stays per-result and the
+			// refresh is not a total outage, so the top-level error stays nil.
+			mockAPI.queryFunc = func(ctx context.Context, query string, ts time.Time, opts ...v1.Option) (model.Value, v1.Warnings, error) {
+				if strings.Contains(query, "flaky") {
+					return nil, nil, errors.New("execution error")
+				}
+				return model.Vector{
+					&model.Sample{
+						Metric:    model.Metric{"pod": "p1"},
+						Value:     0.5,
+						Timestamp: model.TimeFromUnix(time.Now().Unix()),
+					},
+				}, nil, nil
+			}
+
+			err := registry.Register(sourcepkg.QueryTemplate{
+				Name:        "flaky_query",
+				Type:        sourcepkg.QueryTypePromQL,
+				Template:    `flaky_metric`,
+				Description: "Fails on purpose",
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			results, err := source.Refresh(ctx, sourcepkg.RefreshSpec{
+				Queries: []string{"test_query", "flaky_query"},
+				Params:  map[string]string{"namespace": "test-ns"},
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(results["test_query"].Error).NotTo(HaveOccurred())
+			Expect(results["flaky_query"].Error).To(HaveOccurred())
 		})
 	})
 

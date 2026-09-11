@@ -44,6 +44,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -387,6 +388,35 @@ func (c *ReplicaMetricsCollector) collectReplicaMetrics(
 	// the per-engine series. The structural cache-config difference is handled by a
 	// dedicated SGLang pass after the vLLM cache-config block.
 	mergeEngineResults(results, engines, engineSpecificReplicaQueries)
+
+	// Per-query error sweep (issue #1151): Refresh reports query failures through
+	// each MetricResult rather than the returned error (which is non-nil only for
+	// a total backend outage), so the results themselves must be examined. Record
+	// each failure's categorized reason so an operator can tell a broken query
+	// apart from absent data; the per-query blocks below decide the severity —
+	// KV cache and queue length fail collection, the rest degrade gracefully.
+	checked, failed := 0, 0
+	for _, logical := range append(slices.Clone(engineSpecificReplicaQueries), agnosticReplicaQueries...) {
+		result := results[logical]
+		if result == nil {
+			continue // query produced no result entry — not registered for this engine
+		}
+		checked++
+		if !result.HasError() {
+			continue
+		}
+		failed++
+		reason := prometheus.CategorizePrometheusError(result.Error)
+		metrics.IncMetricsCollectionErrors(registration.QueryTypeFor(logical), reason)
+		logger.V(logging.DEBUG).Info("Replica metrics query failed",
+			"query", logical, "reason", reason, "error", result.Error)
+	}
+	// Defense in depth for sources that do not aggregate a total outage into
+	// the returned error: if every query that produced a result failed, treat
+	// the backend as unavailable rather than as an empty-but-successful scrape.
+	if checked > 0 && failed == checked {
+		return nil, fmt.Errorf("all %d replica metric queries failed (metrics backend may be unavailable)", checked)
+	}
 
 	// podMetricData holds per-pod metric values and timestamps
 	type podMetricData struct {
@@ -1112,9 +1142,29 @@ func (c *ReplicaMetricsCollector) CollectSchedulerQueueMetrics(
 		Params:  params,
 	})
 	if err != nil {
+		// Categorize rather than swallow: a failed refresh is a fault, not the
+		// same as flow-control metrics being absent. Record the categorized
+		// reason so the two stay distinguishable via the scheduler_queue error
+		// counter (issue #1151).
+		reason := prometheus.CategorizePrometheusError(err)
+		metrics.IncMetricsCollectionErrors(constants.QueryTypeSchedulerQueue, reason)
 		logger.V(logging.DEBUG).Info("Scheduler queue metrics unavailable",
-			"modelID", modelID, "error", err)
+			"modelID", modelID, "reason", reason, "error", err)
 		return nil
+	}
+
+	// Per-query error sweep (issue #1151): examine results, not just the returned
+	// error. Query failures are recorded but do not fail collection — an absent
+	// flow-control metric remains a legitimate state (no EPP deployed).
+	for _, name := range queries {
+		result := results[name]
+		if result == nil || !result.HasError() {
+			continue
+		}
+		reason := prometheus.CategorizePrometheusError(result.Error)
+		metrics.IncMetricsCollectionErrors(registration.QueryTypeFor(name), reason)
+		logger.V(logging.DEBUG).Info("Scheduler queue query failed",
+			"modelID", modelID, "query", name, "reason", reason, "error", result.Error)
 	}
 
 	var queueSize, queueBytes int64

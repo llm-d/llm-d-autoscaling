@@ -8,6 +8,7 @@ import (
 
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source/prometheus"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
 )
 
@@ -24,6 +25,30 @@ var _ = Describe("EngineQuery", func() {
 		// Scheduler queries are not engine-specific (sourced from EPP).
 		Expect(IsEngineSpecific(QuerySchedulerDispatchRate)).To(BeFalse())
 		Expect(EngineQuery(inferenceengine.EngineSGLang, QuerySchedulerDispatchRate)).To(Equal(QuerySchedulerDispatchRate))
+	})
+})
+
+var _ = Describe("QueryTypeFor", func() {
+	It("maps critical queries to their dedicated types", func() {
+		Expect(QueryTypeFor(QueryKvCacheUsage)).To(Equal(constants.QueryTypeKVCache))
+		Expect(QueryTypeFor(QueryQueueLength)).To(Equal(constants.QueryTypeQueueLength))
+		Expect(QueryTypeFor(QuerySchedulerQueueSize)).To(Equal(constants.QueryTypeSchedulerQueue))
+	})
+
+	It("maps grouped queries to their shared types", func() {
+		Expect(QueryTypeFor(QueryAvgTTFT)).To(Equal(constants.QueryTypeLatency))
+		Expect(QueryTypeFor(QueryAvgITL)).To(Equal(constants.QueryTypeLatency))
+		Expect(QueryTypeFor(QueryAvgOutputTokens)).To(Equal(constants.QueryTypeTokenMetrics))
+		Expect(QueryTypeFor(QueryRequestRate)).To(Equal(constants.QueryTypeThroughput))
+	})
+
+	It("strips engine prefixes from physical query names", func() {
+		Expect(QueryTypeFor("sglang/" + QueryKvCacheUsage)).To(Equal(constants.QueryTypeKVCache))
+		Expect(QueryTypeFor("sglang/" + QueryAvgTTFT)).To(Equal(constants.QueryTypeLatency))
+	})
+
+	It("falls back to the bare name for unknown queries", func() {
+		Expect(QueryTypeFor("some_future_query")).To(Equal("some_future_query"))
 	})
 })
 
