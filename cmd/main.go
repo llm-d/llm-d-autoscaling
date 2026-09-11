@@ -66,6 +66,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/metrics"
 	prometheusutil "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/prometheus"
+	tlsconfig "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/tls"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/crd"
 	poolutil "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/pool"
 	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
@@ -173,6 +174,16 @@ func main() {
 	}
 	setupLog.Info("Configuration loaded successfully")
 
+	tlsStartup, err := tlsconfig.Resolve(context.Background(), restConfig)
+	if err != nil {
+		setupLog.Error(err, "failed to resolve TLS startup configuration")
+		os.Exit(1)
+	}
+	if err := tlsStartup.AddToScheme(scheme); err != nil {
+		setupLog.Error(err, "failed to add TLS startup APIs to scheme")
+		os.Exit(1)
+	}
+
 	restartNote := "support requires a controller restart, which happens automatically if the CRD is installed later"
 	if *disableCRDAutoRestart {
 		restartNote = "support requires a manual controller restart after the CRD is installed " +
@@ -217,17 +228,11 @@ func main() {
 		},
 	}
 
-	tlsOpts := []func(*tls.Config){
-		func(c *tls.Config) {
-			c.NextProtos = []string{"h2", "http/1.1"}
-		},
-	}
-
 	// Create watchers for metrics and webhooks certificates
 	var metricsCertWatcher, webhookCertWatcher *certwatcher.CertWatcher
 
 	// Initial webhook TLS options
-	webhookTLSOpts := tlsOpts
+	webhookTLSOpts := tlsStartup.TLSOptions()
 
 	if len(cfg.WebhookCertPath()) > 0 {
 		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
@@ -261,7 +266,7 @@ func main() {
 	metricsServerOptions := metricsserver.Options{
 		BindAddress:   cfg.MetricsAddr(),
 		SecureServing: cfg.SecureMetrics(),
-		TLSOpts:       tlsOpts,
+		TLSOpts:       tlsStartup.TLSOptions(),
 	}
 
 	if cfg.SecureMetrics() {
@@ -695,7 +700,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	startContext, err := tlsStartup.SetupWatcher(ctrl.SetupSignalHandler(), mgr)
+	if err != nil {
+		setupLog.Error(err, "failed to set up TLS startup watcher")
+		os.Exit(1)
+	}
+
+	if err := mgr.Start(startContext); err != nil {
 		if errors.Is(err, crd.ErrRestartRequired) {
 			setupLog.Info("restarting to enable support for a CRD installed after startup", "reason", err.Error())
 			os.Exit(1)
