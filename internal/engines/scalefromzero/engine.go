@@ -289,8 +289,21 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 		return err
 	}
 
-	// Check for pending requests using EPP flowcontrol queue size metrics
+	// Check for pending requests using EPP flowcontrol queue size metrics.
+	// A failed or missing "all_metrics" result must not be conflated with "no
+	// pending requests" (issue #1151): treating a scrape error as an empty
+	// result would silently pin the variant at zero replicas while requests
+	// are actually queued, and a missing entry would panic below.
 	result := results["all_metrics"]
+	if result == nil || result.HasError() {
+		err := fmt.Errorf("EPP metrics result unavailable for pool %s", namespacedPoolName)
+		if result != nil && result.Error != nil {
+			err = fmt.Errorf("EPP metrics query failed for pool %s: %w", namespacedPoolName, result.Error)
+		}
+		reason := prometheus.CategorizePrometheusError(err)
+		metrics.IncMetricsCollectionErrors(constants.QueryTypeQueueLength, reason)
+		return err
+	}
 	pendingRequestExist := false
 	for _, value := range result.Values {
 		metricName := value.Labels["__name__"]

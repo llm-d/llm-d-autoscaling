@@ -6,6 +6,7 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -110,7 +111,33 @@ func (p *PrometheusSource) Refresh(ctx context.Context, spec source.RefreshSpec)
 		"queriesExecuted", len(queryNames),
 		"queriesSucceeded", countSuccessful(results))
 
+	// Surface a total backend outage as a top-level error. Refresh otherwise
+	// reports per-query failures only through each MetricResult, so a caller
+	// that checks only the returned error would treat a down Prometheus as an
+	// empty-but-successful refresh (issue #1151). Partial failures stay
+	// per-result so healthy queries still flow through.
+	if err := joinResultErrors(results); err != nil {
+		return results, fmt.Errorf("all %d Prometheus queries failed: %w", len(queryNames), err)
+	}
+
 	return results, nil
+}
+
+// joinResultErrors returns the joined errors of every result when ALL results
+// carry an error; nil otherwise. A nil or error-free result means at least one
+// query succeeded, so the refresh is not a total outage.
+func joinResultErrors(results map[string]*source.MetricResult) error {
+	if len(results) == 0 {
+		return nil
+	}
+	var errs []error
+	for _, r := range results {
+		if r == nil || r.Error == nil {
+			return nil
+		}
+		errs = append(errs, r.Error)
+	}
+	return errors.Join(errs...)
 }
 
 // executeQuery builds and executes a single query.

@@ -320,11 +320,25 @@ const (
 // Metric Label Values for query_type
 // These values are used as the query_type label in metrics collection metrics.
 const (
-	QueryTypeKVCache      = "kv_cache"
-	QueryTypeQueueLength  = "queue_length"
-	QueryTypeRequestCount = "request_count"
-	QueryTypeCacheConfig  = "cache_config"
-	QueryTypeArrivalRate  = "arrival_rate"
+	QueryTypeKVCache     = "kv_cache"
+	QueryTypeQueueLength = "queue_length"
+	// QueryTypeSchedulerQueue is the model-level flow-control queue
+	// (scheduler_queue_size / scheduler_queue_bytes), distinct from the
+	// per-engine queue_length.
+	QueryTypeSchedulerQueue = "scheduler_queue"
+	QueryTypeRequestCount   = "request_count"
+	QueryTypeCacheConfig    = "cache_config"
+	QueryTypeArrivalRate    = "arrival_rate"
+	// QueryTypeDispatchRate is the per-instance scheduler dispatch rate.
+	QueryTypeDispatchRate = "dispatch_rate"
+	// QueryTypeTokenMetrics groups the token-shape queries (avg input/output
+	// tokens, prefix cache hit rate).
+	QueryTypeTokenMetrics = "token_metrics"
+	// QueryTypeLatency groups the request latency queries (avg TTFT, avg ITL).
+	QueryTypeLatency = "latency"
+	// QueryTypeThroughput groups the throughput-analyzer queries (generation
+	// token rate, instantaneous KV usage, request rate).
+	QueryTypeThroughput = "throughput"
 )
 
 // Values for the LabelUnit Prometheus label, describing how to interpret the
