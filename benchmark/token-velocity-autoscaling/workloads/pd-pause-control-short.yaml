@@ -1,0 +1,58 @@
+# Short pause-autoscaling CONTROL workload for the token-aware P/D experiment.
+# Purpose: prove --pause-autoscaling has no autoscaling impact in ~11 minutes instead of the
+# full ~1h ramp. Prefill-heavy shape (ISL 8192 / OSL 256) so the PREFILL trigger
+# (inflight_tokens / V_P, threshold 1.5) is breached fast and cleanly.
+#
+# Sizing: V_P = 2696 tok/s per prefill replica. Stage 2 offers 0.90 x 8192 = 7373 tok/s per
+# request-second of load -- far above one replica's V_P -- so inflight_tokens/V_P climbs well past
+# the 1.5 threshold within a couple of KEDA polling intervals (pollingInterval 15s). Stage 2 runs
+# 540s, much longer than the ~2-min scale-up decision window, so an ARMED fleet would visibly scale
+# 1 -> toward max. Run once with --pause-autoscaling (replicas must stay flat at 1) and once armed
+# (replicas must climb): same load, same trigger breach, opposite fleet behaviour.
+#
+# Derived from llm-d-benchmark guide_pd-disaggregation_2.yaml.in (placeholders intact, so the CLI
+# resolves model_name/base_url the same way it does for shipped profiles). Only load.stages and the
+# token distributions differ. See README.md -> Experiment.
+load:
+  type: constant
+  stages:
+  - rate: 0.15
+    duration: 120
+    num_requests: null
+    concurrency_level: null
+  - rate: 0.90
+    duration: 540
+    num_requests: null
+    concurrency_level: null
+  num_workers: 64
+  worker_max_concurrency: 100
+api:
+  type: completion
+  streaming: true
+server:
+  type: vllm
+  model_name: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+  base_url: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+  ignore_eos: true
+tokenizer:
+  pretrained_model_name_or_path: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+data:
+  type: random
+  input_distribution:
+    min: 8192
+    max: 8192
+    mean: 8192
+    std_dev: 0
+  output_distribution:
+    min: 256
+    max: 256
+    mean: 256
+    std_dev: 0
+report:
+  request_lifecycle:
+    summary: true
+    per_stage: true
+    per_request: true
+storage:
+  local_storage:
+    path: /workspace

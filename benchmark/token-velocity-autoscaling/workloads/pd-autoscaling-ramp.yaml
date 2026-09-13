@@ -1,0 +1,67 @@
+# Staged autoscaling ramp for the token-aware P/D experiment.
+# Derived from llm-d-benchmark guide_pd-disaggregation_2.yaml.in (placeholders intact,
+# so the CLI resolves model_name/base_url the same way it does for shipped profiles).
+# Only load.stages and the token distributions differ. See README.md -> Experiment.
+load:
+  type: constant
+  stages:
+  - rate: 0.25
+    duration: 300
+    num_requests: null
+    concurrency_level: null
+  - rate: 0.5
+    duration: 300
+    num_requests: null
+    concurrency_level: null
+  - rate: 0.75
+    duration: 420
+    num_requests: null
+    concurrency_level: null
+  - rate: 1.0
+    duration: 600
+    num_requests: null
+    concurrency_level: null
+  - rate: 1.5
+    duration: 600
+    num_requests: null
+    concurrency_level: null
+  - rate: 0.75
+    duration: 300
+    num_requests: null
+    concurrency_level: null
+  - rate: 0.25
+    duration: 900
+    num_requests: null
+    concurrency_level: null
+  num_workers: 64
+  worker_max_concurrency: 100
+api:
+  type: completion
+  streaming: true
+server:
+  type: vllm
+  model_name: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+  base_url: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+  ignore_eos: true
+tokenizer:
+  pretrained_model_name_or_path: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+data:
+  type: random
+  input_distribution:
+    min: 2048
+    max: 2048
+    mean: 2048
+    std_dev: 0
+  output_distribution:
+    min: 2048
+    max: 2048
+    mean: 2048
+    std_dev: 0
+report:
+  request_lifecycle:
+    summary: true
+    per_stage: true
+    per_request: true
+storage:
+  local_storage:
+    path: /workspace

@@ -1,0 +1,80 @@
+# Decode-heavy staged autoscaling ramp for the token-aware P/D experiment.
+# Mirror of pd-autoscaling-ramp-prefill-heavy.yaml: this variant inverts the token ratio
+# (ISL 256 / OSL 8192, 1:32) so each request does trivial prefill and a long generation,
+# exercising the DECODE trigger (KV-cache occupancy, threshold 0.8) while leaving the
+# prefill token-backlog trigger (inflight_tokens / V_P) nearly idle.
+#
+# Sizing is anchored to the measured decode KV cache = 330,752 tokens per replica. A request
+# holds up to ISL+OSL = 8448 tokens of KV, so one replica fits ~39 full-size requests and
+# crosses 0.8 occupancy at ~31 concurrent. Decode concurrency ~= rate x request_duration, and
+# each 8192-token generation runs ~150-250 s, so the stage rates below walk concurrency from a
+# few up past the single-replica KV ceiling (forcing scale-up toward --max) and back down.
+# Stages are longer than the prefill-heavy ramp so concurrency reaches steady state and the
+# long-running requests drain during recovery.
+#
+# Derived from llm-d-benchmark guide_pd-disaggregation_2.yaml.in (placeholders intact,
+# so the CLI resolves model_name/base_url the same way it does for shipped profiles).
+# Only load.stages and the token distributions differ. See README.md -> Experiment.
+load:
+  type: constant
+  stages:
+  - rate: 0.10
+    duration: 300
+    num_requests: null
+    concurrency_level: null
+  - rate: 0.20
+    duration: 420
+    num_requests: null
+    concurrency_level: null
+  - rate: 0.35
+    duration: 600
+    num_requests: null
+    concurrency_level: null
+  - rate: 0.55
+    duration: 600
+    num_requests: null
+    concurrency_level: null
+  - rate: 0.80
+    duration: 720
+    num_requests: null
+    concurrency_level: null
+  - rate: 0.35
+    duration: 420
+    num_requests: null
+    concurrency_level: null
+  - rate: 0.10
+    duration: 900
+    num_requests: null
+    concurrency_level: null
+  num_workers: 64
+  worker_max_concurrency: 100
+api:
+  type: completion
+  streaming: true
+server:
+  type: vllm
+  model_name: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+  base_url: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+  ignore_eos: true
+tokenizer:
+  pretrained_model_name_or_path: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+data:
+  type: random
+  input_distribution:
+    min: 256
+    max: 256
+    mean: 256
+    std_dev: 0
+  output_distribution:
+    min: 8192
+    max: 8192
+    mean: 8192
+    std_dev: 0
+report:
+  request_lifecycle:
+    summary: true
+    per_stage: true
+    per_request: true
+storage:
+  local_storage:
+    path: /workspace
