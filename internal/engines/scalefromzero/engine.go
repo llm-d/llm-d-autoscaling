@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -57,9 +58,37 @@ const (
 	MetricsReasonAvailable  = "ScaleFromZero"
 	MetricsMessageAvailable = "Scaled from zero due to pending requests"
 	reasonDetails           = ": pending request - scale-up"
-	targetEPPMetricName     = "inference_extension_flow_control_queue_size"
+	targetEPPMetricName     = "llm_d_epp_flow_control_queue_size"
+	legacyEPPMetricName     = "inference_extension_flow_control_queue_size"
 	targetEPPMetricLabel    = "target_model_name"
 )
+
+// pendingQueueMetric prefers the canonical metric for each queue series, including zero values.
+func pendingQueueMetric(values []source.MetricValue, modelID string) (source.MetricValue, bool) {
+	queues := make(map[string]source.MetricValue)
+	for _, value := range values {
+		name := value.Labels["__name__"]
+		if (name != targetEPPMetricName && name != legacyEPPMetricName) || value.Labels[targetEPPMetricLabel] != modelID {
+			continue
+		}
+		labels := make(model.LabelSet, len(value.Labels)-1)
+		for key, label := range value.Labels {
+			if key != "__name__" {
+				labels[model.LabelName(key)] = model.LabelValue(label)
+			}
+		}
+		key := labels.String()
+		if current, exists := queues[key]; !exists || current.Labels["__name__"] != targetEPPMetricName {
+			queues[key] = value
+		}
+	}
+	for _, value := range queues {
+		if value.Value > 0 {
+			return value, true
+		}
+	}
+	return source.MetricValue{}, false
+}
 
 type Engine struct {
 	client         client.Client
@@ -291,18 +320,11 @@ func (e *Engine) processInactiveVariant(ctx context.Context, scaleTargets map[st
 
 	// Check for pending requests using EPP flowcontrol queue size metrics
 	result := results["all_metrics"]
-	pendingRequestExist := false
-	for _, value := range result.Values {
-		metricName := value.Labels["__name__"]
-		if metricName == targetEPPMetricName && value.Value > 0 {
-			if value.Labels[targetEPPMetricLabel] == va.Spec.ModelID {
-				logger.Info(
-					"Target workload has pending requests, scaling up from zero", "metricName", metricName,
-					"metric", value.Labels, "value", value.Value)
-				pendingRequestExist = true
-				break
-			}
-		}
+	value, pendingRequestExist := pendingQueueMetric(result.Values, va.Spec.ModelID)
+	if pendingRequestExist {
+		logger.Info(
+			"Target workload has pending requests, scaling up from zero", "metricName", value.Labels["__name__"],
+			"metric", value.Labels, "value", value.Value)
 	}
 
 	if !pendingRequestExist {

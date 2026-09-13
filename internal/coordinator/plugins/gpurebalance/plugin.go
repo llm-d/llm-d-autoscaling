@@ -22,7 +22,7 @@ import (
 const (
 	AnnotationInferencePool = "llm-d.ai/epp-inference-pool"
 	gpuQuotaResource        = "requests.nvidia.com/gpu"
-	eppQueueMetric          = `sum(inference_extension_flow_control_queue_size{inference_pool=%q})`
+	eppQueueMetric          = `sum(llm_d_epp_flow_control_queue_size{inference_pool=%[1]q} or inference_extension_flow_control_queue_size{inference_pool=%[1]q})`
 	displayKindHPA          = "HorizontalPodAutoscaler"
 	displayKindScaledObject = "ScaledObject"
 )

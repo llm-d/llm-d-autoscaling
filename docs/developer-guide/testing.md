@@ -32,6 +32,23 @@ go test -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out -o coverage.html
 ```
 
+### EPP metric compatibility
+
+Runtime EPP queries prefer `llm_d_epp_*` series and fall back to
+`inference_extension_*` series from older EPPs. Scheduler endpoint labels are
+normalized to `pod_name`. Selection happens before aggregation so dual emission
+does not double-count traffic and mixed-version EPP sources remain included.
+
+The registration compatibility test evaluates the registered PromQL with
+Prometheus `promtool`. Install `promtool` on PATH, or run with Docker:
+
+```bash
+PROMTOOL_IMAGE=quay.io/prometheus/prometheus:v3.5.0 go test ./internal/collector/registration -run TestEPPMetricFallback -count=1
+```
+
+Without either option, this test is skipped. It covers current-only, legacy-only,
+dual-emitted, mixed-source, zero-valued, and missing metrics.
+
 ### Unit Test Structure
 
 Unit tests are co-located with the code they test:

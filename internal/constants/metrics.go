@@ -148,13 +148,13 @@ const (
 	// inference scheduler's flow control layer.
 	// Labels: fairness_id, priority, inference_pool, model_name, target_model_name
 	// Note: no namespace label — see TODO(#2309) above.
-	SchedulerFlowControlQueueSize = "inference_extension_flow_control_queue_size"
+	SchedulerFlowControlQueueSize = "llm_d_epp_flow_control_queue_size"
 
 	// SchedulerFlowControlQueueBytes is the total bytes of request bodies queued
 	// in the inference scheduler's flow control layer.
 	// Labels: fairness_id, priority, inference_pool, model_name, target_model_name
 	// Note: no namespace label — see TODO(#2309) above.
-	SchedulerFlowControlQueueBytes = "inference_extension_flow_control_queue_bytes"
+	SchedulerFlowControlQueueBytes = "llm_d_epp_flow_control_queue_bytes"
 )
 
 // WVA Output Metrics

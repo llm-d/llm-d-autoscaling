@@ -117,20 +117,18 @@ func RegisterSaturationQueries(sourceRegistry *source.SourceRegistry) {
 
 	// Number of requests queued in the scheduler's flow control layer
 	registry.MustRegister(source.QueryTemplate{
-		Name: QuerySchedulerQueueSize,
-		Type: source.QueryTypePromQL,
-		Template: `sum(inference_extension_flow_control_queue_size{target_model_name="{{.modelID}}"})` +
-			` or sum(inference_extension_flow_control_queue_size{model_name="{{.modelID}}",target_model_name=""})`,
+		Name:        QuerySchedulerQueueSize,
+		Type:        source.QueryTypePromQL,
+		Template:    schedulerQueue("size"),
 		Params:      []string{source.ParamModelID},
 		Description: "Total requests queued in scheduler flow control for this model",
 	})
 
 	// Total bytes of request bodies queued in the scheduler's flow control layer
 	registry.MustRegister(source.QueryTemplate{
-		Name: QuerySchedulerQueueBytes,
-		Type: source.QueryTypePromQL,
-		Template: `sum(inference_extension_flow_control_queue_bytes{target_model_name="{{.modelID}}"})` +
-			` or sum(inference_extension_flow_control_queue_bytes{model_name="{{.modelID}}",target_model_name=""})`,
+		Name:        QuerySchedulerQueueBytes,
+		Type:        source.QueryTypePromQL,
+		Template:    schedulerQueue("bytes"),
 		Params:      []string{source.ParamModelID},
 		Description: "Total bytes queued in scheduler flow control for this model",
 	})

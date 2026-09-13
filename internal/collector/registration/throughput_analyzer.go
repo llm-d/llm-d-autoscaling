@@ -166,7 +166,7 @@ func RegisterThroughputAnalyzerQueries(sourceRegistry *source.SourceRegistry) {
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryModelArrivalRate,
 		Type:        source.QueryTypePromQL,
-		Template:    `sum by (namespace) (rate(inference_extension_scheduler_attempts_total{status="success",namespace="{{.namespace}}",target_model_name="{{.modelID}}"}[1m]))`,
+		Template:    `sum by (namespace) (` + schedulerDispatchRate + `)`,
 		Params:      []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Model-level request arrival rate (requests/sec) from scheduler, summed across the whole model with no per-pod labels to reconcile",
 	})

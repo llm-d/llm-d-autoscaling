@@ -11,7 +11,7 @@ import (
 const (
 	// QuerySchedulerDispatchRate is the query name for per-endpoint request dispatch rate from scheduler.
 	// This represents the arrival rate (requests/sec) being dispatched to each replica by the scheduler.
-	// Source: inference_extension_scheduler_attempts_total (gateway-api-inference-extension)
+	// Source: llm_d_epp_scheduler_attempts_total with legacy EPP fallback.
 	QuerySchedulerDispatchRate = "scheduler_dispatch_rate"
 
 	// QueryAvgTTFT is the query name for average time-to-first-token per pod (in seconds).
@@ -29,20 +29,17 @@ func RegisterQueueingModelQueries(sourceRegistry *source.SourceRegistry) {
 
 	// Scheduler dispatch rate per endpoint (per-instance arrival rate)
 	// Records successful scheduling attempts with endpoint and model information.
-	// Metric labels: status, pod_name, namespace, port, model_name, target_model_name
+	// Metric labels: status, endpoint_name (legacy: pod_name), namespace, port, target_model_name.
 	// We filter by status="success" and match model identity using target_model_name
-	// (resolved model after routing, e.g. specific LoRA adapter) with fallback to
-	// model_name (original request model) when target_model_name is not set.
-	// This follows the same pattern as scheduler flow control queries.
+	// (resolved model after routing, e.g. specific LoRA adapter).
 	// Uses sum (not max) because dispatch rate is an additive counter — multiple
 	// series per instance should be summed. Uses rate() over 1m window for requests/sec.
 	// Groups by pod_name and port to uniquely identify each engine instance.
 	registry.MustRegister(source.QueryTemplate{
-		Name: QuerySchedulerDispatchRate,
-		Type: source.QueryTypePromQL,
-		Template: `sum by (pod_name, port, namespace) (rate(inference_extension_scheduler_attempts_total{status="success",namespace="{{.namespace}}",target_model_name="{{.modelID}}"}[1m]))` +
-			` or sum by (pod_name, port, namespace) (rate(inference_extension_scheduler_attempts_total{status="success",namespace="{{.namespace}}",model_name="{{.modelID}}",target_model_name=""}[1m]))`,
-		Params: []string{source.ParamNamespace, source.ParamModelID},
+		Name:     QuerySchedulerDispatchRate,
+		Type:     source.QueryTypePromQL,
+		Template: `sum by (pod_name, port, namespace) (` + schedulerDispatchRate + `)`,
+		Params:   []string{source.ParamNamespace, source.ParamModelID},
 		Description: "Request dispatch rate per endpoint (requests/sec) from scheduler, " +
 			"representing the arrival rate to each replica for a specific model, grouped by pod_name and port",
 	})
