@@ -1,0 +1,50 @@
+name: CI - PR Checks
+
+concurrency:
+  group: ci-pr-checks-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Lints what this repository actually ships: the KEDA blueprints, the
+  # benchmark test bed, and the helper scripts. The frozen legacy/ tree is
+  # excluded — it has its own (unwired) workflows.
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Shell syntax check
+        run: make lint-scripts
+
+      - name: Shellcheck
+        run: |
+          shopt -s globstar nullglob
+          scripts=(hack/**/*.sh benchmark/hack/*.sh)
+          if [ ${#scripts[@]} -eq 0 ]; then
+            echo "No shell scripts to check."
+            exit 0
+          fi
+          shellcheck -x --severity=warning "${scripts[@]}"
+
+  # Required status check kept for branch-protection compatibility. There is no
+  # container image built from this branch: this repository ships KEDA manifest
+  # blueprints and the benchmark test bed, not a controller. The deprecated
+  # controller staged under legacy/ is not built or released from main — use the
+  # release-0.9 branch for that.
+  build-image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: No image to build
+        run: |
+          echo "No container image is built from main."
+          echo "This repository ships KEDA manifest blueprints (benchmark/config/scenarios/)"
+          echo "and the evaluation test bed (benchmark/)."
+          echo "The deprecated controller under legacy/ is released from the release-0.9 branch."
