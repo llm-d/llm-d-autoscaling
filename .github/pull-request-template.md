@@ -30,7 +30,7 @@ Fixes #
 below. Include the string "action required" if additional action is required of
 users switching to the new release, for example in case of a breaking change.
 
-Write as if you are speaking to users, not other wva contributors. If this
+Write as if you are speaking to users, not other contributors. If this
 change has no user-visible impact, no release note is needed.
 -->
 

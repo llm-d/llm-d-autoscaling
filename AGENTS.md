@@ -1,6 +1,22 @@
 # Claude Code Assistant Guidelines
 
+## Repository Scope
+
+This repository provides **KEDA manifest blueprints** (`benchmark/config/scenarios/`)
+and the **evaluation test bed** (`benchmark/`) for llm-d autoscaling. KEDA is the
+autoscaling engine; there is no controller to build here.
+
+The deprecated Workload-Variant-Autoscaler lives under `legacy/`, frozen and
+staged for removal:
+
+- Do not add features, tests, or docs there, and do not reference it from new
+  work. Fixes belong on the `release-0.9` branch.
+- The Go, kustomize, and `config/` conventions below apply to that tree only.
+  Its Makefile, Dockerfile, and scripts run from `legacy/` as their root.
+
 ## Go Code Style
+
+Applies to the frozen `legacy/` Go module only.
 
 - Follow the standard Go code style and conventions. Use `gofmt` for formatting and adhere to idiomatic Go practices.
 - Follow best practices from the [Effective Go](https://go.dev/doc/effective_go) guide:
@@ -66,7 +82,7 @@ There are 3 main types of documentation targeting different audiences:
 
 ## Kustomize / Config File Naming
 
-All files under `config/` follow the `(<app>-)?<kind>.yaml` pattern:
+All files under `legacy/config/` follow the `(<app>-)?<kind>.yaml` pattern:
 
 - **`<kind>`** is the Kubernetes kind as a single lowercase word — no hyphens.
   - `ConfigMap` → `configmap`, `ClusterRole` → `clusterrole`, `ClusterRoleBinding` → `clusterrolebinding`, `RoleBinding` → `rolebinding`, `ServiceAccount` → `serviceaccount`, `ServiceMonitor` → `servicemonitor`, `CustomResourceDefinition` → `customresourcedefinition`
@@ -75,10 +91,14 @@ All files under `config/` follow the `(<app>-)?<kind>.yaml` pattern:
 - `kustomization.yaml` and other kustomize-internal files are exempt.
 - File names use hyphens (`-`), never underscores.
 
-## E2E Testing
+## Evaluation and Testing
 
-- use make targets for running e2e tests (e.g., `make test-e2e-smoke` or `make test-e2e-full`) and document the process in `docs/developer-guide/testing.md`
-- use `make test` for unit tests
+- Evaluate scaling-strategy changes with the `benchmark/` test bed: add the
+  variant under `benchmark/config/scenarios/staging/<guide>/` next to
+  `baseline.yaml`, run it, and report the comparison. See `benchmark/README.md`.
+- `make lint-scripts` syntax-checks the shell scripts outside `legacy/`.
+- The controller's `make test` / `make test-e2e-*` targets live in
+  `legacy/Makefile` and are unmaintained.
 - **Never use images from docker.io in e2e tests.** All container images must use fully-qualified registry paths (e.g., `registry.k8s.io/`, `quay.io/`, or a private registry). Do not rely on Docker Hub as a default registry.
 
 ## Deprecation

@@ -57,7 +57,7 @@ __pycache__/
 *.pyd
 
 # Generated TLS certificates (auto-created by e2e test setup)
-hack/tls-certs/
+legacy/hack/tls-certs/
 
 # AI
 .claude/worktrees/

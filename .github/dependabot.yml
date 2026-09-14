@@ -1,12 +1,12 @@
-# Dependabot configuration for llm-d-workload-variant-autoscaler
+# Dependabot configuration for llm-d-autoscaling
 # Based on canonical config from llm-d/llm-d-infra
 
 version: 2
 updates:
 
-  # Go module updates
+  # Go module updates (deprecated controller staged under legacy/)
   - package-ecosystem: "gomod"
-    directory: "/"
+    directory: "/legacy"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
@@ -44,9 +44,9 @@ updates:
     commit-message:
       prefix: "deps(actions)"
 
-  # Docker base image updates
+  # Docker base image updates (deprecated controller staged under legacy/)
   - package-ecosystem: "docker"
-    directory: "/"
+    directory: "/legacy"
     schedule:
       interval: "weekly"
     labels:

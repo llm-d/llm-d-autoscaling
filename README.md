@@ -1,146 +1,92 @@
-# Workload-Variant-Autoscaler (WVA)
+# llm-d-autoscaling
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/llm-d/llm-d-workload-variant-autoscaler)](https://goreportcard.com/report/github.com/llm-d/llm-d-workload-variant-autoscaler)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fllm-d%2Fllm-d-workload-variant-autoscaler.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fllm-d%2Fllm-d-workload-variant-autoscaler?ref=badge_shield)
 
+Autoscaling for [llm-d](https://github.com/llm-d/llm-d) inference deployments.
+This repository holds **KEDA manifest blueprints** and the **evaluation test bed**
+used to validate and tune them.
 
-The Workload Variant Autoscaler (WVA) is a Kubernetes-based global autoscaler for inference model servers serving LLMs. WVA works alongside the standard Kubernetes HPA and external autoscalers like KEDA to drive the scale subresource of inference deployments. The high-level details of the algorithms are documented [here](https://llm-d.ai/docs/architecture/advanced/autoscaling). It determines optimal replica counts for a given request traffic load by considering constraints such as GPU availability, energy budget, and performance budget (latency/throughput).
+## 1. The Workload-Variant-Autoscaler (WVA) is deprecated
 
-### What is a Variant?
+WVA — the custom autoscaling controller this repository used to host — is
+deprecated on `main`. It has **not** disappeared:
 
-WVA introduces the concept of **variants** — multiple model servers in an InferencePool that all serve the same base model but differ in hardware configuration (e.g., GPU type), serving configuration (e.g., tensor parallelism, max batch size, quantization), or both.
+- The last supported code, manifests, and docs are on the
+  [`release-0.9`](https://github.com/llm-d/llm-d-autoscaling/tree/release-0.9)
+  branch, released as [`v0.9.0`](https://github.com/llm-d/llm-d-autoscaling/releases/tag/v0.9.0).
+  Use that branch for anything WVA-related.
+- On `main`, everything WVA has moved untouched into [`legacy/`](legacy/). That
+  directory is **staging for removal** — it is frozen, its CI is not wired up,
+  and it will be deleted in a future release. Do not build on it.
 
-Use cases include:
+## 2. KEDA is the autoscaling engine
 
-- **P/D disaggregation**: prefill is one variant, decode is another — variant = role in a disaggregated pipeline.
-- **[batch-gateway](https://github.com/llm-d-incubation/batch-gateway)**: variants distinguish batch vs. interactive workloads sharing the same pool.
-- **Autoscaler**: a costed serving configuration the autoscaler chooses among.
+Autoscaling for llm-d is driven by [KEDA](https://keda.sh) reading inference
+metrics (queue depth, KV-cache utilization, and other vLLM/EPP signals) straight
+from Prometheus and scaling model-server Deployments through the HPA it manages.
+No custom controller sits in that path.
 
-## Key Features
+This repository's role is therefore twofold:
 
-- **Intelligent Autoscaling**: Optimizes replica count by observing the current state of the system
-- **Cost Optimization**: Minimizes infrastructure costs by picking the correct accelerator variant
+### KEDA manifest blueprints
+
+Recommended, reviewed KEDA scaling strategies — `ScaledObject` min/max, scaling
+behavior, and metric triggers per serving role (prefill/decode) — live with the
+deployment topologies they belong to, under
+[`benchmark/config/scenarios/`](benchmark/config/scenarios/):
+
+- `scenarios/guides/` — **recommended** blueprints, one per llm-d guide (e.g.
+  `pd-disaggregation.yaml`). These are the configurations to copy from.
+- `scenarios/staging/` — experiments and work in progress: trigger and threshold
+  variants (`baseline`, `queue-aggressive`, `kv-early`, `token-aware`, …) staged
+  for evaluation before being promoted.
+
+Because scenarios are backend-agnostic, the same blueprint runs against
+`llm-d-inference-sim`, a latency-simulating vLLM, or real GPU vLLM by swapping a
+[cluster-config overlay](benchmark/config/cluster-configs/).
+
+### Evaluation
+
+[`benchmark/`](benchmark/README.md) is an autoscaling test bed built on
+[llm-d-benchmark](https://github.com/llm-d/llm-d-benchmark). It stands up a
+scenario, drives load through the harness, and captures autoscaling behavior
+(replicas, HPA/KEDA trigger values, latency, throughput) so blueprints are
+compared on evidence rather than intuition.
+
+```bash
+# Optional: a local Kind cluster with emulated GPUs
+make create-kind-cluster
+
+# Stand up + run a scenario (see benchmark/README.md for the full lifecycle)
+llmdbenchmark standup \
+  --spec benchmark/config/specification/guides/pd-disaggregation.yaml.j2 \
+  --cluster-config benchmark/config/cluster-configs/k8s/inference-sim.yaml \
+  --workspace benchmark/results -p <namespace>
+```
+
+Results and reports: [`benchmark/docs/benchmark-report.md`](benchmark/docs/benchmark-report.md)
+and [`benchmark/docs/interactive-dashboard.md`](benchmark/docs/interactive-dashboard.md).
 
 ## Documentation
 
-See the [architecture and autoscaling design](https://llm-d.ai/docs/architecture/advanced/autoscaling) docs for high-level algorithm details.
-
-See the [docs](docs/README.md) directory for design docs, developer guide, and more.
-
-## How It Works
-
-**Prerequisites:** deploy llm-d infrastructure (model servers) and create an `HPA` or `KEDA` object targeting each deployment.
-
-**WVA then:**
-
-1. Continuously monitors request rates and server performance via Prometheus metrics
-2. Capacity model obtains KV cache utilization and queue depth to determine desired replica counts
-3. Actuator emits optimization metrics to Prometheus
-4. External autoscaler (`HPA`/`KEDA`) reads the metrics and scales the deployment accordingly
-
-
-## Example
-
-```yaml
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: llama-8b-autoscaler
-  namespace: llm-inference
-  annotations:
-    llm-d.ai/managed: "true"  # Opt-in to WVA management
-    llm-d.ai/variant-cost: "10.0"  # Optional, defaults to "10.0"
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: llama-8b
-  # minReplicas: 0  # scale to zero - alpha feature
-  maxReplicas: 2
-  behavior:
-    scaleUp:
-      stabilizationWindowSeconds: 60
-      policies:
-      - type: Pods
-        value: 10
-        periodSeconds: 15
-    scaleDown:
-      stabilizationWindowSeconds: 60
-      policies:
-      - type: Pods
-        value: 10
-        periodSeconds: 15
-  metrics:
-  - type: External
-    external:
-      metric:
-        name: wva_desired_replicas
-        selector:
-          matchLabels:
-            variant_name: llama-8b
-            exported_namespace: llm-inference
-      target:
-        type: AverageValue
-        averageValue: "1"
-```
-
-
-More examples in [config/samples/hpa/](config/samples/hpa/) and [config/samples/keda/](config/samples/keda/).
-
-## Upgrading
-
-### Upgrading to v0.9.0 — V2 saturation analyzer is now the default
-
-**Behavioral change.** The default saturation analyzer changes from **V1**
-(percentage/spare-capacity-based) to **V2** (token/capacity-based). The shipped
-`default` entry in the saturation ConfigMap now includes an `analyzers:` section,
-which selects V2. No code change or image rebuild is involved — analyzer selection
-is driven entirely by config.
-
-V2 may produce different scaling decisions than V1 for the same workload. Review
-your dashboards and alert thresholds after upgrading.
-
-**Staying on V1 (opt-out).** Remove the `analyzers:` section (and the V2-only
-`scaleUpThreshold` / `scaleDownBoundary` fields) from the `default` entry of your
-saturation ConfigMap. The remaining `kvCacheThreshold`, `queueLengthThreshold`,
-`kvSpareTrigger`, and `queueSpareTrigger` fields drive V1:
-
-```yaml
-data:
-  default: |
-    kvCacheThreshold: 0.80
-    queueLengthThreshold: 5
-    kvSpareTrigger: 0.1
-    queueSpareTrigger: 3
-```
-
-Apply with `kubectl apply -f deploy/configmap-saturation-scaling.yaml`; the change
-takes effect immediately (the controller watches the ConfigMap).
-
-> V1 is deprecated and scheduled for removal in a future release. See the
-> [saturation scaling configuration guide](docs/developer-guide/saturation-scaling-config.md#analyzer-selection-v1-vs-v2)
-> for threshold ownership (which fields each analyzer reads) and migration details.
+- [Repository docs index](docs/README.md)
+- [Benchmark test bed](benchmark/README.md)
+- [llm-d autoscaling architecture](https://llm-d.ai/docs/architecture/advanced/autoscaling)
+- [llm-d KEDA autoscaling guide](https://llm-d.ai/docs/guides/workload-autoscaling)
 
 ## Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Join the [llm-d autoscaling community meetings](https://llm-d.ai/slack) to get involved.
 
 ## License
 
-Apache 2.0 - see [LICENSE](LICENSE) for details.
+Apache 2.0 — see [LICENSE](LICENSE).
 
+## Related projects
 
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fllm-d%2Fllm-d-workload-variant-autoscaler.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fllm-d%2Fllm-d-workload-variant-autoscaler?ref=badge_large)
-
-## Related Projects
-
-- [llm-d infrastructure](https://github.com/llm-d/llm-d-infra)
 - [llm-d main repository](https://github.com/llm-d/llm-d)
-
-## References
-- [WVA paper](https://arxiv.org/abs/2603.09730)
-- [WVA use case doc](https://docs.google.com/document/d/1ZcMXO0x42qn4X5cu6efgMomYC4pKPwm6r7L79y1AQH4/edit?tab=t.0)
-- [Saturation based design discussion](https://docs.google.com/document/d/1iGHqdxRUDpiKwtJFr5tMCKM7RF6fbTfZBL7BTn6UkwA/edit?tab=t.0#heading=h.mdte0lq44ul4)
+- [llm-d infrastructure](https://github.com/llm-d/llm-d-infra)
+- [llm-d-benchmark](https://github.com/llm-d/llm-d-benchmark)
+- [KEDA](https://keda.sh)

@@ -1,4 +1,4 @@
-# Typos configuration for llm-d-workload-variant-autoscaler
+# Typos configuration for llm-d-autoscaling
 # https://github.com/crate-ci/typos
 
 [default.extend-words]

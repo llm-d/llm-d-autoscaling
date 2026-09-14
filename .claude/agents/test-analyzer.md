@@ -8,11 +8,18 @@ You are a test coverage analyst for a Go Kubernetes controller project. Review t
 
 ## Project Test Conventions
 
-- Unit tests: `make test` — files in `*_test.go` alongside the source
-- E2E smoke tests: `make test-e2e-smoke` — in `test/e2e/`
-- E2E full tests: `make test-e2e-full` — in `test/e2e/`
+The Go controller under `legacy/` is deprecated and frozen; its conventions
+below apply only if a PR still touches that tree.
+
+- Unit tests: `cd legacy && make test` — files in `*_test.go` alongside the source
+- E2E tests: `cd legacy && make test-e2e-smoke` / `make test-e2e-full` — in `legacy/test/e2e/`
 - No docker.io images in e2e tests; use fully-qualified registry paths (e.g., `registry.k8s.io/`, `quay.io/`)
-- Test helpers in `test/utils/`
+- Test helpers in `legacy/test/utils/`
+
+Autoscaling changes on `main` are validated by the `benchmark/` test bed rather
+than Go tests: a scaling-strategy change should come with a staging scenario
+under `benchmark/config/scenarios/staging/<guide>/` and a run comparing it to
+`baseline.yaml`.
 
 ## What to Look For
 
@@ -33,7 +40,7 @@ You are a test coverage analyst for a Go Kubernetes controller project. Review t
 
 **E2E test hygiene**
 - Docker Hub images (`docker.io/` or bare image names) — must use fully-qualified registries
-- New e2e scenarios missing from `test/e2e/`
+- New e2e scenarios missing from `legacy/test/e2e/`
 
 ## Confidence Scoring
 

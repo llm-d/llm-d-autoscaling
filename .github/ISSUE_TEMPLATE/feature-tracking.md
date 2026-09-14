@@ -12,7 +12,7 @@ assignees:
 - Enhancement Proposal: <!-- link to the full proposal file (in docs/proposals); if none yet, link to PR - The proposal answers the 'why' and 'what' of the enhancement -->
 - PRs by stage and milestone:
   - [ ] Alpha - v0.xx
-    - [ ] Code (`llm-d/llm-d-workload-variant-autoscaler`) update PR(s):
+    - [ ] Code (`llm-d/llm-d-autoscaling`) update PR(s):
     - [ ] Docs (`llm-d/llm-d`) update PR(s):
     - [ ] Guides (`llm-d/llm-d`) update PR(s):
 
@@ -23,11 +23,11 @@ assignees:
 
 <!-- Uncomment these as you prepare the enhancement for the next stage
 - [ ] Beta - v0.xx
-  - [ ] Code (`llm-d/llm-d-workload-variant-autoscaler`) update PR(s):
+  - [ ] Code (`llm-d/llm-d-autoscaling`) update PR(s):
   - [ ] Docs (`llm-d/llm-d`) update PR(s):
   - [ ] Guides (`llm-d/llm-d`) update PR(s):
 - [ ] Stable - v0.xx
-  - [ ] Code (`llm-d/llm-d-workload-variant-autoscaler`) update PR(s):
+  - [ ] Code (`llm-d/llm-d-autoscaling`) update PR(s):
   - [ ] Docs (`llm-d/llm-d`) update PR(s):
   - [ ] Guides (`llm-d/llm-d`) update PR(s):
 -->

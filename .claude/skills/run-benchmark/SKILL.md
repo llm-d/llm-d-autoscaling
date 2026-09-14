@@ -100,7 +100,7 @@ Restate the resolved plan in one line before proceeding.
 ### Step 2 — Put `llmdbenchmark` on PATH
 
 Run everything **from the repo root**
-(`/Users/villardl/Projects/github.com/llm-d/llm-d-workload-variant-autoscaler`).
+(`/Users/villardl/Projects/github.com/llm-d/llm-d-autoscaling`).
 The CLI comes from the sibling clone's venv:
 
 ```bash
@@ -198,7 +198,7 @@ kubectl get scaledobject -n <namespace> -o wide
 ```
 
 Every ScaledObject in the namespace (prefill/decode queue+KV triggers, plus
-any `wva-` or `epp-` saturation ones the scenario renders) must show
+any `epp-` saturation ones the scenario renders) must show
 `READY=True`. `ACTIVE=False` is normal when idle (traffic is below
 threshold) — that is not a failure. `READY=False`/blank is.
 

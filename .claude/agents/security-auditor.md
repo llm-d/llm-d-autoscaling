@@ -13,7 +13,7 @@ You are a Kubernetes security reviewer. Review the provided PR diff for security
 - `ClusterRole` permissions on sensitive resources (secrets, configmaps, serviceaccounts) without a clear justification
 - `kubebuilder:rbac` markers that grant write access to resources the controller only reads
 - Missing namespace restriction where `verbs: ["*"]` is used
-- Controller should only access its own ConfigMaps (WVA pattern: restrict to WVA-owned ConfigMaps)
+- Controllers should only access their own ConfigMaps (restrict to the ConfigMaps they own)
 
 **Secret and credential handling**
 - Secrets logged, printed, or included in error messages
@@ -47,7 +47,7 @@ Rate each issue 0-100:
 
 ```
 [confidence: 95] config/rbac/role.yaml:15 — ClusterRole grants write access to all ConfigMaps cluster-wide
-Risk: Controller can read/write any ConfigMap in the cluster, not just WVA-owned ones.
+Risk: Controller can read/write any ConfigMap in the cluster, not just the ones it owns.
 Fix: Add resourceNames restriction or use a namespace-scoped Role instead.
 ```
 

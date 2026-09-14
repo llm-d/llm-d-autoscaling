@@ -1,52 +1,33 @@
-# Workload-Variant-Autoscaler Documentation
+# Documentation
 
-Welcome to the WVA documentation! This directory contains comprehensive guides for users, developers, and operators.
+Autoscaling for llm-d is driven by [KEDA](https://keda.sh). This repository ships
+the KEDA manifest blueprints and the test bed that evaluates them; see the
+[repository README](../README.md) for the overview.
 
-## Documentation Structure
+## KEDA blueprints and evaluation
 
-### User Guide
+- **[Benchmark test bed](../benchmark/README.md)** — how specifications,
+  backend-agnostic scenarios, and cluster-config overlays compose, and the
+  `standup → smoketest → run → teardown` lifecycle.
+- **[Blueprints](../benchmark/config/scenarios/)** — recommended scaling
+  strategies (`guides/`) and experiments awaiting evaluation (`staging/`).
+- **[Benchmark report](../benchmark/docs/benchmark-report.md)** — reading a run:
+  replicas, HPA/KEDA trigger values, latency, and throughput panels.
+- **[Interactive dashboard](../benchmark/docs/interactive-dashboard.md)** —
+  browsing historical sessions per specification.
 
+## Upstream references
 
-- **[Installation Guide](https://llm-d.ai/docs/guides/workload-autoscaling)** - Installing WVA on your cluster
-- **[Configuration](https://llm-d.ai/docs/architecture/advanced/autoscaling/workload-variant-autoscaling#configuration)** - Configuring WVA for your workloads
-- **[Architecture](https://llm-d.ai/docs/architecture/advanced/autoscaling)** - Understanding how WVA works under the hood
+- **[Autoscaling architecture](https://llm-d.ai/docs/architecture/advanced/autoscaling)**
+- **[Workload autoscaling guide](https://llm-d.ai/docs/guides/workload-autoscaling)**
 
-### Design
+## Contributing
 
-- **[Modeling & Optimization](design/modeling-optimization.md)** - Queue theory models and optimization algorithms
-- **[Controller Behavior](design/controller-behavior.md)** - Event handling and reconciliation behavior (outdated)
-- **[Architecture Diagrams](https://llm-d.ai/docs/architecture/advanced/autoscaling/workload-variant-autoscaling#design)** - System architecture and workflows
-- **[Unified Configuration System](developer-guide/configuration.md)** - Configuration reference for all WVA components
-- **[Metrics & Health Monitoring](developer-guide/metrics-health-monitoring.md)** - Exposed metrics and health check endpoints
-- **[Saturation Scaling Configuration](developer-guide/saturation-scaling-config.md)** - Tuning the saturation-based scaling algorithm
-- **[Quota Limiter](developer-guide/quota-limiter.md)** - Operator-declared per-accelerator GPU caps (cluster/namespace scope)
-- **[Throughput Analyzer](developer-guide/throughput-analyzer.md)** - How the throughput analyzer works
-- **[Queue Model Analyzer](developer-guide/slo-queuemodel.md)** - SLO-aware queueing model
-- **[Pod Scraping Source](developer-guide/pod-scraping-source.md)** - Direct pod metric scraping
-- **[Prometheus Integration](developer-guide/prometheus.md)** - Prometheus metrics and configuration
+- **[Contributing guide](../CONTRIBUTING.md)** — repository layout, how to
+  propose a scaling-strategy change, and local checks.
 
-### Developer Guide
+## Deprecated
 
-- **[Development Setup](developer-guide/development.md)** - Setting up your dev environment
-- **[Testing](developer-guide/testing.md)** - Running tests and CI workflows
-- **[Debugging](developer-guide/debugging.md)** - Debugging techniques and tools
-- **[Contributing](../CONTRIBUTING.md)** - How to contribute to the project
-
-### Benchmark Guide
-
-- **[Benchmark Guide](developer-guide/benchmark-guide.md)** - Running WVA scaling benchmarks
-- **[The `run-benchmark` Skill](developer-guide/run-benchmark-skill.md)** - Claude Code skill that drives the `benchmark/` KEDA test bed lifecycle
-
-## Quick Links
-
-- [Main README](../README.md)
-- [Kubernetes Deployment](../deploy/kubernetes/README.md)
-- [OpenShift Deployment](../deploy/openshift/README.md)
-- [Local Development with Kind Emulator](../deploy/kind-emulator/README.md)
-
-
-## Need Help?
-
-- Check the [Troubleshooting Guide](developer-guide/troubleshooting.md)
-- Open a [GitHub Issue](https://github.com/llm-d/llm-d-workload-variant-autoscaler/issues)
-- Join community meetings
+The Workload-Variant-Autoscaler controller and its documentation are deprecated.
+The last supported version is on the `release-0.9` branch; the frozen copy under
+[`legacy/`](../legacy/README.md) is staged for removal.
