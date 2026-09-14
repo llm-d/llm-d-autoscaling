@@ -1,0 +1,784 @@
+# Bounded CPU-only LeaderWorkerSet live-signal scenario for WVA #1525.
+#
+# This is the next slice after the accepted scale-mechanics slice (commit
+# 00ab8ff): WVA is not installed, the simulator's fake-metrics override is
+# removed, and KEDA's Prometheus trigger queries the simulator's own live,
+# workload-driven `vllm:num_requests_waiting` series directly. One leader
+# plus one worker per LWS group (group size 2), bounded to
+# min=1/max=2 groups. See DECISIONS.md D1-D9 and IMPLEMENTATION_BRIEF.md for
+# the full decision record; this scenario implements only the smallest
+# defensible change authorized there.
+#
+# Claims allowed / forbidden (DECISIONS.md Sections 5-6): this experiment may
+# show that a live `vllm:`-named metric can replace `wva_desired_replicas` in
+# the KEDA->HPA->LWS signal path with WVA absent, and that the raw value and
+# HPA's `desiredReplicas` are observably connected. It must NOT be read as
+# selecting `num_requests_waiting` as a production Wide-EP signal, as a
+# calibrated threshold, as real vLLM scheduler-admission fidelity, or as any
+# claim about real vLLM `engine`-label cardinality, expert imbalance,
+# DeepEP/all-to-all pressure, EPP routing, GPU cold start, or autoscaling
+# policy.
+
+# Reproducible lifecycle for the pinned llm-d-benchmark renderer.
+#
+# Run this after standup, before running the inference-perf stimulus
+# documented in benchmark/README.md:
+#
+#   llmdbenchmark --spec "${INFERENCE_PERF_SPEC}" run \
+#     -p "${NAMESPACE}" -l inference-perf -w "${INFERENCE_PERF_WORKLOAD}" \
+#     -e benchmark/experiments/wide-ep-lws-fresh-traffic.yaml \
+#     --wait-timeout 600
+#
+# `-o` is intentionally not used: `-e` supersedes it, and per WVA #1525 Track
+# A F15 the reused profile's tokenizer override
+# (`tokenizer.pretrained_model_name_or_path: gpt2`) now lives in the two
+# treatments of `benchmark/experiments/wide-ep-lws-fresh-traffic.yaml`
+# itself, because `step_05_render_profiles.py::_resolve_treatments` returns
+# from the `-e` branch before `-o`/`profile_overrides` are ever read.
+# `model.name` -- and therefore what the simulator serves as -- stays
+# `test-model`, unchanged from the accepted Slice 1 scenario; the workload
+# file is the existing Wide-EP inference-perf profile from the
+# `llm-d-benchmark` sibling repo, no new load-generation asset introduced.
+# The two-treatment run-only experiment file drives the actual load shape
+# (T1: concurrency 40 / 200 requests to trigger the KEDA->HPA->LWS 1->2
+# transition; T2: concurrency 20 / 60 requests as a freshly-created-process
+# fresh-traffic probe against the resulting two-group state) -- see WVA
+# #1525 Track A F3/F4; it supersedes the flat `concurrency_level: 2048`
+# single-stage sizing referenced by earlier drafts of this comment. The
+# ScaledObject is active (not paused) from standup, so this script both
+# starts the stimulus and observes the resulting signal chain. Every polling
+# phase is bounded and emits diagnostics before returning nonzero.
+#
+# ```bash
+# set -euo pipefail
+#
+# : "${NAMESPACE:=llmd-1525}"
+# : "${MONITORING_NAMESPACE:=workload-variant-autoscaler-monitoring}"
+# : "${PROMETHEUS_PORT:=19090}"
+# : "${POLL_INTERVAL_SECONDS:=5}"
+# : "${IDLE_MAX_VALUE:=5}"
+# : "${RISING_MIN_VALUE:=10}"
+# : "${POST_SCALE_SETTLE_SECONDS:=30}"
+# : "${INFERENCE_PERF_SPEC:=benchmark/config/specification/wide-ep-lws-scale-mechanics.yaml.j2}"
+# : "${INFERENCE_PERF_WORKLOAD:=guide_wide-ep-lws_1.yaml}"
+#
+# for required_command in kubectl curl jq grep date llmdbenchmark; do
+#   if ! command -v "${required_command}" >/dev/null 2>&1; then
+#     echo "ERROR: required command not found: ${required_command}" >&2
+#     exit 1
+#   fi
+# done
+#
+# wait_for() {
+#   local description="$1"
+#   local timeout_seconds="$2"
+#   local check_function="$3"
+#   local diagnostic_function="$4"
+#   local start_epoch
+#   local now_epoch
+#
+#   start_epoch="$(date +%s)"
+#   while ! "${check_function}"; do
+#     now_epoch="$(date +%s)"
+#     if [ "$((now_epoch - start_epoch))" -ge "${timeout_seconds}" ]; then
+#       echo "ERROR: timed out after ${timeout_seconds}s waiting for ${description}" >&2
+#       "${diagnostic_function}" >&2 || true
+#       return 1
+#     fi
+#     sleep "${POLL_INTERVAL_SECONDS}"
+#   done
+#   echo "PASS: ${description}"
+# }
+#
+# PROMETHEUS_URL="https://127.0.0.1:${PROMETHEUS_PORT}"
+# PROMETHEUS_FORWARD_LOG="/private/tmp/wva-1525-prometheus-port-forward.log"
+# PROMETHEUS_FORWARD_PID=""
+# INFERENCE_PERF_PID=""
+#
+# cleanup() {
+#   if [ -n "${INFERENCE_PERF_PID}" ]; then
+#     kill "${INFERENCE_PERF_PID}" >/dev/null 2>&1 || true
+#     wait "${INFERENCE_PERF_PID}" >/dev/null 2>&1 || true
+#   fi
+#   if [ -n "${PROMETHEUS_FORWARD_PID}" ]; then
+#     kill "${PROMETHEUS_FORWARD_PID}" >/dev/null 2>&1 || true
+#     wait "${PROMETHEUS_FORWARD_PID}" >/dev/null 2>&1 || true
+#   fi
+# }
+# trap cleanup EXIT INT TERM
+#
+# prom_query() {
+#   curl -ksS -G "${PROMETHEUS_URL}/api/v1/query" \
+#     --data-urlencode "query=$1"
+# }
+#
+# check_prometheus_ready() {
+#   prom_query up | jq -e \
+#     '.status == "success" and (.data.result | length) > 0' >/dev/null
+# }
+#
+# diagnose_prometheus_ready() {
+#   tail -n 80 "${PROMETHEUS_FORWARD_LOG}" 2>/dev/null || true
+#   prom_query up || true
+# }
+#
+# # DECISIONS.md D1 / IMPLEMENTATION_BRIEF.md G.8: WVA must be genuinely
+# # absent, not merely un-consulted -- no wva-controller-manager Deployment
+# # anywhere in the cluster.
+# check_wva_absent() {
+#   [ "$(kubectl get deployments.apps --all-namespaces \
+#     --field-selector metadata.name=wva-controller-manager \
+#     -o json | jq '.items | length')" = "0" ]
+# }
+#
+# diagnose_wva_absent() {
+#   kubectl get deployments.apps --all-namespaces \
+#     --field-selector metadata.name=wva-controller-manager -o yaml || true
+# }
+#
+# # No WVA-managed annotation exists on this ScaledObject anymore (D1), so
+# # discovery is by namespace rather than by annotation.
+# check_one_scaledobject() {
+#   [ "$(kubectl -n "${NAMESPACE}" get scaledobjects.keda.sh \
+#     -o json | jq '.items | length')" = "1" ]
+# }
+#
+# diagnose_one_scaledobject() {
+#   kubectl -n "${NAMESPACE}" get scaledobjects.keda.sh -o yaml || true
+# }
+#
+# check_lws_ready_groups() {
+#   local lws_json
+#   local pods_json
+#   local expected_pods
+#
+#   lws_json="$(kubectl -n "${NAMESPACE}" get \
+#     leaderworkersets.leaderworkerset.x-k8s.io "${LWS_NAME}" -o json)" ||
+#     return 1
+#   pods_json="$(kubectl -n "${NAMESPACE}" get pods \
+#     -l "leaderworkerset.sigs.k8s.io/name=${LWS_NAME}" -o json)" ||
+#     return 1
+#   expected_pods="$((EXPECTED_GROUPS * GROUP_SIZE))"
+#
+#   printf '%s' "${lws_json}" | jq -e \
+#     --argjson expected "${EXPECTED_GROUPS}" '
+#       .spec.replicas == $expected and
+#       .status.replicas == $expected and
+#       .status.readyReplicas == $expected
+#     ' >/dev/null || return 1
+#
+#   printf '%s' "${pods_json}" | jq -e \
+#     --argjson expected_groups "${EXPECTED_GROUPS}" \
+#     --argjson group_size "${GROUP_SIZE}" \
+#     --argjson expected_pods "${expected_pods}" '
+#       (.items | length) == $expected_pods and
+#       all(.items[];
+#         any(.status.conditions[]?;
+#           .type == "Ready" and .status == "True")) and
+#       ([.items[].metadata.labels[
+#           "leaderworkerset.sigs.k8s.io/group-index"
+#         ]] | all(. != null)) and
+#       ([.items[].metadata.labels[
+#           "leaderworkerset.sigs.k8s.io/group-index"
+#         ]] | unique | length) == $expected_groups and
+#       ([.items[].metadata.labels[
+#           "leaderworkerset.sigs.k8s.io/group-index"
+#         ]] | sort | group_by(.) | all(length == $group_size))
+#     ' >/dev/null
+# }
+#
+# diagnose_lws_ready_groups() {
+#   kubectl -n "${NAMESPACE}" get \
+#     leaderworkersets.leaderworkerset.x-k8s.io "${LWS_NAME}" -o yaml || true
+#   kubectl -n "${NAMESPACE}" get pods \
+#     -l "leaderworkerset.sigs.k8s.io/name=${LWS_NAME}" \
+#     -o wide --show-labels || true
+#   kubectl -n "${NAMESPACE}" get events \
+#     --sort-by=.lastTimestamp | tail -n 80 || true
+# }
+#
+# # Acceptance criterion G.1: idle/baseline value must be low before the
+# # inference-perf stimulus starts. "Low" is bounded by IDLE_MAX_VALUE
+# # (default 5), well under the KEDA trigger's own uncalibrated threshold
+# # (10); a missing series (simulator has served no requests yet) also
+# # passes.
+# check_idle_metric_low() {
+#   prom_query "${QUERY}" | jq -e \
+#     --argjson max "${IDLE_MAX_VALUE}" '
+#       .status == "success" and (
+#         (.data.result | length) == 0 or
+#         ((.data.result[0].value[1] | tonumber) <= $max)
+#       )
+#     ' >/dev/null
+# }
+#
+# diagnose_idle_metric_low() {
+#   prom_query "${QUERY}" || true
+#   kubectl -n "${NAMESPACE}" get pods -o wide || true
+# }
+#
+# # Acceptance criteria G.2/G.3: the raw Prometheus value must rise
+# # organically once inference-perf begins.
+# check_metric_rising() {
+#   prom_query "${QUERY}" | jq -e \
+#     --argjson min "${RISING_MIN_VALUE}" '
+#       .status == "success" and
+#       (.data.result | length) == 1 and
+#       ((.data.result[0].value[1] | tonumber) >= $min)
+#     ' >/dev/null
+# }
+#
+# diagnose_metric_rising() {
+#   prom_query "${QUERY}" || true
+#   kubectl -n "${NAMESPACE}" get endpoints -o wide || true
+#   kubectl -n "${NAMESPACE}" get pods -o wide || true
+# }
+#
+# check_scaledobject_ready() {
+#   kubectl -n "${NAMESPACE}" get scaledobject.keda.sh \
+#     "${SCALEDOBJECT_NAME}" -o json |
+#     jq -e '
+#       any(.status.conditions[]?; .type == "Ready" and .status == "True")
+#     ' >/dev/null
+# }
+#
+# diagnose_scaledobject_ready() {
+#   kubectl -n "${NAMESPACE}" get scaledobject.keda.sh \
+#     "${SCALEDOBJECT_NAME}" -o yaml || true
+#   kubectl -n keda-system logs deployment/keda-operator \
+#     --tail=160 || true
+# }
+#
+# check_hpa_created() {
+#   HPA_NAME="$(kubectl -n "${NAMESPACE}" get scaledobject.keda.sh \
+#     "${SCALEDOBJECT_NAME}" \
+#     -o jsonpath='{.status.hpaName}' 2>/dev/null || true)"
+#   [ -n "${HPA_NAME}" ] &&
+#     kubectl -n "${NAMESPACE}" get \
+#       horizontalpodautoscaler.autoscaling "${HPA_NAME}" \
+#       >/dev/null 2>&1
+# }
+#
+# diagnose_hpa_created() {
+#   kubectl -n "${NAMESPACE}" get scaledobject.keda.sh \
+#     "${SCALEDOBJECT_NAME}" -o yaml || true
+#   kubectl -n "${NAMESPACE}" get \
+#     horizontalpodautoscalers.autoscaling -o yaml || true
+# }
+#
+# check_external_metric_visible() {
+#   kubectl get --raw \
+#     "/apis/external.metrics.k8s.io/v1beta1/namespaces/${NAMESPACE}/${EXTERNAL_METRIC_NAME}?labelSelector=${EXTERNAL_METRIC_SELECTOR_URI}" |
+#     jq -e '.items | length > 0' >/dev/null
+# }
+#
+# diagnose_external_metric_visible() {
+#   kubectl get --raw \
+#     "/apis/external.metrics.k8s.io/v1beta1/namespaces/${NAMESPACE}/${EXTERNAL_METRIC_NAME}?labelSelector=${EXTERNAL_METRIC_SELECTOR_URI}" ||
+#     true
+#   kubectl -n keda-system logs deployment/keda-operator \
+#     --tail=160 || true
+#   kubectl -n keda-system logs \
+#     deployment/keda-operator-metrics-apiserver --tail=160 || true
+# }
+#
+# check_hpa_desired_two() {
+#   kubectl -n "${NAMESPACE}" get \
+#     horizontalpodautoscaler.autoscaling "${HPA_NAME}" -o json |
+#     jq -e '.status.desiredReplicas == 2' >/dev/null
+# }
+#
+# diagnose_hpa_desired_two() {
+#   kubectl -n "${NAMESPACE}" get \
+#     horizontalpodautoscaler.autoscaling "${HPA_NAME}" -o yaml || true
+#   kubectl -n "${NAMESPACE}" describe \
+#     horizontalpodautoscaler.autoscaling "${HPA_NAME}" || true
+#   echo "raw ${QUERY} at this instant:" >&2
+#   prom_query "${QUERY}" || true
+# }
+#
+# # G.8/D1: WVA must be genuinely absent, not merely un-consulted, before any
+# # of the signal-path evidence below is trusted.
+# wait_for "WVA controller absent cluster-wide" 60 \
+#   check_wva_absent diagnose_wva_absent
+#
+# # Exactly one (non-WVA-managed) ScaledObject targeting this scenario's LWS.
+# wait_for "exactly one ScaledObject in ${NAMESPACE}" 120 \
+#   check_one_scaledobject diagnose_one_scaledobject
+#
+# SCALEDOBJECT_JSON="$(kubectl -n "${NAMESPACE}" get scaledobjects.keda.sh \
+#   -o json | jq -c '.items[0]')"
+# SCALEDOBJECT_NAME="$(printf '%s' "${SCALEDOBJECT_JSON}" |
+#   jq -r '.metadata.name')"
+# LWS_NAME="$(printf '%s' "${SCALEDOBJECT_JSON}" |
+#   jq -r '.spec.scaleTargetRef.name // empty')"
+#
+# if [ -z "${SCALEDOBJECT_NAME}" ] || [ -z "${LWS_NAME}" ]; then
+#   echo \
+#     "ERROR: ScaledObject is missing name or scaleTargetRef.name" >&2
+#   printf '%s\n' "${SCALEDOBJECT_JSON}" >&2
+#   exit 1
+# fi
+#
+# if ! printf '%s' "${SCALEDOBJECT_JSON}" | jq -e '
+#   .metadata.annotations["llm-d.ai/managed"] == null and
+#   .metadata.annotations["autoscaling.keda.sh/paused"] == null and
+#   .spec.scaleTargetRef.apiVersion == "leaderworkerset.x-k8s.io/v1" and
+#   .spec.scaleTargetRef.kind == "LeaderWorkerSet" and
+#   .spec.minReplicaCount == 1 and
+#   .spec.maxReplicaCount == 2
+# ' >/dev/null; then
+#   echo \
+#     "ERROR: ScaledObject does not match the approved unmanaged/unpaused LWS contract" \
+#     >&2
+#   printf '%s\n' "${SCALEDOBJECT_JSON}" >&2
+#   exit 1
+# fi
+#
+# # Inspect the installed resource rather than relying on trigger.name.
+# PROMETHEUS_TRIGGER_COUNT="$(
+#   printf '%s' "${SCALEDOBJECT_JSON}" |
+#     jq \
+#       '[.spec.triggers[]? |
+#         select(.type == "prometheus")] | length'
+# )"
+# if [ "${PROMETHEUS_TRIGGER_COUNT}" -ne 1 ]; then
+#   echo \
+#     "ERROR: expected exactly one Prometheus trigger, found ${PROMETHEUS_TRIGGER_COUNT}" \
+#     >&2
+#   printf '%s\n' "${SCALEDOBJECT_JSON}" >&2
+#   exit 1
+# fi
+#
+# QUERY="$(
+#   printf '%s' "${SCALEDOBJECT_JSON}" |
+#     jq -r \
+#       '[.spec.triggers[] |
+#         select(.type == "prometheus")][0].metadata.query // empty'
+# )"
+# EXPECTED_QUERY="sum(vllm:num_requests_waiting{namespace=\"${NAMESPACE}\"})"
+#
+# if [ -z "${QUERY}" ]; then
+#   echo \
+#     "ERROR: the sole Prometheus trigger has an empty metadata.query" >&2
+#   exit 1
+# fi
+#
+# if [ "${QUERY}" != "${EXPECTED_QUERY}" ]; then
+#   echo \
+#     "ERROR: installed Prometheus query does not match the raw-signal contract" \
+#     >&2
+#   echo "expected: ${EXPECTED_QUERY}" >&2
+#   echo "actual:   ${QUERY}" >&2
+#   exit 1
+# fi
+# # G.8: this query contains no wva_desired_replicas reference.
+# case "${QUERY}" in
+#   *wva_desired_replicas*)
+#     echo "ERROR: installed query still references wva_desired_replicas" >&2
+#     exit 1
+#     ;;
+# esac
+#
+# GROUP_SIZE="$(kubectl -n "${NAMESPACE}" get \
+#   leaderworkersets.leaderworkerset.x-k8s.io "${LWS_NAME}" \
+#   -o jsonpath='{.spec.leaderWorkerTemplate.size}')"
+# if [ "${GROUP_SIZE}" -ne 2 ]; then
+#   echo "ERROR: expected LWS group size 2, found ${GROUP_SIZE}" >&2
+#   exit 1
+# fi
+#
+# kubectl -n "${MONITORING_NAMESPACE}" port-forward \
+#   service/kube-prometheus-stack-prometheus \
+#   "${PROMETHEUS_PORT}:9090" \
+#   >"${PROMETHEUS_FORWARD_LOG}" 2>&1 &
+# PROMETHEUS_FORWARD_PID="$!"
+#
+# wait_for "Prometheus API readiness" 120 \
+#   check_prometheus_ready diagnose_prometheus_ready
+#
+# # One complete Ready LWS group before any load is applied.
+# EXPECTED_GROUPS=1
+# wait_for "initial one complete Ready LWS group" 900 \
+#   check_lws_ready_groups diagnose_lws_ready_groups
+#
+# # G.1: idle baseline, recorded before the stimulus starts.
+# wait_for "idle ${QUERY} <= ${IDLE_MAX_VALUE}" 60 \
+#   check_idle_metric_low diagnose_idle_metric_low
+# IDLE_VALUE="$(prom_query "${QUERY}" |
+#   jq -r '.data.result[0].value[1] // "0"')"
+# echo "OBSERVATION: idle ${QUERY} = ${IDLE_VALUE}"
+#
+# # D4/G.2: bounded inference-perf stimulus, reusing the existing Wide-EP
+# # profile from the llm-d-benchmark sibling repo
+# # (workload/profiles/inference-perf/guide_wide-ep-lws_1.yaml.in). No new
+# # load generator is introduced. WVA #1525 Track A F1/F15: the actual T1/T2
+# # load shape and the tokenizer override come from the run-only
+# # `-e` experiment file, not from `-o` or a flat concurrency_level override.
+# llmdbenchmark --spec "${INFERENCE_PERF_SPEC}" run \
+#   -p "${NAMESPACE}" -l inference-perf -w "${INFERENCE_PERF_WORKLOAD}" \
+#   -e benchmark/experiments/wide-ep-lws-fresh-traffic.yaml \
+#   --wait-timeout 600 &
+# INFERENCE_PERF_PID="$!"
+#
+# # G.2/G.3: the raw value must rise organically once load reaches the
+# # rendered direct ClusterIP Service (kube-proxy round-robin -- not EPP
+# # routing; DECISIONS.md D5).
+# wait_for "raw ${QUERY} rises to >= ${RISING_MIN_VALUE}" 300 \
+#   check_metric_rising diagnose_metric_rising
+# RISEN_VALUE="$(prom_query "${QUERY}" |
+#   jq -r '.data.result[0].value[1] // "no-data"')"
+# echo "OBSERVATION: risen ${QUERY} = ${RISEN_VALUE}"
+#
+# # G.4: KEDA/HPA must be consuming the live value.
+# wait_for "ScaledObject Ready=True" 180 \
+#   check_scaledobject_ready diagnose_scaledobject_ready
+# wait_for "KEDA-generated HPA creation" 180 \
+#   check_hpa_created diagnose_hpa_created
+#
+# HPA_JSON="$(kubectl -n "${NAMESPACE}" get \
+#   horizontalpodautoscaler.autoscaling "${HPA_NAME}" -o json)"
+#
+# if ! printf '%s' "${HPA_JSON}" | jq -e \
+#   --arg name "${LWS_NAME}" '
+#     .spec.scaleTargetRef.apiVersion ==
+#       "leaderworkerset.x-k8s.io/v1" and
+#     .spec.scaleTargetRef.kind == "LeaderWorkerSet" and
+#     .spec.scaleTargetRef.name == $name
+#   ' >/dev/null; then
+#   echo "ERROR: generated HPA does not target the exact approved LWS" >&2
+#   printf '%s\n' "${HPA_JSON}" >&2
+#   exit 1
+# fi
+#
+# EXTERNAL_METRIC_COUNT="$(
+#   printf '%s' "${HPA_JSON}" |
+#     jq \
+#       '[.spec.metrics[]? |
+#         select(.type == "External")] | length'
+# )"
+# if [ "${EXTERNAL_METRIC_COUNT}" -ne 1 ]; then
+#   echo \
+#     "ERROR: expected exactly one HPA External metric, found ${EXTERNAL_METRIC_COUNT}" \
+#     >&2
+#   printf '%s\n' "${HPA_JSON}" >&2
+#   exit 1
+# fi
+#
+# EXTERNAL_METRIC_NAME="$(
+#   printf '%s' "${HPA_JSON}" |
+#     jq -r \
+#       '[.spec.metrics[] |
+#         select(.type == "External")][0].external.metric.name // empty'
+# )"
+# if [ -z "${EXTERNAL_METRIC_NAME}" ]; then
+#   echo "ERROR: generated HPA External metric name is empty" >&2
+#   exit 1
+# fi
+# EXTERNAL_METRIC_SELECTOR_URI="$(
+#   printf '%s' "scaledobject.keda.sh/name=${SCALEDOBJECT_NAME}" |
+#     jq -sRr @uri
+# )"
+#
+# wait_for \
+#   "KEDA external metric ${EXTERNAL_METRIC_NAME} visibility" 180 \
+#   check_external_metric_visible diagnose_external_metric_visible
+#
+# # G.5: desiredReplicas must reach 2. Independently verify the arithmetic
+# # against the raw recorded value (ceil(observed_value / threshold) --
+# # IMPLEMENTATION_BRIEF.md G.5 guards against the AverageValue/threshold-
+# # unit mistake class caught in review on WVA PR #1517).
+# wait_for "generated HPA desiredReplicas=2" 300 \
+#   check_hpa_desired_two diagnose_hpa_desired_two
+# DESIRED_REPLICAS_VALUE="$(prom_query "${QUERY}" |
+#   jq -r '.data.result[0].value[1] // "no-data"')"
+# echo "OBSERVATION: raw ${QUERY} at desiredReplicas=2 was ${DESIRED_REPLICAS_VALUE}"
+#
+# # G.6: two complete Ready LWS groups.
+# EXPECTED_GROUPS=2
+# wait_for "KEDA/HPA scale-up to two complete Ready LWS groups" 900 \
+#   check_lws_ready_groups diagnose_lws_ready_groups
+#
+# kubectl get --raw \
+#   "/apis/leaderworkerset.x-k8s.io/v1/namespaces/${NAMESPACE}/leaderworkersets/${LWS_NAME}/scale" |
+#   jq -e \
+#     '.spec.replicas == 2 and .status.replicas == 2' >/dev/null || {
+#       echo \
+#         "ERROR: final raw LWS /scale did not report spec/status replicas 2" \
+#         >&2
+#       exit 1
+#     }
+#
+# # G.7: post-scale signal observation only -- not a pass/fail gate
+# # (DECISIONS.md D8 does not require the signal to fall to any particular
+# # level). Allow at least one full scrape interval (15s) plus settle time
+# # before re-querying.
+# sleep "${POST_SCALE_SETTLE_SECONDS}"
+# POST_SCALE_VALUE="$(prom_query "${QUERY}" |
+#   jq -r '.data.result[0].value[1] // "no-data"')"
+# echo "OBSERVATION: post-scale (2 Ready groups) ${QUERY} = ${POST_SCALE_VALUE}"
+#
+# echo \
+#   "PASS: live-signal lifecycle completed (idle=${IDLE_VALUE}, risen=${RISEN_VALUE}, at-desired-2=${DESIRED_REPLICAS_VALUE}, post-scale=${POST_SCALE_VALUE})"
+# ```
+
+scenario:
+  - name: wide-ep-lws-scale-mechanics
+
+    # maxModelLen: the reused guide_wide-ep-lws_1.yaml inference-perf profile
+    # (D4) requests ~2000 input + 2000 output tokens per exchange. Per the
+    # sizing rule documented at
+    # test/e2e/fixtures/model_service_builder.go:250 ("must exceed prompt
+    # tokens + max_tokens"), max-model-len must exceed that combined length;
+    # 512 (this scenario's original value, sized for that other fixture's
+    # much shorter ~9+400 token burst-load requests) silently drops every
+    # inference-perf request instead of erroring cleanly -- reproduced
+    # directly against the simulator during implementation-time runtime
+    # validation. 4096 leaves headroom above the ~4000-token combined length.
+    model:
+      name: test-model
+      shortName: test-model
+      path: models/test-model
+      huggingfaceId: test-model
+      size: 1Gi
+      maxModelLen: 4096
+      blockSize: 8
+      gpuMemoryUtilization: 0
+
+    accelerator:
+      count: 0
+      memory: 24
+
+    affinity:
+      enabled: true
+      nodeSelector:
+        kubernetes.io/os: linux
+
+    images:
+      vllm:
+        repository: ghcr.io/llm-d/llm-d-inference-sim
+        tag: v0.9.0
+        pullPolicy: IfNotPresent
+      # Bounded #1525 Track A test artifact (F13): the harness image key is
+      # distinct from images.vllm above, and 20_harness_pod.yaml.j2 defaults
+      # it to Always, forcing every fresh per-treatment harness Pod to
+      # re-check the registry. IfNotPresent alone is not sufficient
+      # reproducibility -- the operator must also pre-pull the exact image to
+      # every node and record the resolved digest before the run (F13); this
+      # scenario key only stops the redundant re-check once cached.
+      benchmark:
+        pullPolicy: IfNotPresent
+
+    # Bounded #1525 Track A test artifact (F6): disables only the generic
+    # duplicate PodMonitor (18_podmonitor.yaml.j2); the scenario-specific
+    # decode.monitoring.podmonitor below remains the single canonical scrape
+    # family. Not a production monitoring recommendation.
+    monitoring:
+      podmonitor:
+        enabled: false
+
+    multinode:
+      enabled: true
+
+    modelArtifacts:
+      extraLabels:
+        llm-d.ai/accelerator-variant: cpu
+        llm-d.ai/variant: "${model.idLabel}-decode"
+
+    modelservice:
+      enabled: true
+      uriProtocol: hf
+
+      gateway:
+        className: none
+
+      routing:
+        proxy:
+          enabled: false
+
+    decode:
+      enabled: true
+      replicas: 1
+
+      accelerator:
+        count: 0
+
+      parallelism:
+        tensor: 0
+        data: 1
+        dataLocal: 1
+        workers: 2
+
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+
+      extraContainerConfig:
+        ports:
+          - name: metrics
+            containerPort: 8000
+            protocol: TCP
+
+      monitoring:
+        podmonitor:
+          enabled: true
+          portName: metrics
+          path: /metrics
+          # Bounded #1525 Track A measurement-validity artifact (F16), not a
+          # production monitoring recommendation: the 5s/4s pairing closes
+          # the Gate-2 scrape-timing race against the source-backed ~14.7s
+          # T2 first-completion time. scrapeTimeout must not exceed interval
+          # (13_ms-values.yaml.j2 passes both straight through); in-repo
+          # precedent: deploy/lib/keda-epp-guide-monitoring.values.yaml pairs
+          # scrapeInterval: 5s with scrapeTimeout: 4s.
+          interval: 5s
+          scrapeTimeout: 4s
+          labels:
+            release: kube-prometheus-stack
+          relabelings:
+            - sourceLabels:
+                - __meta_kubernetes_pod_label_llm_d_ai_variant
+              targetLabel: llm_d_ai_variant
+              action: replace
+
+      vllm:
+        modelCommand: imageDefault
+        additionalFlags:
+          - --time-to-first-token=2000ms
+          - --inter-token-latency=100ms
+          - --mode=random
+          - --enable-kvcache
+          # --kv-cache-size: DECISIONS.md D3 said to keep this at "1"
+          # (the value validated against the short ~8-9 token burst-load
+          # fixture at test/e2e/fixtures/model_service_builder.go). Runtime
+          # validation during this implementation showed --kv-cache-size=1
+          # (1 total KV block, block-size=8) hard-fails every request whose
+          # prompt exceeds ~1 block -- reproduced directly against the
+          # simulator: a 5-token prompt succeeds, a 50-token prompt already
+          # gets "Server disconnected" on every attempt. The D4-mandated
+          # stimulus (the reused guide_wide-ep-lws_1.yaml inference-perf
+          # profile) requests ~2000-token prompts, so kv-cache-size=1 yields
+          # 0% request admission -- no queueing is observed at all, which
+          # defeats D3's own stated goal ("produce visible queueing under
+          # load"). 4096 blocks (32768 tokens of capacity) comfortably
+          # covers max-num-seqs=5 concurrent ~4096-token requests while
+          # remaining a small, bounded, CPU-test value; num_requests_waiting
+          # admission queueing is governed by --max-num-seqs=5 (unchanged),
+          # not by this value. Flagged as a deviation from D3's literal
+          # flag-freeze, not a redesign of the signal architecture.
+          - --kv-cache-size=4096
+          - --block-size=8
+          - --max-num-seqs
+          - "5"
+          - --max-model-len
+          - "4096"
+
+    prefill:
+      enabled: false
+      replicas: 0
+
+    standalone:
+      enabled: false
+
+    # The shared defaults size the inference-perf harness pod for a full
+    # multi-node cluster (cpu: 16, memory: 32Gi). This bounded CPU-only
+    # scenario is validated on small single-node Kind clusters (mirrors the
+    # existing decode.resources downsizing above); the harness client itself
+    # is network-bound, not compute-bound, so a much smaller request/limit
+    # is sufficient to drive the D4 inference-perf stimulus. This does not
+    # change inference-perf's load parameters (concurrency/profile), only
+    # the pod's resource envelope.
+    harness:
+      resources:
+        cpu: "2"
+        memory: 2Gi
+      # Bounded #1525 Track A test artifact (F12): authoritative bound is the
+      # --wait-timeout 600 CLI flag on the run invocation below;
+      # harness.waitTimeout mirrors it (cli.py resolution order:
+      # --wait-timeout > harness.waitTimeout > default 3600). The bound is
+      # per treatment, not per run. Honest only with the mandatory F13
+      # benchmark-image pre-pull (T1 uses ~330s of 600s).
+      waitTimeout: 600
+
+    extraObjects:
+      # DECISIONS.md D1: WVA is not installed for this slice, so this
+      # ScaledObject carries no WVA-managed annotations and no WVA saturation
+      # ConfigMap (both removed). KEDA's Prometheus trigger below queries the
+      # simulator's own live, workload-driven `vllm:num_requests_waiting`
+      # series directly -- not a WVA-derived value -- so the ScaledObject is
+      # active (not paused) from standup: KEDA/HPA must react organically to
+      # load, per DECISIONS.md D1-D3.
+      - apiVersion: keda.sh/v1alpha1
+        kind: ScaledObject
+        metadata:
+          name: "${model.idLabel}-decode"
+          namespace: "${namespace.name}"
+        spec:
+          scaleTargetRef:
+            apiVersion: leaderworkerset.x-k8s.io/v1
+            kind: LeaderWorkerSet
+            name: "${model.idLabel}-decode"
+          minReplicaCount: 1
+          maxReplicaCount: 2
+          pollingInterval: 5
+          cooldownPeriod: 30
+          triggers:
+            - type: prometheus
+              name: vllm-num-requests-waiting
+              metricType: AverageValue
+              metadata:
+                serverAddress: "https://kube-prometheus-stack-prometheus.workload-variant-autoscaler-monitoring.svc.cluster.local:9090"
+                # Only the standard Prometheus-Operator pod-scrape label
+                # (`namespace`) is assumed to reach this series in the
+                # rendered output -- DECISIONS.md D10/F5 record that the
+                # pinned renderer drops the scenario's declared PodMonitor
+                # `labels`/`relabelings`, so no group-identifying label
+                # (e.g. `llm_d_ai_variant`) can be relied on here. `sum()`
+                # is the correct aggregation for waiting-request counts
+                # across the decode leader/worker pods in this namespace
+                # (disjoint per-pod queues; DECISIONS.md D10).
+                query: 'sum(vllm:num_requests_waiting{namespace="${namespace.name}"})'
+                # UNCALIBRATED TEST ARTIFACT (DECISIONS.md D9): "10" is
+                # chosen only to be crossable by this scenario's bounded
+                # inference-perf stimulus (concurrency 2048 against
+                # max-num-seqs=5 per decode pod). It is not a calibrated or
+                # recommended production Wide-EP threshold.
+                threshold: "10"
+                activationThreshold: "0"
+                unsafeSsl: "true"
+
+    storage:
+      modelPvc:
+        size: 1Gi
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: standard
+      workloadPvc:
+        size: 1Gi
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: standard
+
+    vllmCommon:
+      volumes:
+        - name: dshm
+          type: emptyDir
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+      volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+
+    control:
+      # control.waitTimeout is inert for #1525 Track A: control.* is never
+      # read as a harness deadline (cli.py resolves only --wait-timeout and
+      # harness.waitTimeout above, per F12). Left commented out rather than
+      # removed, since some other consumer of this scenario key may still
+      # read control.* outside the harness deadline path.
+      # waitTimeout: 900
+      waitPeriod: 5

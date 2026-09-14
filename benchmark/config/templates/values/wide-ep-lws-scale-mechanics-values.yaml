@@ -1,0 +1,1863 @@
+# Canonical llm-d-benchmark defaults snapshot from
+# d2bfff18f72156037fcc7903ec10563b06763885 (recorded for WVA #1525).
+# ============================================================================
+# Common Default Values for LLM-D Deployment
+# These can be completely overridden via scenarios file.
+# ============================================================================
+
+# ============================================================================
+# ANCHORS - Define reusable values here
+# ============================================================================
+_anchors:
+  # Model identifiers
+  model_name: &model_name facebook/opt-125m
+  model_short_name: &model_short_name facebook-opt-125m
+  model_path: &model_path models/facebook/opt-125m
+  model_cache_base: &model_cache_base /model-cache
+
+  # Common ports
+  vllm_port: &vllm_port 8200
+  vllm_service_port: &vllm_service_port 8000
+  ext_proc_port: &ext_proc_port 9002
+  zmq_port: &zmq_port 5557
+  rsync_port: &rsync_port 20873
+
+  # Common resource values
+  cpu_16: &cpu_16 "16"
+  cpu_4: &cpu_4 "4"
+  cpu_32: &cpu_32 "32"
+  memory_64gi: &memory_64gi 64Gi
+  memory_40gi: &memory_40gi 40Gi
+  memory_16gi: &memory_16gi 16Gi
+  memory_4gi: &memory_4gi 4Gi
+  memory_128gi: &memory_128gi 128Gi
+  memory_256gi: &memory_256gi 256Gi
+  shm_16gi: &shm_16gi 16Gi
+  shm_32gi: &shm_32gi 32Gi
+  shm_64gi: &shm_64gi 64Gi
+
+  # GPU configuration.
+  # `gpu_label_value: auto` opts into cluster-side discovery: the resolver
+  # (cluster_resource_resolver.py:_resolve_accelerator_type_labels) reads
+  # actual node labels and overrides BOTH labelKey and labelValue in the
+  # plan, so any GPU model works out of the box. Scenarios that need a
+  # specific SKU can still pin a literal value (e.g. NVIDIA-H100-80GB-HBM3).
+  gpu_label_key: &gpu_label_key nvidia.com/gpu.product
+  gpu_label_value: &gpu_label_value auto
+  gpu_memory_util: &gpu_memory_util 0.95
+
+  # Common vLLM settings
+  block_size: &block_size 64
+  max_model_len: &max_model_len 16384
+  worker_method: &worker_method spawn
+  logging_level: &logging_level INFO
+  container_home: &container_home /tmp
+  hf_home: &hf_home /tmp/huggingface
+
+  # vLLM KV Transfer config
+  kv_connector: &kv_connector NixlConnector
+  kv_role: &kv_role kv_both
+
+  # Common probe settings
+  probe_startup: &probe_startup
+    path: /health
+    failureThreshold: 60
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 5
+
+  probe_liveness: &probe_liveness
+    failureThreshold: 3
+    periodSeconds: 5
+
+  probe_readiness: &probe_readiness
+    path: /health
+    failureThreshold: 3
+    periodSeconds: 5
+
+  # Common parallelism
+  parallelism_single: &parallelism_single
+    data: 1
+    dataLocal: 1
+    tensor: 1
+    workers: 1
+
+  parallelism_4gpu: &parallelism_4gpu
+    data: 1
+    dataLocal: 1
+    tensor: 4
+    workers: 4
+
+  parallelism_8gpu: &parallelism_8gpu
+    data: 1
+    dataLocal: 1
+    tensor: 8
+    workers: 8
+
+  # Storage class: "auto"/"default" = use cluster default; set explicitly to override
+  storage_class: &storage_class auto
+
+  # Image pull policies
+  pull_always: &pull_always Always
+  pull_if_not_present: &pull_if_not_present IfNotPresent
+
+  # General versions
+  istio_version:                     &istio_version                     1.29.2
+  agentgateway_version:              &agentgateway_version              v1.3.1
+  lws_version:                       &lws_version                       0.9.0
+
+  # GAIE CRDs are still installed from the gateway-api-inference-extension
+  # release (`v1.5.0`). The router chart below replaces the legacy
+  # `inferencepool` / `standalone` charts from that release.
+  gaie_version:                      &gaie_version                      v1.5.0
+  # llm-d-router chart version (migrated off the GAIE-published
+  # `inferencepool` / `standalone` charts onto the llm-d-owned
+  # `llm-d-router-{gateway,standalone}-dev` charts in ghcr.io/llm-d/charts).
+  # Used for both the standalone and gateway router charts.
+  router_chart_version:              &router_chart_version              v0.9.0
+  vllm-openai_version:               &vllm-openai_version               v0.26.0
+  llm-d-router-endpoint-picker_version: &llm-d-router-endpoint-picker_version v0.9.0
+  llm-d-routing-sidecar_version:     &llm-d-routing-sidecar_version     v0.9.0
+  # Just use vllm-openai image for tokenizer
+  llm-d-uds-tokenizer_version:       &llm-d-uds-tokenizer_version       v0.26.0
+  llm-d-cuda_version:                &llm-d-cuda_version                v0.8.1
+  llm-d-inference-sim_version:       &llm-d-inference-sim_version       v0.10.2
+  llm-d-benchmark_version:           &llm-d-benchmark_version           v0.7.0
+
+  # Common labels
+  app_label: &app_label llm-d-benchmark-harness
+  inference_serving_label: &inference_serving_label "true"
+
+  # Preprocessing script (sourced from init container output)
+  preprocess_script: &preprocess_script /bin/true
+
+# ============================================================================
+# RESOURCE PRESETS - For different model sizes (as we get understanding...)
+#
+# Idea:
+#
+# These can be referenced in scenarios via resourcePreset: <name>
+#
+# I kind of have this implemented in the renderer. But I have not extensively
+# tested it.x
+#
+# ============================================================================
+resourcePresets:
+  small:
+    decode:
+      resources:
+        limits:
+          memory: *memory_40gi
+          cpu: *cpu_4
+        requests:
+          memory: *memory_40gi
+          cpu: *cpu_4
+      shm:
+        size: *shm_16gi
+      parallelism: *parallelism_single
+    prefill:
+      resources:
+        limits:
+          memory: *memory_40gi
+          cpu: *cpu_4
+        requests:
+          memory: *memory_40gi
+          cpu: *cpu_4
+      parallelism: *parallelism_single
+
+  medium:
+    decode:
+      resources:
+        limits:
+          memory: *memory_64gi
+          cpu: *cpu_16
+        requests:
+          memory: *memory_64gi
+          cpu: *cpu_16
+      shm:
+        size: *shm_16gi
+      parallelism: *parallelism_single
+    prefill:
+      resources:
+        limits:
+          memory: *memory_64gi
+          cpu: *cpu_16
+        requests:
+          memory: *memory_64gi
+          cpu: *cpu_16
+      parallelism: *parallelism_single
+
+  large:
+    decode:
+      resources:
+        limits:
+          memory: *memory_256gi
+          cpu: *cpu_32
+        requests:
+          memory: *memory_256gi
+          cpu: *cpu_32
+      shm:
+        size: *shm_64gi
+      parallelism: *parallelism_4gpu
+    prefill:
+      resources:
+        limits:
+          memory: *memory_256gi
+          cpu: *cpu_32
+        requests:
+          memory: *memory_256gi
+          cpu: *cpu_32
+      parallelism: *parallelism_4gpu
+
+  xlarge:
+    decode:
+      resources:
+        limits:
+          memory: *memory_256gi
+          cpu: *cpu_32
+        requests:
+          memory: *memory_256gi
+          cpu: *cpu_32
+      shm:
+        size: *shm_64gi
+      parallelism: *parallelism_8gpu
+    prefill:
+      resources:
+        limits:
+          memory: *memory_256gi
+          cpu: *cpu_32
+        requests:
+          memory: *memory_256gi
+          cpu: *cpu_32
+      parallelism: *parallelism_8gpu
+
+# ============================================================================
+# TOP-LEVEL / COMMON CONFIGURATION
+# ============================================================================
+
+# Common config block (passed through to helm chart)
+common: {}
+
+# For subchart usage
+modelservice:
+  enabled: true
+  # URI protocol for model artifacts: "pvc" (default) or "hf" (HuggingFace)
+  # When "hf", modelArtifacts.uri becomes hf://<model.huggingfaceId>
+  # When "pvc", modelArtifacts.uri becomes pvc://<storage.modelPvc.name>/<model.path>
+  uriProtocol: pvc
+
+# Override service account name (optional)
+serviceAccountOverride: ""
+
+# Global scheduler name (can be overridden per decode/prefill or standalone)
+schedulerName: default-scheduler
+
+# ============================================================================
+# NAMESPACE CONFIGURATION
+# ============================================================================
+namespace:
+  name: auto  # "auto" resolves to "llmdbench" at plan time; override via CLI --namespace
+  labels:
+    podSecurity:
+      audit: privileged
+      warn: privileged
+
+# ============================================================================
+# MODEL CONFIGURATION
+# ============================================================================
+model:
+  name: *model_name
+  shortName: *model_short_name
+  path: *model_path
+  huggingfaceId: *model_name
+  size: 1Ti
+  maxModelLen: *max_model_len
+  blockSize: *block_size
+  gpuMemoryUtilization: *gpu_memory_util
+  cacheBase: *model_cache_base
+
+# ============================================================================
+# MODEL ARTIFACTS CONFIGURATION
+# ============================================================================
+modelArtifacts:
+  # Mount path for model volume
+  mountPath: /model-cache
+  # Extra labels for model pods (in addition to llm-d.ai/inferenceServing and llm-d.ai/model)
+  extraLabels: {}
+
+# ============================================================================
+# STORAGE CONFIGURATION
+# ============================================================================
+storage:
+  # Max seconds to wait for model download job completion.
+  # Matches bash LLMDBENCH_VLLM_COMMON_PVC_DOWNLOAD_TIMEOUT default.
+  downloadTimeout: 2400
+
+  # Max retries for model download job before failing the step.
+  downloadMaxRetries: 2
+
+  workloadPvc:
+    name: workload-pvc
+    size: 20Gi
+    accessModes:
+      - ReadWriteMany
+    storageClassName: *storage_class
+
+  modelPvc:
+    name: model-pvc
+    size: 300Gi
+    accessModes:
+      - ReadWriteMany
+    storageClassName: *storage_class
+
+  # Extra PVC - only created when name is non-empty.
+  # Mirrors bash LLMDBENCH_VLLM_COMMON_EXTRA_PVC_NAME.
+  # The PVC is NOT automatically mounted; scenarios must also add matching
+  # entries to vllmCommon.volumes/volumeMounts to wire it into pods.
+  extraPvc:
+    name: ""          # Empty = skip creation (default)
+    size: 10Gi
+    accessModes:
+      - ReadWriteMany
+    volumeMode: Filesystem
+    storageClassName: *storage_class
+
+  # HostPath-backed model storage (opt-in).
+  # When enabled, a static PersistentVolume with hostPath is created and the
+  # model PVC binds to it via a matching storageClassName.  A DaemonSet
+  # downloads the model to the hostPath on every target node BEFORE the
+  # serving pods start; the regular download Job is skipped.
+  #
+  # Requirements:
+  #   - Nodes must have the hostPath directory writable.
+  #   - nodeSelector / tolerations should target the GPU nodes where
+  #     vLLM pods will schedule.
+  #   - The storageClassName does NOT need a real StorageClass object
+  #     on the cluster; static PV binding uses label matching.
+  hostPath:
+    enabled: false
+    path: /mnt/models
+    storageClassName: hostpath
+    capacity: 300Gi
+    nodeSelector: {}
+    tolerations: []
+    daemonSetTimeout: 3600
+    daemonSetName: download-model-ds
+
+# ============================================================================
+# HUGGINGFACE CONFIGURATION
+# ============================================================================
+huggingface:
+  # Auto-computed at render time based on whether a valid HF token is available.
+  # When true: the HF token secret is created, download job authenticates,
+  # and EPP/harness pods mount the secret.
+  # When false: no secret, no auth -- works for public (non-gated) models.
+  # Gated models without a token fail early at the model access check.
+  enabled: true
+  secretName: llm-d-hf-token
+  tokenKey: HF_TOKEN
+  token: ""  # Plain-text HF token; auto-detected from HF_TOKEN env var if empty
+  tokenBase64: ""  # Base64-encoded form; auto-computed when token is set from env
+
+# ============================================================================
+# IMAGE CONFIGURATION
+# ============================================================================
+#
+# Each entry has:
+#   repository:  registry path used at pod-spec render time (consumed by templates)
+#   tag:         image tag, "auto" resolves to the latest at plan time
+#   pullPolicy:  Kubernetes imagePullPolicy
+#   sourceRepo:  upstream source code repository URL (NOT consumed by templates --
+#                read by util/generate_sbom.py to build the SBOM. The registry path
+#                often differs from the source repo URL, so we record both.)
+#   sourcePath:  optional path within sourceRepo (e.g. a Dockerfile or subdir)
+#
+# Init containers (decode/prefill/standalone) can reference an entry from
+# this section via `imageKey: <entry>`, which expands to repo:tag (and
+# inherits pullPolicy when the block doesn't set its own).  See
+# `decode.initContainers` for usage.  Setting both `image` and `imageKey`
+# on the same entry is an error.
+#
+images:
+  benchmark:
+    repository: ghcr.io/llm-d/llm-d-benchmark
+    tag: *llm-d-benchmark_version
+    pullPolicy: *pull_always
+    sourceRepo: https://github.com/llm-d/llm-d-benchmark
+
+  vllm:
+#    repository: ghcr.io/llm-d/llm-d-cuda
+#    tag: *llm-d-cuda_version
+#    pullPolicy: *pull_if_not_present
+#    sourceRepo: https://github.com/llm-d/llm-d
+#    sourcePath: docker/Dockerfile.cuda
+    repository: docker.io/vllm/vllm-openai
+    tag: *vllm-openai_version
+    pullPolicy: *pull_always
+    sourceRepo: https://github.com/vllm-project/vllm
+
+  vllmOpenai:
+    repository: docker.io/vllm/vllm-openai
+    tag: *vllm-openai_version
+    pullPolicy: *pull_always
+    sourceRepo: https://github.com/vllm-project/vllm
+
+  # EPP (Endpoint Picker / Router) image -- llm-d-owned, sourced from the
+  # llm-d-router chart family.
+  routerEndpointPicker:
+    repository: ghcr.io/llm-d/llm-d-router-endpoint-picker
+    tag: *llm-d-router-endpoint-picker_version
+    pullPolicy: *pull_always
+    sourceRepo: https://github.com/llm-d/llm-d-router
+
+  routingSidecar:
+    repository: ghcr.io/llm-d/llm-d-router-disagg-sidecar
+    tag: *llm-d-routing-sidecar_version
+    pullPolicy: *pull_if_not_present
+    sourceRepo: https://github.com/llm-d/llm-d-router
+
+  udsTokenizer:
+    repository: docker.io/vllm/vllm-openai
+    tag: *llm-d-uds-tokenizer_version
+    pullPolicy: *pull_always
+    sourceRepo: https://github.com/vllm-project/vllm
+#    repository: ghcr.io/llm-d/llm-d-uds-tokenizer
+#    tag: *llm-d-uds-tokenizer_version
+#    pullPolicy: *pull_if_not_present
+#    sourceRepo: https://github.com/llm-d/llm-d-kv-cache
+#    sourcePath: services/uds_tokenizer
+
+  python:
+    repository: python
+    tag: "3.10"
+    sourceRepo: https://hub.docker.com/_/python
+
+# ============================================================================
+# HELM REPOSITORY CONFIGURATION
+# ============================================================================
+#
+# Each entry has:
+#   url:         chart repository URL used by `helm`/`helmfile` (consumed by templates)
+#   name:        optional chart name override when it differs from the key
+#   sourceRepo:  upstream source code URL (read by util/generate_sbom.py for SBOM,
+#                NOT consumed by templates)
+#
+helmRepositories:
+  istio:
+    url: https://istio-release.storage.googleapis.com/charts
+    sourceRepo: https://github.com/istio/istio
+  llmDModelservice:
+    url: https://llm-d-incubation.github.io/llm-d-modelservice/
+    sourceRepo: https://github.com/llm-d-incubation/llm-d-modelservice
+  llmDInfra:
+    url: https://llm-d-incubation.github.io/llm-d-infra/
+    sourceRepo: https://github.com/llm-d-incubation/llm-d-infra
+  agentgateway:
+    name: agentgateway
+    url: oci://cr.agentgateway.dev/charts/
+    sourceRepo: https://github.com/agentgateway/agentgateway
+  # The next entries hold metadata only -- the charts are pulled from
+  # OCI registries directly in the helmfile templates (no `url` needed for
+  # `helm repo add`). They live here so the SBOM can find the source repo.
+  #
+  # `llmDRouter` is the chart family that replaced the GAIE-published
+  # `inferencepool` and `standalone` charts. The benchmark always uses
+  # `llm-d-router-gateway-dev` (or `-standalone-dev` when
+  # gateway.className=epponly), so only the source repo metadata is held
+  # here. The chart URLs themselves are constructed in
+  # `config/templates/jinja/10_helmfile-main.yaml.j2`.
+  llmDRouter:
+    sourceRepo: https://github.com/llm-d/llm-d-router
+  # Retained for backwards-compat metadata (SBOM) but no longer used to
+  # construct chart URLs. The GAIE `inferencepool` / `standalone` charts
+  # were superseded by `llmDRouter` above.
+  inferencePool:
+    sourceRepo: https://github.com/kubernetes-sigs/gateway-api-inference-extension
+  gaie:
+    sourceRepo: https://github.com/kubernetes-sigs/gateway-api-inference-extension
+  lws:
+    sourceRepo: https://github.com/kubernetes-sigs/lws
+
+# ============================================================================
+# CHART VERSIONS
+# ============================================================================
+chartVersions:
+  istioBase: *istio_version
+  istiod: *istio_version
+  llmDInfra: auto
+  llmDModelservice: auto
+  # llm-d-router chart version (used by the standalone and gateway
+  # variants). Replaces the legacy `inferencePool` (GAIE chart) entry
+  # below for the EPP/router deploy.
+  llmDRouter: *router_chart_version
+  # Retained for backwards compatibility; no longer consumed by the helmfile
+  # template after the migration to `llmDRouter`. Kept so any scenario or
+  # downstream tooling still reading the legacy key continues to resolve.
+  inferencePool: *gaie_version
+  agentgateway: *agentgateway_version
+  lws: *lws_version
+
+# ============================================================================
+# SERVICE ACCOUNT CONFIGURATION
+# ============================================================================
+serviceAccount:
+  name: inference-perf-runner
+
+# ============================================================================
+# MONITORING CONFIGURATION
+# ============================================================================
+monitoring:
+  enabled: true
+  enableUserWorkload: true
+  podmonitor:
+    enabled: true
+  # Install PodMonitor/ServiceMonitor CRDs if they don't exist on the cluster.
+  # Set to true for clusters without Prometheus Operator (e.g., Kind, vanilla K8s).
+  # OpenShift clusters already have these CRDs via the monitoring stack.
+  installPrometheusCrds: false
+  prometheusCrdUrls:
+    - https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/example/prometheus-operator-crd/monitoring.coreos.com_podmonitors.yaml
+    - https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml
+  metricsPath: /metrics
+  scrapeInterval: "30s"
+  metricsScrapeEnabled: false
+  # Embed downsampled per-timestamp series into the report's
+  # results.observability.components[].time_series, for interactive plotting.
+  # Only metrics in the _EMBED_TIME_SERIES allow-list (metrics_processor.py) qualify.
+  embedTimeSeries: true
+  timeSeriesMaxPoints: 256
+  # Prometheus time-series metrics retained for processing, visualization,
+  # and benchmark-report observability entries. Add new metrics here without
+  # changing the analysis code.
+  timeSeriesMetrics:
+    - vllm:kv_cache_usage_perc
+    - vllm:gpu_cache_usage_perc
+    - vllm:cpu_cache_usage_perc
+    - vllm:gpu_memory_usage_bytes
+    - vllm:cpu_memory_usage_bytes
+    - container_memory_usage_bytes
+    - DCGM_FI_DEV_GPU_UTIL
+    - DCGM_FI_DEV_POWER_USAGE
+    - vllm:num_requests_running
+    - vllm:num_requests_waiting
+    - vllm:prefix_cache_hits_total
+    - vllm:prefix_cache_queries_total
+    - vllm:external_prefix_cache_hits_total
+    - vllm:external_prefix_cache_queries_total
+    - vllm:prefix_cache_hit_rate
+    - vllm:external_prefix_cache_hit_rate
+    - vllm:nixl_xfer_time_seconds_sum
+    - vllm:nixl_xfer_time_seconds_count
+    - vllm:nixl_bytes_transferred_sum
+    - vllm:nixl_bytes_transferred_count
+    - vllm:num_preemptions_total
+    - vllm:prompt_tokens_total
+    - vllm:generation_tokens_total
+    - inference_pool_average_kv_cache_utilization
+    - inference_pool_average_queue_size
+    - inference_pool_average_running_requests
+    - inference_pool_ready_pods
+    - llm_d_epp_flow_control_pool_saturation
+    - llm_d_epp_flow_control_queue_size
+    - llm_d_epp_request_running
+
+# ============================================================================
+# ACCELERATOR CONFIGURATION
+# Supports: nvidia, intel-xpu, intel-i915, intel-xe, intel-gaudi, amd, google
+# ============================================================================
+accelerator:
+  type: nvidia
+  # Resource name for the accelerator used in limits/requests
+  # Override for non-NVIDIA GPUs (e.g. habana.ai/gaudi, amd.com/gpu)
+  resource: "nvidia.com/gpu"
+  # Runtime command fragments consumed by accelerator-neutral guide commands.
+  # Hardware profiles use these to avoid duplicating guides; a profile may
+  # additionally provide a fitting model, resource sizing, and storage defaults.
+  runtimePreamble: |
+    export LD_LIBRARY_PATH=$(find / -name libcuda.so.1 -printf '%h\n' 2>/dev/null | sed ':a; N; $!ba; s/\n/:/g'):${LD_LIBRARY_PATH}
+    export LIBRARY_PATH=$(find / -name libcuda.so.1 -printf '%h\n' 2>/dev/null | head -1):${LIBRARY_PATH}
+  dtypeArgs: "--dtype bfloat16"
+  executionArgs: ""
+  blockSizeArgs: "--block-size $VLLM_BLOCK_SIZE"
+  memoryUtilizationArgs: "--gpu-memory-utilization $VLLM_ACCELERATOR_MEM_UTIL"
+  kvBufferDeviceJson: ""
+  # Resource names for different accelerator types (optional override)
+  # DRA drivers are tracked separately as accelerator.draDriver and are not
+  # rendered into container resource limits or requests.
+  # resources:
+  #   nvidia: "nvidia.com/gpu"
+  #   intel-i915: "gpu.intel.com/i915"
+  #   intel-xe: "gpu.intel.com/xe"
+  #   intel-gaudi: "habana.ai/gaudi"
+  #   amd: "amd.com/gpu"
+  #   google: "google.com/tpu"
+  # Environment variables specific to accelerator types (optional)
+  # env:
+  #   intel-i915:
+  #     - name: VLLM_USE_V1
+  #       value: "1"
+
+# ============================================================================
+# DYNAMIC RESOURCE ALLOCATION (DRA) - Optional
+# ============================================================================
+dra:
+  enabled: false
+  type: nvidia
+  # Keyed by accelerator type -- the chart looks the entry up by
+  # accelerator.type and builds one ResourceClaimTemplate per role.
+  # Omit `count` to let each role derive it from its own parallelism.
+  # claimTemplates:
+  #   nvidia:
+  #     name: nvidia-claim-template
+  #     class: gpu.nvidia.com
+  #     match: "exactly"
+  #     count: 1
+  #     selectors: []
+
+# ============================================================================
+# AFFINITY CONFIGURATION
+# ============================================================================
+affinity:
+  enabled: false
+  # Node selector labels (used for nodeAffinity)
+  nodeSelector: {}
+  # Example:
+  # nodeSelector:
+  #   nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3
+  #   topology.kubernetes.io/zone: us-east-1a
+
+  # Pod affinity rules (optional)
+  podAffinity: {}
+
+  # Pod anti-affinity rules (optional)
+  podAntiAffinity: {}
+
+# ============================================================================
+# ANNOTATIONS CONFIGURATION
+# ============================================================================
+annotations:
+  # Common annotations applied to all pods
+  common: {}
+
+  decode:
+    # Pod-level annotations
+    pod: {}
+    # Container-level annotations (if supported)
+    container: {}
+
+  prefill:
+    pod: {}
+    container: {}
+
+# ============================================================================
+# MODELSERVICE-ONLY SECTIONS: gateway / router / routing / httpRoute
+#
+# These sections (gateway, router, routing below, plus httpRoute further
+# down) are consumed ONLY on the modelservice deploy path -- standalone,
+# kustomize and fma do not read them. Scenarios MAY nest them under
+# `modelservice:` to make that scope explicit, e.g.:
+#
+#   modelservice:
+#     enabled: true
+#     gateway:
+#       className: epponly
+#     router:
+#       epp: { replicas: 2 }
+#     httpRoute:
+#       requestTimeout: "300s"
+#
+# The renderer hoists any such nested block back to the top level before the
+# resolver chain runs (RenderPlans._hoist_modelservice_sections). Templates,
+# resolvers and standup steps always read the TOP-LEVEL keys -- which is why
+# these defaults live at the top level. The flat top-level spelling in a
+# scenario is equally valid; pick one spelling per section.
+#
+# IMPORTANT: DoE experiment treatments and CLI overrides target the
+# TOP-LEVEL dotted path (e.g. `router.epp.pluginsConfigFile`,
+# `--gateway-class`), not the nested path. Precedence is
+# defaults < scenario < treatment/CLI.
+# ============================================================================
+
+# ============================================================================
+# GATEWAY CONFIGURATION
+# ============================================================================
+gateway:
+  name: infra-llmdbench-inference-gateway
+  namespace: auto  # Synced with namespace.name; resolved at plan time
+  # Gateway implementation. Supported values:
+  #   istio                      - default; istio-base + istiod control plane
+  #   agentgateway               - agentgateway-crds + agentgateway controller
+  #   gke                        - GKE-managed Gateway
+  #   data-science-gateway-class - OpenDataHub / OpenShift AI managed Gateway
+  #   epponly                    - llm-d "standalone" router topology: no
+  #                                Kubernetes Gateway is deployed, the EPP
+  #                                runs with an Envoy sidecar that serves
+  #                                HTTP directly (single-stack only).
+  #   none                       - plain ClusterIP Service to decode vLLM;
+  #                                no Gateway, EPP, Envoy, or routing proxy.
+  className: epponly
+  providerNamespace: istio-system
+  # Gateway version is derived from chartVersions.istiod at plan time
+  logLevel: error
+  # Optional: override the Gateway's HTTP listener port. When unset (default)
+  # the chart's built-in listener is used. Not supported for
+  # className: data-science-gateway-class (that class pins port 443 HTTPS+TLS).
+  # listenerPort: 80
+  service:
+    type: NodePort
+  resources:
+    limits:
+      cpu: *cpu_16
+      memory: *memory_16gi
+    requests:
+      cpu: *cpu_4
+      memory: *memory_4gi
+
+# ============================================================================
+# ROUTER CONFIGURATION
+#
+# Scenario-level keys for the llm-d-router chart. Mirrors the chart's
+# top-level `router:` shape; the 12_router-values.yaml.j2 template passes
+# this through largely unchanged, with a few benchmark-specific niceties
+# (HF token env injection, zmq port expansion into the extraContainerPorts
+# / extraServicePorts arrays, EPP image resolution from
+# `images.routerEndpointPicker`, and tokenizer.modelName fallback to
+# model.name).
+# ============================================================================
+router:
+  epp:
+    replicas: 1
+    extProcPort: *ext_proc_port
+    # Used to populate router.epp.extraContainerPorts and
+    # router.extraServicePorts with the zmq port (the EPP needs the
+    # container port for the kv-events publisher, and the service port
+    # so other pods can reach the publisher).
+    zmqPort: *zmq_port
+    pluginsConfigFile: "default-plugins.yaml"
+    # Custom plugin content to embed in router-values.yaml.
+    # Keys are filenames, values are the YAML content as literal strings.
+    # The chart expects apiVersion `llm-d.ai/v1alpha1` for the
+    # EndpointPickerConfig (the legacy `inference.networking.x-k8s.io/v1alpha1`
+    # is also accepted but deprecated).
+    # Example:
+    #   pluginsCustomConfig:
+    #     my-plugins.yaml: |
+    #       apiVersion: llm-d.ai/v1alpha1
+    #       kind: EndpointPickerConfig
+    #       ...
+    pluginsCustomConfig: {}
+    verbosity: "1"
+    # Resources are intentionally NOT set here.
+    # CI runners override this in their scenario YAML -- see
+    # config/scenarios/cicd/kind.yaml for an example.
+    # Extra volumes / mounts on the EPP container (e.g. shared dirs).
+    volumes: []
+    volumeMounts: []
+  # UDS tokenizer is a first-class chart feature. Flip
+  # `router.tokenizer.enabled: true` and the chart wires up the
+  # tokenizer container, sockets, and volumes itself. When `enabled`
+  # is true and `modelName` is unset, the template falls back to
+  # `model.name`.
+  tokenizer:
+    enabled: false
+  inferencePool:
+    failureMode: "FailOpen"
+    # Provider-specific config rendered to the values root as
+    # `provider.{gatewayClassName}.{...}` for gke/istio (epponly and
+    # agentgateway don't consume this).
+    # Example (istio):
+    #   providerConfig:
+    #     destinationRule:
+    #       trafficPolicy:
+    #         connectionPool:
+    #           http:
+    #             h2UpgradePolicy: DO_NOT_UPGRADE
+    providerConfig: {}
+  monitoring:
+    # Service-account token secret name for the Prometheus scraper.
+    # Multi-stack scenarios sharing one namespace get a per-stack
+    # rewrite of this name in render_plans to avoid Helm ownership
+    # collisions.
+    secretName: inference-gateway-sa-metrics-reader-secret
+    interval: "10s"
+    prometheus:
+      enabled: true
+      auth:
+        enabled: true
+
+# ============================================================================
+# ROUTING / PROXY CONFIGURATION
+# ============================================================================
+routing:
+  # Service port (matches routing.servicePort in helm chart)
+  servicePort: *vllm_service_port
+  connector: nixlv2
+  debugLevel: 3
+  secure: false
+
+  # Proxy configuration
+  # Image is sourced from `images.routingSidecar`; override that entry per
+  # scenario to change the version.
+  proxy:
+    enabled: true
+    imagePullPolicy: *pull_always
+    targetPort: *vllm_port
+    # TLS configuration (optional)
+    # prefillerUseTLS: false
+    # certPath: "/certs"
+    # Zap logging configuration
+    zapEncoder: json
+    zapLogLevel: debug
+    # zapDevel: false
+    # zapStacktraceLevel: error
+    # zapTimeEncoding: epoch
+
+# ============================================================================
+# HTTPROUTE CONFIGURATION
+#
+# Gateway-API HTTPRoute settings consumed by 08_httproute.yaml.j2. Applies to
+# every rule the template emits (both per-stack and shared modes).
+#
+#   requestTimeout        End-to-end request timeout the gateway enforces.
+#                         Requests exceeding it are aborted with a 502 (which
+#                         surfaces as a "connection reset by peer" on the
+#                         decode routing-proxy loopback hop). Set "0s" to
+#                         disable -- appropriate for long agentic turns.
+#   backendRequestTimeout Per-retry backend timeout; "0s" disables.
+#
+# Shared-mode-only knobs (mode/name/pathPrefix/rewriteTo) are documented in
+# the template header and read with their own defaults.
+# ============================================================================
+httpRoute:
+  requestTimeout: "300s"
+  backendRequestTimeout: "0s"
+
+# ============================================================================
+# VLLM COMMON CONFIGURATION
+# ============================================================================
+vllmCommon:
+  # Inference port used by all vLLM pods (decode, prefill, standalone).
+  # Steps reference this as the canonical port for smoketests, routes, etc.
+  # Matches bash LLMDBENCH_VLLM_COMMON_INFERENCE_PORT.
+  inferencePort: *vllm_service_port
+  host: "0.0.0.0"
+  preprocessScript: *preprocess_script
+  kvTransfer:
+    enabled: false
+    connector: *kv_connector
+    role: *kv_role
+    # Extra config passed as kv_connector_extra_config in --kv-transfer-config JSON.
+    # Used by connectors like OffloadingConnector (e.g. {num_cpu_blocks: 5000}).
+    # extraConfig:
+    #   num_cpu_blocks: 5000
+    #   cpu_bytes_to_use: 1000000000
+  # KV Events Configuration (for precise prefix cache aware routing)
+  # When enabled, adds --kv-events-config to vllm serve command
+  # Generates endpoint: tcp://<serviceName>.<namespace>.svc.cluster.local:<port>
+  # Generates topic: <topicPrefix>@$(POD_IP):$(VLLM_INFERENCE_PORT)@<model.name>
+  kvEvents:
+    enabled: false  # Set to true in scenario to enable
+    publisher: zmq
+    port: 5557
+    topicPrefix: kv
+    # serviceName: null  # Defaults to model.shortName if not specified
+  # PriorityClassName for pod scheduling priority (optional)
+  # Set to a valid PriorityClass name on the cluster, or leave empty/"none" to skip.
+  # Applied to standalone, decode, and prefill pods unless overridden per-section.
+  priorityClassName: ""
+
+  # Image pull secret name for private registries (optional)
+  # When set, adds imagePullSecrets to all pod specs.
+  pullSecret: ""
+
+  # Container HOME and HF_HOME directories.
+  # Default to /tmp which works for the standard llm-d-cuda image (runs as root).
+  # Override to /dev/shm for custom images on OpenShift where /tmp is not writable
+  # by the non-root UID assigned by restricted-v2 SCC.
+  containerHome: *container_home
+  hfHome: *hf_home
+
+  # Ephemeral storage resource for pod limits/requests (optional)
+  # Only added to pod specs when ephemeralStorage value is non-empty.
+  ephemeralStorageResource: "ephemeral-storage"
+  ephemeralStorage: ""
+
+  # Shell used to exec the vLLM startup command in every vLLM container
+  # (decode, prefill, standalone, launcher). Renders into the `command:` field
+  # of 13_ms-values.yaml.j2 and 14_standalone-deployment_yaml.j2. Override
+  # per-scenario to e.g. /bin/sh if the image lacks bash.
+  shell: "/bin/bash"
+
+  # NIXL side channel port for ZMQ-based KV transfer communication.
+  nixlSideChannelPort: "5557"
+
+  # UCX transport layer configuration for NCCL inter-node communication.
+  ucxTls: "sm,cuda_ipc,cuda_copy,tcp"
+
+  # UCX socket address transport priority.
+  ucxSockaddrTlsPriority: "tcp"
+
+  # Network resource (RDMA/InfiniBand) for pod limits/requests (optional)
+  # Only added to pod specs when both networkResource and networkNr are non-empty.
+  # Equivalent to bash LLMDBENCH_VLLM_COMMON_NETWORK_RESOURCE / _NR.
+  networkResource: ""
+  networkNr: ""
+
+  flags:
+    enforceEager: true
+    disableLogRequests: true
+    disableUvicornAccessLog: true
+    allowLongMaxModelLen: "1"
+    serverDevMode: "1"
+    # chatTemplate: null
+    # chatTemplateContentFormat: null # Format for inline chat template: string, leave null for file
+    # Additional vLLM flags (optional)
+    # enableChunkedPrefill: false
+    # maxNumBatchedTokens: null
+
+  # Volume configurations -- no defaults.
+  # Each scenario defines its own volumes and volumeMounts explicitly.
+  # Common volumes like dshm (shared memory) and shared-config (preprocess output)
+  # should be defined in the scenario YAML, not inherited from defaults.
+  # This matches the bash implementation where EXTRA_VOLUMES defaults to [].
+  volumes: []
+  volumeMounts: []
+
+# ============================================================================
+# DECODE CONFIGURATION
+# ============================================================================
+decode:
+  enabled: true
+  replicas: 1
+
+  # Autoscaling (optional)
+  autoscaling:
+    enabled: false
+    # minReplicas: 1
+    # maxReplicas: 10
+
+  # Node selector (optional - for direct nodeSelector, not affinity)
+  nodeSelector: {}
+
+  # Scheduler name override global schedulerName (optional)
+  # schedulerName: default-scheduler
+
+  # PriorityClassName override (optional - inherits from vllmCommon if not set)
+  # priorityClassName: ""
+
+  # Ephemeral storage override (optional - inherits from vllmCommon if not set)
+  # ephemeralStorage: ""
+
+  # Network resource override (optional - inherits from vllmCommon if not set)
+  # networkResource: ""
+  # networkNr: ""
+
+  # Accelerator type selection
+  acceleratorType:
+    labelKey: *gpu_label_key
+    labelValue: *gpu_label_value
+    # Use labelValues for multiple values (takes precedence over labelValue)
+    # labelValues:
+    #   - NVIDIA-H100-80GB-HBM3
+    #   - NVIDIA-A100-SXM4-80GB
+
+  # Parallelism configuration
+  parallelism: *parallelism_single
+
+  # Resource configuration
+  resources:
+    limits:
+      memory: *memory_40gi
+      cpu: *cpu_4
+      # GPU resource (optional - uncomment to explicitly request GPUs)
+      # nvidia.com/gpu: "1"
+      # DRA claims (optional)
+      # claims: {}
+    requests:
+      memory: *memory_40gi
+      cpu: *cpu_4
+      # nvidia.com/gpu: "1"
+
+  # Shared memory
+  shm:
+    size: *shm_16gi
+
+  # Probe configuration
+  probes:
+    startup: *probe_startup
+    liveness:
+      <<: *probe_liveness
+      failureThreshold: 10
+      timeoutSeconds: 15
+    readiness:
+      <<: *probe_readiness
+      failureThreshold: 10
+      timeoutSeconds: 15
+
+  # vLLM configuration
+  vllm:
+    port: *vllm_port
+    servicePort: *vllm_service_port
+    workerMultiprocMethod: *worker_method
+    loggingLevel: *logging_level
+    imagePullPolicy: *pull_if_not_present
+    customCommand: null
+    customPreprocessCommand: null
+    # Use these if wanted to use default command but add additional
+    # flags
+    additionalFlags: []
+      # - "--no-enable-log-requests"
+      # - "--max-model-len 16000"
+      # - "--tensor-parallel-size 1"
+
+  # Mount model volume
+  mountModelVolume: true
+
+  # Additional volume mounts
+  additionalVolumeMounts: []
+
+  # Additional volumes
+  additionalVolumes: []
+
+  # Extra environment variables
+  extraEnvVars: []
+  # Example:
+  # extraEnvVars:
+  #   - name: CUDA_VISIBLE_DEVICES
+  #     value: "0,1,2,3"
+  #   - name: NCCL_DEBUG
+  #     value: "INFO"
+  #   - name: MY_SECRET
+  #     valueFrom:
+  #       secretKeyRef:
+  #         name: my-secret
+  #         key: password
+
+  # Extra ports (optional)
+  # ports:
+  #   - containerPort: 8200
+  #     name: metrics
+  #     protocol: TCP
+
+  # Extra container config
+  extraContainerConfig: {}
+  # Example:
+  # extraContainerConfig:
+  #   securityContext:
+  #     privileged: true
+  #     capabilities:
+  #       add:
+  #         - IPC_LOCK
+
+  # Extra pod config
+  extraPodConfig: {}
+
+  # Init containers (optional, configured per scenario).
+  # Each entry sets `image` directly or `imageKey` (an entry name from
+  # `images.*`); if neither is set, image defaults to `images.benchmark`.
+  initContainers: []
+
+  # LWS / Multinode options (optional)
+  # hostIPC: false
+  # hostPID: false
+  # enableServiceLinks: true
+  # terminationGracePeriodSeconds: 30
+  # subGroupPolicy:
+  #   subGroupSize: 8
+  # subGroupExclusiveTopology: false
+
+  # Monitoring / PodMonitor (optional)
+  monitoring:
+    podmonitor:
+      enabled: false
+      portName: "metrics"
+      path: "/metrics"
+      interval: "30s"
+      # scrapeTimeout: "10s"
+      labels: {}
+      annotations: {}
+      relabelings: []
+      metricRelabelings: []
+
+# ============================================================================
+# PREFILL CONFIGURATION
+# ============================================================================
+prefill:
+  enabled: false
+  replicas: 0
+
+  # Autoscaling (optional)
+  autoscaling:
+    enabled: false
+    # minReplicas: 1
+    # maxReplicas: 10
+
+  # Node selector (optional)
+  nodeSelector: {}
+
+  # Scheduler name override global schedulerName (optional)
+  # schedulerName: default-scheduler
+
+  # PriorityClassName override (optional - inherits from vllmCommon if not set)
+  # priorityClassName: ""
+
+  # Ephemeral storage override (optional - inherits from vllmCommon if not set)
+  # ephemeralStorage: ""
+
+  # Network resource override (optional - inherits from vllmCommon if not set)
+  # networkResource: ""
+  # networkNr: ""
+
+  # Accelerator type selection
+  acceleratorType:
+    labelKey: *gpu_label_key
+    labelValue: *gpu_label_value
+
+  # Parallelism configuration
+  parallelism: *parallelism_single
+
+  # Resource configuration
+  resources:
+    limits:
+      memory: *memory_40gi
+      cpu: *cpu_4
+    requests:
+      memory: *memory_40gi
+      cpu: *cpu_4
+
+  # Probe configuration
+  probes:
+    startup: *probe_startup
+    liveness: *probe_liveness
+    readiness: *probe_readiness
+
+  # vLLM configuration
+  vllm:
+    port: *vllm_port
+    servicePort: *vllm_service_port
+    workerMultiprocMethod: *worker_method
+    loggingLevel: *logging_level
+    imagePullPolicy: *pull_if_not_present
+    # Use these if wanted to use default command but add additional
+    # flags
+    additionalFlags: []
+      # - "--no-enable-log-requests"
+      # - "--max-model-len 16000"
+      # - "--tensor-parallel-size 1"
+    customCommand: null
+    customPreprocessCommand: null
+
+  # Mount model volume
+  mountModelVolume: true
+
+  # Additional volume mounts
+  additionalVolumeMounts: []
+
+  # Additional volumes
+  additionalVolumes: []
+
+  # Extra environment variables
+  extraEnvVars: []
+
+  # Extra container config
+  extraContainerConfig: {}
+
+  # Extra pod config
+  extraPodConfig: {}
+
+  # Init containers (optional). See `decode.initContainers`.
+  initContainers: []
+
+
+  # Monitoring / PodMonitor (optional)
+  monitoring:
+    podmonitor:
+      enabled: false
+      portName: "metrics"
+      path: "/metrics"
+      interval: "30s"
+      labels: {}
+      annotations: {}
+      relabelings: []
+      metricRelabelings: []
+
+# ============================================================================
+# STANDALONE DEPLOYMENT CONFIGURATION
+# For simple single-model vLLM deployments without llm-d routing infrastructure
+# ============================================================================
+standalone:
+  enabled: false
+  replicas: 1
+  role: both  # Options: prefill, decode, both
+
+  # Deployment naming
+  deployment:
+    name: null  # Auto-generated if null: vllm-standalone-<model.shortName>
+
+  # Service configuration
+  service:
+    name: null  # Uses deployment name if null
+    port: 80
+    type: ClusterIP
+    # nodePort: 30080  # Only used when type: NodePort
+    # loadBalancerIP: ""  # Only used when type: LoadBalancer
+    # loadBalancerSourceRanges: []
+    # externalTrafficPolicy: Cluster
+    # sessionAffinity: None
+    annotations: {}
+    additionalPorts: []
+    # Example:
+    # additionalPorts:
+    #   - name: metrics
+    #     port: 9090
+    #     targetPort: 9090
+
+  # Labels applied to deployment and service
+  labels:
+    stood-up-by: "auto" # Should be automatically configured to user
+    stood-up-from: llm-d-benchmark
+    stood-up-via: "standalone"
+
+  # Extra labels for pod template
+  extraPodLabels: {}
+
+  # Pod annotations
+  podAnnotations: {}
+
+  # Scheduler name override global schedulerName (optional)
+  schedulerName: default-scheduler
+
+  # PriorityClassName override (optional - inherits from vllmCommon if not set)
+  # priorityClassName: ""
+
+  # Ephemeral storage override (optional - inherits from vllmCommon if not set)
+  # ephemeralStorage: ""
+
+  # Network resource override (optional - inherits from vllmCommon if not set)
+  # networkResource: ""
+  # networkNr: ""
+
+  # Node selector (optional)
+  nodeSelector: {}
+
+  # Accelerator type selection (inherits from decode if not specified).
+  # `labelValue: auto` triggers cluster-side discovery; see the
+  # `gpu_label_value` anchor at the top of this file.
+  acceleratorType:
+    labelKey: nvidia.com/gpu.product
+    labelValue: auto
+    # labelValues:  # Use for multiple GPU types
+    #   - NVIDIA-H100-80GB-HBM3
+    #   - NVIDIA-A100-SXM4-80GB
+
+  # Image configuration (inherits from images.vllm if not specified)
+  image:
+    repository: docker.io/vllm/vllm-openai
+    tag: *vllm-openai_version
+    pullPolicy: Always
+
+  # Parallelism configuration
+  parallelism:
+    tensor: 1
+
+  # Resource configuration (inherits from decode if not specified)
+  resources:
+    limits:
+      memory: 40Gi
+      cpu: "4"
+    requests:
+      memory: 40Gi
+      cpu: "4"
+
+  # Probe configuration
+  probes:
+    startup:
+      failureThreshold: 60
+      initialDelaySeconds: 30
+      periodSeconds: 30
+      timeoutSeconds: 5
+    liveness:
+      failureThreshold: 3
+      periodSeconds: 5
+    readiness:
+      failureThreshold: 3
+      periodSeconds: 5
+
+  # vLLM configuration
+  vllm:
+    port: 8000
+    loadFormat: auto
+    modelLoaderExtraConfig: "{}"
+    workerMultiprocMethod: spawn
+    loggingLevel: INFO
+    enablePrefixCaching: false
+    preprocessCommand: /bin/true
+    customPreprocessCommand: null
+    customCommand: null
+    # How the container is launched. Mirrors decode/prefill `vllm.modelCommand`
+    # on the modelservice path.
+    #   custom       -- render `command: [<vllmCommon.shell>, -c]` plus the
+    #                   generated (or customCommand) shell script. Requires a
+    #                   shell in the server image.
+    #   imageDefault -- emit no `command:`; the image entrypoint runs and
+    #                   `args` below is passed verbatim. Required for
+    #                   distroless images, which have no shell to exec --
+    #                   e.g. llm-d-inference-sim v0.9+ ships only
+    #                   /app/llm-d-inference-sim (v0.8.2 still had bash).
+    modelCommand: custom
+    # Argument list for `modelCommand: imageDefault`. Ignored when
+    # modelCommand is `custom`. Supports ${dotted.path} substitution.
+    # Rendered as `args:`, so the image ENTRYPOINT supplies argv[0] (both
+    # server images have one: vllm-openai is `vllm serve`, inference-sim is
+    # /app/llm-d-inference-sim). For a CMD-only image with no ENTRYPOINT,
+    # make the binary the first element -- `args` replaces CMD outright.
+    args: []
+    # Example:
+    # args:
+    #   - "--model"
+    #   - "/model-cache/${model.path}"
+    #   - "--port"
+    #   - "8000"
+    #   - "--served-model-name"
+    #   - "${model.name}"
+    # Use these if wanted to use default command but add additional
+    # flags
+    additionalFlags: []
+    # Example:
+    # additionalFlags:
+    #   - "--enable-chunked-prefill"
+    #   - "--max-num-batched-tokens 8192"
+
+  # Model volume configuration
+  # NOTE: The model PVC is standalone-specific (not in vllmCommon.volumes)
+  # because modelservice handles its own model volume via the Helm chart.
+  mountModelVolume: true
+  modelMountPath: /model-cache
+  modelPvcName: model-pvc
+
+  # Launcher container (optional second container in the same pod)
+  # Mirrors bash LLMDBENCH_VLLM_STANDALONE_LAUNCHER feature.
+  # Shares the same pod volumes, env vars, and resources as the main container.
+  launcher:
+    enabled: false
+    port: 8001
+    vllmPort: 8002
+    imagePullPolicy: Always
+    # Image defaults to standalone.image if not specified
+    image:
+      repository: null  # null = inherit from standalone.image
+      tag: null          # null = inherit from standalone.image
+    customPreprocessCommand: null
+    # Custom args for the launcher. null = use default uvicorn command.
+    args: null
+    # Example custom args:
+    # args: |
+    #   uvicorn launcher:app --host 0.0.0.0 --log-level info --port 8001
+
+  # Additional volume mounts
+  additionalVolumeMounts: []
+  # Example:
+  # additionalVolumeMounts:
+  #   - name: custom-config
+  #     mountPath: /config
+  #     readOnly: true
+
+  # Additional volumes
+  additionalVolumes: []
+  # Example:
+  # additionalVolumes:
+  #   - name: custom-config
+  #     type: configMap
+  #     configMap:
+  #       name: my-config
+
+  # Extra environment variables
+  extraEnvVars: []
+  # Example:
+  # extraEnvVars:
+  #   - name: CUDA_VISIBLE_DEVICES
+  #     value: "0"
+  #   - name: MY_SECRET
+  #     valueFrom:
+  #       secretKeyRef:
+  #         name: my-secret
+  #         key: password
+
+  # Init containers (optional)
+  initContainers: []
+  # Example:
+  # initContainers:
+  #   - name: download-model
+  #     image: python:3.10
+  #     command: ["python", "-c", "print('downloading...')"]
+
+  # Extra container config (merged into container spec)
+  extraContainerConfig: {}
+  # Example:
+  # extraContainerConfig:
+  #   securityContext:
+  #     privileged: true
+
+  # Extra pod config (merged into pod spec)
+  extraPodConfig: {}
+
+# ============================================================================
+# NO-KUBERNETES (nok8s) DEPLOYMENT CONFIGURATION
+# Runs the llm-d routing stack (vLLM + EPP + Envoy) as plain docker/podman
+# containers on the local host, with NO Kubernetes cluster.  The EPP uses the
+# file-discovery plugin (reads endpoints.yaml) instead of a k8s InferencePool.
+# Wired: client -> Envoy (listenPort) -> EPP (grpcPort) -> vLLM (hostPort).
+# Opt-in via `nok8s.enabled: true` in a scenario or `-t nok8s` on the CLI.
+# ============================================================================
+nok8s:
+  enabled: false
+  # Container runtime: "docker" or "podman".
+  runtime: docker
+  # Host env var read at standup time and passed to the vLLM container so it
+  # can pull gated models from Hugging Face.
+  hfTokenEnv: HUGGING_FACE_HUB_TOKEN
+  # Host directory where rendered EPP/Envoy configs are staged and bind-mounted
+  # from (avoids sudo writes to /etc). A scenario with more than one stack
+  # gets a per-stack subdirectory appended so stacks never overwrite each
+  # other's staged configs.
+  workspaceHostDir: "~/.llmdbench/nok8s"
+  # Appended to every container name (vllm-N, epp, envoy). Filled in
+  # automatically with "-<stack>" when a scenario has more than one stack, so
+  # sibling stacks on one host don't share (and delete) each other's
+  # containers. An explicit value is preserved, but two stacks resolving to
+  # the same container name is a render error; single-stack scenarios keep
+  # the bare names.
+  nameSuffix: ""
+
+  # vLLM inference worker(s)
+  vllm:
+    image: docker.io/vllm/vllm-openai
+    tag: *vllm-openai_version
+    hostPort: 8000          # worker i is published on hostPort + i
+    containerPort: 8000
+    tensorParallel: 1       # accelerators to shard each worker across
+    # Accelerator preset for exposing the device to the container:
+    #   nvidia | amd | intel | gaudi | cpu | spyre
+    # Only NVIDIA is validated end-to-end; others follow each backend's
+    # documented device flags. Change `image` to the matching vLLM backend.
+    accelerator: nvidia
+    gpus: "all"             # nvidia only: docker --gpus value (podman uses CDI)
+    # Raw runtime device flags; overrides the accelerator preset entirely.
+    # Use for IBM Spyre/AIU or any custom device wiring, e.g.
+    #   deviceArgs: ["--device", "/dev/kfd", "--device", "/dev/dri"]
+    deviceArgs: []
+    shmSize: "20g"          # required for NCCL/RCCL when tensorParallel > 1
+    hfCacheDir: "~/.cache/huggingface"
+    # Number of independent vLLM workers (EPP load-balances across them). With
+    # replicas > 1 each worker is pinned to its own slice of `tensorParallel`
+    # GPU indices (replica i -> devices i*TP .. i*TP+TP-1) via the accelerator's
+    # visible-devices env. Total GPUs used = replicas * tensorParallel.
+    replicas: 1
+    extraArgs: []           # appended after `serve <MODEL> --tensor-parallel-size=N`
+
+  # Endpoint Picker (router brain), file-discovery mode
+  epp:
+    image: ghcr.io/llm-d/llm-d-router-endpoint-picker
+    tag: v0.9.0
+    grpcPort: 9002
+    grpcHealthPort: 9003
+    metricsPort: 9090
+    poolName: file-discovery
+    poolNamespace: default
+    configMountDir: /etc/epp
+
+  # Envoy front door
+  envoy:
+    image: docker.io/envoyproxy/envoy
+    tag: distroless-v1.33.2
+    listenPort: 8081
+    # Envoy admin interface. Envoy runs with --network host, so two stacks on
+    # one host need distinct admin ports as well as distinct listenPorts.
+    adminPort: 19000
+    configMountPath: /etc/envoy/envoy.yaml
+
+# ============================================================================
+# KUSTOMIZE DEPLOYMENT CONFIGURATION
+# Opt-in via `kustomize.enabled: true` in a scenario or `-t kustomize` on
+# the CLI. Defined here (matching modelservice/standalone/fma) so the
+# structural key is always present in merged values and template guards
+# can use `kustomize.enabled` directly.
+# ============================================================================
+kustomize:
+  enabled: false
+
+# ============================================================================
+# FMA DEPLOYMENT CONFIGURATION
+# For Fast Model Actuation
+# ============================================================================
+fma:
+  enabled: false
+  iterations: 1
+
+  # Pin FMA launchers + requester to a single GPU node. When enabled, standup
+  # (step_06) picks a GPU node with free GPUs and CPU (preferring a dedicated
+  # one), labels it <nodeLabel>=true, and sizes launchers/requesters to its free
+  # GPUs. Standup fails if no node qualifies. Off by default; opt in per-scenario
+  # (used by cicd/ocp-wva-fma-hotstart).
+  launcherNodeSelection:
+    enabled: false
+    nodeLabel: fma-hotstart
+
+  # Deployment naming
+  deployment:
+    name: null  # Auto-generated if null: vllm-standalone-<model.shortName>
+
+  # Labels applied to deployment and service
+  labels:
+    stood-up-by: "auto" # Should be automatically configured to user
+    stood-up-from: llm-d-benchmark
+    stood-up-via: "fma"
+
+  crds:
+    inferenceServerConfig: https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/v0.6.4/config/crd/fma.llm-d.ai_inferenceserverconfigs.yaml
+    launcherConfig: https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/v0.6.4/config/crd/fma.llm-d.ai_launcherconfigs.yaml
+    launcherPopulatorConfig: https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/v0.6.4/config/crd/fma.llm-d.ai_launcherpopulationpolicies.yaml
+
+  chart:
+    url: oci://ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/charts/fma-controllers
+    version: 0.6.4
+
+  image:
+    repository: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation
+    tag: v0.6.4
+    pullPolicy: IfNotPresent
+
+  requester:
+    image:
+      repository: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/requester
+      tag: v0.6.4
+      pullPolicy: IfNotPresent
+    probePort: 8080
+    spiPort: 8081
+    readinessProbeInitialDelay: 5
+    readinessProbePeriod: 10
+    limitsGPU: 1
+    limitsCPU: 1
+    limitsMemory: 250Mi
+
+  launcher:
+    maxInstances: 4
+    image:
+      repository: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/launcher
+      tag: v0.6.4
+      pullPolicy: IfNotPresent
+    runtimeClassName: nvidia-legacy
+    podTemplate:
+      metadata:
+        labels:
+          stood-up-by: "auto"
+          stood-up-from: llm-d-benchmark
+          stood-up-via: "fma"
+        annotations: {}
+    customPreprocessCommands: []
+
+  dualPod:
+    sleeperLimit: 2
+    debugAcceleratorMemory: false
+
+  launcherConfigurator:
+    port: 8001
+
+  launcherPopulatorConfigurator:
+    limitsCPU: 2
+    limitsMemory: 2Gi
+    requestsCPU: 100m
+    requestsMemory: 128Mi
+
+  mountModelVolume: true
+  modelMountPath: /model-cache
+  modelPvcName: model-pvc
+
+# ============================================================================
+# DOWNLOAD JOB CONFIGURATION
+# ============================================================================
+downloadJob:
+  # Job name. Multi-stack scenarios auto-suffix this with the model ID
+  # label (render_plans._resolve_per_stack_identity) so each stack gets
+  # its own download-{model_id_label} Job and the waits don't cross-talk.
+  # Set explicitly here to opt out of the auto-suffix.
+  name: download-model
+  backoffLimit: 3
+  mountPath: /cache
+
+# ============================================================================
+# DATA ACCESS CONFIGURATION
+# ============================================================================
+dataAccess:
+  rsyncPort: *rsync_port
+  runAsUser: ~
+  nodeSelector: {}
+  tolerations: []
+
+# ============================================================================
+# LABELS
+# ============================================================================
+labels:
+  inferenceServing: *inference_serving_label
+  app: *app_label
+
+# ============================================================================
+# MULTINODE CONFIGURATION (LeaderWorkerSet)
+# ============================================================================
+multinode:
+  enabled: false
+  # When enabled, workers will be scaled by parallelism.workers
+
+# ============================================================================
+# EXTRA OBJECTS - Additional K8s resources to deploy
+# ============================================================================
+extraObjects: []
+# Example:
+# extraObjects:
+#   - apiVersion: v1
+#     kind: ConfigMap
+#     metadata:
+#       name: example-config
+#     data:
+#       key: value
+
+# ============================================================================
+# WVA (Workload Variant Autoscaler)
+#
+# Installed in *namespaced* mode: the controller watches only the namespace
+# it is deployed in. One controller per unique wva.namespace across rendered
+# stacks. A KEDA ScaledObject is rendered per-stack (28_wva-scaledobject.yaml.j2)
+# so a single controller can manage multiple models in the same namespace.
+# ============================================================================
+wva:
+  enabled: false
+  wellLitPath: inference-scheduling
+  # When blank, resolves to namespace.name at render time. Overridable via
+  # the third component of `--namespace deploy,harness,wva`.
+  namespace: ""
+  image:
+    repository: ghcr.io/llm-d/llm-d-workload-variant-autoscaler
+    tag: auto
+  replicaCount: 1
+  # Chart-level top-level switch (v0.6.0): enables the controller Deployment.
+  controller:
+    enabled: true
+  # When true, the controller only watches the namespace it runs in.
+  namespaceScoped: true
+  metrics:
+    enabled: true
+    port: 8443
+    secure: true
+  prometheus:
+    baseUrl: https://thanos-querier.openshift-monitoring.svc.cluster.local
+    port: 9091
+  # Only variantCost is consumed by rendering (llm-d.ai/variant-cost annotation
+  # on the KEDA ScaledObject). The controller's SLO / saturation tuning comes
+  # from the upstream overlay's ConfigMaps, not from per-model fields here --
+  # no VariantAutoscaling CR is rendered.
+  variantAutoscaling:
+    variantCost: "10.0"
+  # Drives the per-stack KEDA ScaledObject (min/maxReplicaCount, trigger
+  # threshold, HPA behavior). Named "hpa" for parity with the upstream guide.
+  hpa:
+    # Gates the smoketest's autoscaling-aware replica-range check. Does not
+    # affect rendering -- the ScaledObject is gated on wva.enabled.
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 16
+    targetAvgValue: 1
+    behavior:
+      scaleUp:
+        stabilizationWindowSeconds: 120
+        policies:
+          - type: Percent
+            value: 100
+            periodSeconds: 15
+      scaleDown:
+        stabilizationWindowSeconds: 120
+        policies:
+          - type: Percent
+            value: 100
+            periodSeconds: 15
+  vllmService:
+    enabled: true
+    nodePortMin: 30000
+    nodePortMax: 32767
+    interval: 15s
+    scheme: http
+
+# ============================================================================
+# GENERIC KEDA SCALEDOBJECTS
+# ============================================================================
+# Platform-agnostic KEDA autoscaling. Renders one ScaledObject per entry in
+# keda.scaledObjects. Works on any Kubernetes cluster (not gated on OpenShift).
+# KEDA must already be installed. The TriggerAuthentication name used by this
+# path is "keda-prometheus-auth" -- distinct from "prometheus-auth" used by
+# eppKedaSaturation below, so both paths can coexist in the same namespace.
+keda:
+  prometheus:
+    baseUrl: http://prometheus      # host only -- port is appended separately
+    port: 9090
+    authMode: none                  # "none" | "bearer-secret"
+    secretName: ""                  # pre-existing Secret in deploy namespace (bearer-secret only)
+    unsafeSsl: false
+  scaledObjects: []                 # list of ScaledObject definitions; see config/README.md
+
+# ============================================================================
+# EPP+KEDA SATURATION AUTOSCALING
+# ============================================================================
+# Direct KEDA autoscaling using EPP flow-control metrics, without WVA controller.
+# Queries llm_d_epp_flow_control_pool_saturation and llm_d_epp_request_running
+# directly (see scaledObject.triggers below).
+eppKedaSaturation:
+  enabled: false
+  namespace: ""                 # defaults to namespace.name at render time
+  prometheus:
+    baseUrl: https://thanos-querier.openshift-monitoring.svc.cluster.local
+    port: 9091
+  epp:
+    poolName: ""                # InferencePool name; defaults to model_id_label
+    serviceLabelSelector: {}    # matchLabels for EPP Service selector
+    metricsPortName: http-metrics
+    metricsPort: 9090
+    prometheusServiceAccount: thanos-querier
+    prometheusServiceAccountNamespace: openshift-monitoring
+  scaledObject:
+    minReplicas: 1
+    maxReplicas: 10
+    pollingInterval: 15
+    unsafeSsl: true
+    # KEDA Prometheus triggers, fully defined here so new metrics/thresholds
+    # can be added without touching the Jinja. These mirror the upstream llm-d
+    # workload-autoscaling keda-epp-saturation guide; a scenario may redefine
+    # this entire list (e.g. the keda-epp-queue guide). Per entry: query
+    # (required), threshold, and optional name/metricType/activationThreshold.
+    # In `query`, ${poolName} and ${modelName} are substituted at render time.
+    triggers:
+      - name: pool-saturation
+        query: 'max(llm_d_epp_flow_control_pool_saturation{inference_pool="${poolName}"})'
+        threshold: "0.7"
+        activationThreshold: "0"
+      - name: running-requests
+        query: 'sum(llm_d_epp_request_running{model_name="${modelName}"})'
+        threshold: "16"
+        activationThreshold: "0"
+    behavior:
+      scaleUp:
+        stabilizationWindowSeconds: 0
+        policies:
+          - type: Pods
+            value: 1
+            periodSeconds: 180  # adjust to actual pod startup time
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        policies:
+          - type: Pods
+            value: 1
+            periodSeconds: 300
+
+# ============================================================================
+# GATEWAY PROVIDERS
+# ============================================================================
+gatewayProviders:
+  agentgateway:
+    # Chart version managed in chartVersions.agentgateway
+    namespace: agentgateway-system
+    helmRepository: oci://cr.agentgateway.dev/charts/
+
+# ============================================================================
+# LWS (LeaderWorkerSet)
+# ============================================================================
+lws:
+  # Chart version managed in chartVersions.lws
+  namespace: lws-system
+  helmRepository: oci://registry.k8s.io/lws/charts/
+
+# ============================================================================
+# GATEWAY API CRD VERSIONS
+# ============================================================================
+gatewayApiCrd:
+  revision: v1.5.1
+  inferenceExtensionRevision: *gaie_version
+  # Install URLs for the CRD bundles. ``{revision}`` is substituted with
+  # ``revision`` / ``inferenceExtensionRevision`` above at standup time.
+  # Kept here so the URL has a single source of truth (read by
+  # llmdbenchmark/standup/steps/step_02_admin_prerequisites.py).
+  crdUrlTemplate: "github.com/kubernetes-sigs/gateway-api/config/crd?ref={revision}"
+  inferenceExtensionUrlTemplate: "https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/{revision}/manifests.yaml"
+
+# ============================================================================
+# HARNESS CONFIGURATION
+# ============================================================================
+harness:
+  name: inference-perf
+  profile: sanity_random.yaml
+  executable: llm-d-benchmark.sh
+  condaEnvName: inference-perf-env
+  waitTimeout: 3600
+  loadParallelism: 1
+  podLabel: llmdbench-harness-launcher
+  debug: false
+  resources:
+    cpu: 16
+    memory: 32Gi
+  nodeSelector: {}
+  tolerations: []
+  output: local
+  inferencePerf:
+    rayonNumThreads: 4
+
+# ============================================================================
+# EXPERIMENT RUNTIME DEFAULTS
+# ============================================================================
+experiment:
+  resultsDir: /requests
+  analyzeLocally: false
+  workspaceDir: /workspace
+  datasetUrl: ""
+  datasetDir: ""
+
+# ============================================================================
+# RUN DESCRIPTION (submitter-provided; surfaces as run.description/keywords)
+# ============================================================================
+description:
+  text: ""
+  keywords: []
+
+# ============================================================================
+# CONTROL TIMEOUTS
+# ============================================================================
+control:
+  waitTimeout: 900
+  waitPeriod: 10
+  ignoreFailedValidation: true    # When true, capacity planner failures are warnings (deployment continues). Matches bash default.
+  # Name of the K8s Secret that holds the kubeconfig for in-cluster pods.
+  # Matches bash LLMDBENCH_VLLM_COMMON_CONTEXT_SECRET_NAME default.
+  contextSecretName: llmdbench-context
+
+# ============================================================================
+# RELEASE CONFIGURATION
+# ============================================================================
+release: llmdbench
+
+# ============================================================================
+# OPENSHIFT MONITORING
+# ============================================================================
+openshiftMonitoring:
+  userWorkloadMonitoringNamespace: openshift-user-workload-monitoring
+
+# ============================================================================
+# IDLE CLEANUP (Experimental)
+# Automatic GPU reclamation - scales down idle model deployments to 0 replicas
+# when no inference requests are observed over a configurable window.
+#
+# Deploys a namespace-scoped CronJob with its own ServiceAccount + RBAC.
+# Must be explicitly enabled per scenario.
+# ============================================================================
+idleCleanup:
+  enabled: false                  # Experimental: must be explicitly enabled
+  schedule: "0 * * * *"           # Cron schedule (default: hourly)
+  idleWindow: "24h"               # Scale down if zero requests in this window
+  dryRun: false                   # Log decisions without actually scaling
+  prometheusUrl: ""               # Auto-detected for OpenShift; set manually for GKE/other
+  image: ""                       # Container image for CronJob; empty = python:3.11-slim
