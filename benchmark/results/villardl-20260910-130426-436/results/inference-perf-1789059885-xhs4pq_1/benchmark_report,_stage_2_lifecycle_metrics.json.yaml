@@ -1,0 +1,178 @@
+metadata:
+  eid: inference-perf-1789059885-xhs4pq
+metrics:
+  latency:
+    inter_token_latency:
+      mean: 0.0
+      units: s/token
+    normalized_time_per_output_token:
+      mean: 0.0
+      units: s/token
+    request_latency:
+      mean: 0.0
+      units: s
+    time_per_output_token:
+      mean: 0.0
+      units: s/token
+    time_to_first_token:
+      mean: 0.0
+      units: s
+  requests:
+    failures: 210
+    input_length:
+      mean: 0.0
+      units: count
+    output_length:
+      mean: 0.0
+      units: count
+    total: 210
+  throughput:
+    output_tokens_per_sec: 0.0
+    requests_per_sec: 0.0
+    total_tokens_per_sec: 0.0
+  time:
+    duration: 417.76696587505285
+scenario:
+  host:
+    accelerator: []
+    type: []
+  load:
+    args:
+      api:
+        headers: null
+        response_format: null
+        session_id_header_key: null
+        slo_tpot_header: null
+        slo_ttft_header: null
+        slo_unit: null
+        streaming: true
+        type: completion
+      circuit_breakers: null
+      data:
+        conversation_replay: null
+        corpus_file_path: null
+        input_distribution:
+          max: 8192
+          mean: 8192.0
+          min: 8192
+          skew: 0.0
+          std_dev: 0.0
+          total_count: 841
+          type: normal
+          variance: null
+        multimodal: null
+        otel_trace_replay: null
+        output_distribution:
+          max: 256
+          mean: 256.0
+          min: 256
+          skew: 0.0
+          std_dev: 0.0
+          total_count: 841
+          type: normal
+          variance: null
+        path: null
+        shared_prefix: null
+        trace: null
+        type: random
+        visionarena: null
+        weka_trace_replay: null
+      load:
+        base_seed: 1789059887550
+        circuit_breakers: []
+        interval: 1.0
+        lora_traffic_split: null
+        num_workers: 64
+        request_timeout: null
+        stages:
+        - concurrency_level: null
+          duration: 300
+          num_requests: null
+          rate: 0.15
+        - concurrency_level: null
+          duration: 300
+          num_requests: null
+          rate: 0.3
+        - concurrency_level: null
+          duration: 420
+          num_requests: null
+          rate: 0.5
+        - concurrency_level: null
+          duration: 600
+          num_requests: null
+          rate: 0.8
+        - concurrency_level: null
+          duration: 600
+          num_requests: null
+          rate: 1.4
+        - concurrency_level: null
+          duration: 300
+          num_requests: null
+          rate: 0.5
+        - concurrency_level: null
+          duration: 900
+          num_requests: null
+          rate: 0.15
+        sweep: null
+        trace: null
+        type: constant
+        worker_max_concurrency: 100
+        worker_max_tcp_connections: 2500
+      metrics: null
+      report:
+        goodput: null
+        prometheus:
+          per_stage: false
+          summary: true
+        request_lifecycle:
+          max_error_messages: 100
+          per_adapter: true
+          per_adapter_stage: false
+          per_request: true
+          per_stage: true
+          percentiles:
+          - 0.1
+          - 1.0
+          - 5.0
+          - 10.0
+          - 25.0
+          - 50.0
+          - 75.0
+          - 90.0
+          - 95.0
+          - 99.0
+          - 99.9
+          summary: true
+          use_server_output_tokens: false
+        session_lifecycle:
+          per_session: false
+          per_stage: true
+          summary: true
+      server:
+        api_key: null
+        base_url: http://172.30.126.130:80
+        cert_path: null
+        ignore_eos: true
+        key_path: null
+        model_name: Qwen/Qwen3-32B
+        type: vllm
+      storage:
+        google_cloud_storage: null
+        local_storage:
+          path: /requests/inference-perf-1789059885-xhs4pq_1
+          report_file_prefix: null
+        simple_storage_service: null
+      tokenizer:
+        pretrained_model_name_or_path: Qwen/Qwen3-32B
+        token: null
+        trust_remote_code: null
+    metadata:
+      stage: 2
+    name: inference-perf
+  model:
+    name: Qwen/Qwen3-32B
+  platform:
+    engine: []
+    metadata:
+      inferenceScheduler: {}
+version: '0.1'

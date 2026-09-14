@@ -1421,10 +1421,18 @@ function wireHarnessWorkloadSelect(harnessSelectId, workloadSelectId) {
   function populate() {
     const h = META.harnesses.find(x => x.id === document.getElementById(harnessSelectId).value);
     document.getElementById(workloadSelectId).innerHTML =
-      (h ? h.workloads : []).map(w => `<option value="${esc(w)}">${esc(w)}</option>`).join('') || '<option value="">(none found)</option>';
+      (h ? h.workloads : []).map(w => `<option value="${esc(w.id)}">${esc(w.id)}${w.local ? ' (local)' : ''}</option>`).join('') || '<option value="">(none found)</option>';
   }
   document.getElementById(harnessSelectId).addEventListener('change', populate);
   populate();
+}
+
+// Looks up a workload's discovery entry (id/local/path) from META, given the harness id and
+// workload id a <select> holds -- used to render the right CLI flag (--workload-file-path vs
+// -w) in the launch preview for a repo-local workload (see _discover_harnesses).
+function findWorkload(harnessId, workloadId) {
+  const h = META && META.harnesses.find(x => x.id === harnessId);
+  return h ? h.workloads.find(w => w.id === workloadId) : null;
 }
 
 function buildLaunchCard(specId) {
@@ -1504,7 +1512,12 @@ function wireSpecDetailLaunchHandlers(specId) {
 function commandLine(verb, t) {
   const parts = ['llmdbenchmark', verb, '--spec', t.spec, '--cluster-config', t.clusterConfig,
     '--workspace', 'benchmark/results', '-p', t.namespace || '<namespace>'];
-  if (verb === 'run') parts.push('-l', t.harness || '<harness>', '-w', t.workload || '<workload>');
+  if (verb === 'run') {
+    parts.push('-l', t.harness || '<harness>');
+    const w = t.harness && t.workload ? findWorkload(t.harness, t.workload) : null;
+    if (w && w.local) parts.push('--workload-file-path', w.path);
+    else parts.push('-w', t.workload || '<workload>');
+  }
   if (t.dryRun && verb !== 'teardown') parts.push('--dry-run');
   return parts.join(' ');
 }

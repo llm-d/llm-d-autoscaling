@@ -1,0 +1,111 @@
+(APIServer pid=1) INFO 09-10 14:08:35 [api_utils.py:345] 
+(APIServer pid=1) INFO 09-10 14:08:35 [api_utils.py:345]        █     █     █▄   ▄█
+(APIServer pid=1) INFO 09-10 14:08:35 [api_utils.py:345]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.27.0
+(APIServer pid=1) INFO 09-10 14:08:35 [api_utils.py:345]   █▄█▀ █     █     █     █  model   /model
+(APIServer pid=1) INFO 09-10 14:08:35 [api_utils.py:345]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=1) INFO 09-10 14:08:35 [api_utils.py:345] 
+(APIServer pid=1) INFO 09-10 14:08:35 [api_utils.py:273] non-default args: {'model_tag': '/model', 'host': '0.0.0.0', 'port': 8200, 'disable_uvicorn_access_log': True, 'model': '/model', 'tokenizer': 'Qwen/Qwen3-32B', 'max_model_len': 8192, 'enforce_eager': True, 'served_model_name': ['Qwen/Qwen3-32B'], 'load_format': 'dummy', 'gpu_memory_utilization': 0.5, 'kv_transfer_config': KVTransferConfig(kv_connector='SimulatedNixlConnector', engine_id='cce35a59-e645-4f26-9eae-2fcb93f02c4e', kv_buffer_device='cpu', kv_buffer_size=1000000000.0, kv_role='kv_consumer', kv_rank=None, kv_parallel_size=1, kv_ip='127.0.0.1', kv_port=14579, kv_connector_extra_config={'bandwidth_gbps': 100, 'handshake_ms': 2}, kv_connector_module_path=None, enable_permute_local_kv=False, kv_load_failure_policy='fail')}
+(APIServer pid=1) WARNING 09-10 14:08:35 [envs.py:2128] Unknown vLLM environment variable detected: VLLM_TENSOR_PARALLELISM
+(APIServer pid=1) WARNING 09-10 14:08:35 [envs.py:2128] Unknown vLLM environment variable detected: VLLM_IS_DECODE
+(APIServer pid=1) WARNING 09-10 14:08:35 [envs.py:2128] Unknown vLLM environment variable detected: VLLM_MAX_NUM_SEQ
+(APIServer pid=1) WARNING 09-10 14:08:35 [envs.py:2128] Unknown vLLM environment variable detected: VLLM_MAX_MODEL_LEN
+(APIServer pid=1) WARNING 09-10 14:08:35 [envs.py:2128] Unknown vLLM environment variable detected: VLLM_BLOCK_SIZE
+(APIServer pid=1) WARNING 09-10 14:08:35 [envs.py:2128] Unknown vLLM environment variable detected: VLLM_ACCELERATOR_MEM_UTIL
+(APIServer pid=1) WARNING 09-10 14:08:35 [envs.py:2128] Unknown vLLM environment variable detected: VLLM_METRICS_PORT
+(APIServer pid=1) WARNING 09-10 14:08:35 [envs.py:2128] Unknown vLLM environment variable detected: VLLM_LOAD_FORMAT
+(APIServer pid=1) WARNING 09-10 14:08:35 [envs.py:2128] Unknown vLLM environment variable detected: VLLM_MAX_NUM_BATCHED_TOKENS
+(APIServer pid=1) WARNING 09-10 14:08:35 [envs.py:2128] Unknown vLLM environment variable detected: VLLM_INFERENCE_PORT
+(APIServer pid=1) INFO 09-10 14:08:51 [model.py:645] Resolved architecture: SimulatedForCausalLM
+(APIServer pid=1) INFO 09-10 14:08:51 [model.py:1883] Using max model len 8192
+(APIServer pid=1) WARNING 09-10 14:08:51 [vllm.py:1194] Enforce eager set, disabling torch.compile and CUDAGraphs. This is equivalent to setting -cc.mode=none -cc.cudagraph_mode=none
+(APIServer pid=1) WARNING 09-10 14:08:51 [vllm.py:1247] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(APIServer pid=1) INFO 09-10 14:08:51 [kernel.py:306] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'])
+(APIServer pid=1) WARNING 09-10 14:08:51 [cpu.py:134] Reset SSM cache type to float32 for AMX mamba attention.
+(APIServer pid=1) WARNING 09-10 14:08:51 [vllm.py:1648] Turning off hybrid kv cache manager because `--kv-transfer-config` selects a KV connector that does not support it. Impact: hybrid SSM models (e.g. Jamba, Bamba) require HMA and will fail at startup without it; models with sliding window attention will run with reduced performance. To add HMA support to a KV connector, subclass `SupportsHMA` defined in kv_connector/v1/base.py (for MultiConnector, all child connectors must support HMA).
+(APIServer pid=1) INFO 09-10 14:08:51 [compilation.py:329] Enabled custom fusions: norm_quant, act_quant
+(EngineCore pid=408) INFO 09-10 14:09:00 [core.py:121] Initializing a V1 LLM engine (v0.27.0) with config: model='/model', speculative_config=None, tokenizer='Qwen/Qwen3-32B', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=8192, download_dir=None, load_format=dummy, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=True, quantization=None, quantization_config=None, enforce_eager=True, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cpu, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=0, served_model_name=Qwen/Qwen3-32B, enable_prefix_caching=True, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['all'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': None, 'compile_ranges_endpoints': [2048], 'inductor_compile_config': {'enable_auto_functionalized_v2': False}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': None, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='auto', linear_backend='auto')
+(EngineCore pid=408) INFO 09-10 14:09:00 [multiproc_executor.py:140] DP group leader: node_rank=0, node_rank_within_dp=0, master_addr=127.0.0.1, mq_connect_ip=10.128.6.226 (local), world_size=1, local_world_size=1
+(EngineCore pid=408) INFO 09-10 14:09:00 [ompmultiprocessing.py:185] OpenMP thread binding info: 
+(EngineCore pid=408) INFO 09-10 14:09:00 [ompmultiprocessing.py:185] 	VLLM_CPU_OMP_THREADS_BIND='0-3', auto_setup=False, skip_setup=False
+(EngineCore pid=408) INFO 09-10 14:09:00 [ompmultiprocessing.py:185] 	local_world_size=1, reserve_cpu_num=2
+(EngineCore pid=408) INFO 09-10 14:09:00 [ompmultiprocessing.py:185] 	local_rank=0, core ids=[0, 1, 2, 3]
+(EngineCore pid=408) INFO 09-10 14:09:00 [ompmultiprocessing.py:185] 	reserved_cpus=[]
+[W910 14:09:01.220530362 utils.cpp:41] Warning: numa_migrate_pages failed. errno: 1 (function init_cpu_memory_env)
+[W910 14:09:01.220589703 utils.cpp:68] Warning: NUMA binding: Using MEMBIND policy for memory allocation on the NUMA nodes (0). Memory allocations will be strictly bound to these NUMA nodes. (function init_cpu_memory_env)
+(Worker pid=414) INFO 09-10 14:09:01 [parallel_state.py:1640] world_size=1 rank=0 local_rank=0 distributed_init_method=tcp://127.0.0.1:44003 backend=gloo
+(Worker pid=414) INFO 09-10 14:09:01 [parallel_state.py:1977] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank N/A, EPLB rank N/A
+(Worker pid=414) INFO 09-10 14:09:02 [model_runner.py:308] Loading model from scratch...
+(Worker pid=414) INFO 09-10 14:09:02 [selector.py:202] Using HND KV cache layout for CPU_ATTN backend.
+(Worker pid=414) INFO 09-10 14:09:04 [model_runner.py:329] Model loading took 0.0 GiB and 2.474713 seconds
+(Worker pid=414) INFO 09-10 14:09:04 [model_runner.py:13] Warming up model for the compilation...
+(Worker pid=414) INFO 09-10 14:09:14 [model_runner.py:16] Warming up done.
+(Worker pid=414) INFO 09-10 14:09:14 [cpu_worker.py:248] Explicitly set (15.0/20.0) GiB for KV cache on node 0.
+(EngineCore pid=408) INFO 09-10 14:09:14 [kv_cache_utils.py:2235] GPU KV cache size: 61,440 tokens
+(EngineCore pid=408) INFO 09-10 14:09:14 [kv_cache_utils.py:2236] Maximum concurrency for 8,192 tokens per request: 7.50x
+(Worker pid=414) INFO 09-10 14:09:14 [factory.py:62] Creating v1 connector with name: SimulatedNixlConnector and engine_id: cce35a59-e645-4f26-9eae-2fcb93f02c4e
+(Worker pid=414) WARNING 09-10 14:09:14 [base.py:202] Initializing KVConnectorBase_V1. This API is experimental and subject to change in the future as we iterate the design.
+(EngineCore pid=408) INFO 09-10 14:09:15 [core.py:355] init engine (profile, create kv cache, warmup model) took 11.43 s
+(EngineCore pid=408) INFO 09-10 14:09:15 [factory.py:62] Creating v1 connector with name: SimulatedNixlConnector and engine_id: cce35a59-e645-4f26-9eae-2fcb93f02c4e
+(EngineCore pid=408) WARNING 09-10 14:09:15 [base.py:202] Initializing KVConnectorBase_V1. This API is experimental and subject to change in the future as we iterate the design.
+(EngineCore pid=408) INFO 09-10 14:09:16 [kernel.py:306] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'])
+(APIServer pid=1) INFO 09-10 14:09:16 [api_server.py:678] Supported tasks: ['generate']
+(APIServer pid=1) WARNING 09-10 14:09:16 [__init__.py:36] SECURITY WARNING: Development endpoints are enabled! This should NOT be used in production!
+(APIServer pid=1) WARNING 09-10 14:09:16 [__init__.py:124] Found endpoint plugin(s) ['sim_tuner'] but VLLM_PLUGINS is not set. Endpoint plugins add HTTP routes and must be explicitly allowlisted via VLLM_PLUGINS to be loaded.
+(APIServer pid=1) INFO 09-10 14:09:19 [hf.py:540] Detected the chat template content format to be 'string'. You can set `--chat-template-content-format` to override this.
+(APIServer pid=1) INFO 09-10 14:09:19 [api_server.py:682] Starting vLLM server on http://0.0.0.0:8200
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:37] Available routes are:
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /openapi.json, Methods: GET, HEAD
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /docs, Methods: GET, HEAD
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /docs/oauth2-redirect, Methods: GET, HEAD
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /redoc, Methods: GET, HEAD
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /load, Methods: GET
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /version, Methods: GET
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /health, Methods: GET
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /metrics, Methods: GET
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /tokenize, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /detokenize, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/models, Methods: GET
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /ping, Methods: GET
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /ping, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /invocations, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /reset_prefix_cache, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /reset_mm_cache, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /reset_encoder_cache, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /pause, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /resume, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /abort_requests, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /is_paused, Methods: GET
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /init_weight_transfer_engine, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /start_weight_update, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /start_draft_weight_update, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /update_weights, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /finish_weight_update, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /update_weight_version, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /weight_info, Methods: GET
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /get_world_size, Methods: GET
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /collective_rpc, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /server_info, Methods: GET
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /sleep, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /wake_up, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /is_sleeping, Methods: GET
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/chat/completions, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/chat/completions/batch, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/responses, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/responses/{response_id}, Methods: GET
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/responses/{response_id}/cancel, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/completions, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/messages, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/messages/count_tokens, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /generative_scoring, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /scale_elastic_ep, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /is_scaling_elastic_ep, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/chat/completions/render, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/completions/render, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/chat/completions/derender, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /v1/completions/derender, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:46] Route: /inference/v1/generate, Methods: POST
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:99] API server: waiting for HTTP server to start
+(APIServer pid=1) INFO:     Started server process [1]
+(APIServer pid=1) INFO:     Waiting for application startup.
+(APIServer pid=1) INFO:     Application startup complete.
+(APIServer pid=1) INFO 09-10 14:09:19 [launcher.py:105] API server: HTTP server started

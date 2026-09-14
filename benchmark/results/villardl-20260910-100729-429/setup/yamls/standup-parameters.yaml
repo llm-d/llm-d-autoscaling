@@ -1,0 +1,40 @@
+apiVersion: v1
+data:
+  accelerator_model: auto
+  chart_version_gaie: ""
+  chart_version_inference_pool: v1.6.0
+  chart_version_llm_d_infra: v1.4.0
+  chart_version_modelservice: v0.4.16
+  cluster_name: api.pokprod001.ete14.res.ibm.com
+  decode_data_local_parallelism: "1"
+  decode_data_parallelism: "1"
+  decode_replicas: "1"
+  decode_tensor_parallelism: "1"
+  decode_workers_parallelism: "1"
+  deploy_methods: modelservice
+  deployed_at: "2026-09-10T14:09:49Z"
+  deployed_by: villardl
+  gateway_class: epponly
+  harness_namespace: lionel-bench-model-sim-32b-pd-token
+  image_vllm: vllm/vllm-openai-cpu:v0.27.0-x86_64
+  inference_port: "8000"
+  model_huggingface_id: Qwen/Qwen3-32B
+  model_name: Qwen/Qwen3-32B
+  model_short_name: qwen3-32b
+  multinode_enabled: "false"
+  namespace: lionel-bench-model-sim-32b-pd-token
+  platform_type: OpenShift
+  prefill_data_local_parallelism: "1"
+  prefill_data_parallelism: "1"
+  prefill_enabled: "true"
+  prefill_replicas: "1"
+  prefill_tensor_parallelism: "1"
+  prefill_workers_parallelism: "1"
+  release: llmdbench
+  tool_name: llm-d-benchmark
+  tool_version: 0.8.0
+kind: ConfigMap
+metadata:
+  creationTimestamp: null
+  name: llm-d-benchmark-standup-parameters
+  namespace: lionel-bench-model-sim-32b-pd-token
