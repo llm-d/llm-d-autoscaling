@@ -6,6 +6,9 @@ the KEDA manifest blueprints and the test bed that evaluates them; see the
 
 ## KEDA blueprints and evaluation
 
+- **[Autoscaling development workflow](developer-guide/autoscaling-workflow.md)** —
+  why benchmark-first, the strategy menu, and how a strategy moves from a local
+  experiment to a shipped upstream guide.
 - **[Benchmark test bed](../benchmark/README.md)** — how specifications,
   backend-agnostic scenarios, and cluster-config overlays compose, and the
   `standup → smoketest → run → teardown` lifecycle.
