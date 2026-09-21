@@ -8,6 +8,8 @@ parms = "parms"
 # Short code fragments / false positives
 ot = "ot"
 vas = "vas"
+# Local identifier for "throughput" in benchmark/hack/report.html
+thr = "thr"
 # "mis-" prefix used as a hyphenated modifier (mis-classified, mis-attributed)
 mis = "mis"
 # Valid English variant (unparseable vs unparsable)
@@ -25,5 +27,11 @@ throughtput = "throughtput"
 extend-exclude = [
   "go.mod",
   "go.sum",
+  # Captured llmdbenchmark run artifacts: verbatim copies of the harness
+  # scripts and rendered manifests a run executed, kept as the record of that
+  # run. They are not this repository's source -- the originals live in
+  # llm-d-benchmark -- so rewriting them would falsify the record, and every
+  # new run re-imports the same spellings. Fixes belong upstream.
+  "benchmark/results/**",
 ]
 ignore-dot = true
