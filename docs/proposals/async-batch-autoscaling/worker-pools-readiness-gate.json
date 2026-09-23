@@ -1,0 +1,22 @@
+[
+  {
+    "id": "model-a",
+    "workers": 8,
+    "gate_type": "tier-priority-admission",
+    "gate_params": {
+      "tier_label": "tier",
+      "saturation_gate": "prometheus-query",
+      "saturation_gate_params": "{\"pool\":\"llm-d-router\",\"query\":\"clamp_max(sum(llm_d_epp_ready_endpoints{name=\\\"llm-d-router\\\",namespace=\\\"llm-d-async\\\"}) or vector(0), 1)\",\"fallback\":\"0.0\"}"
+    }
+  },
+  {
+    "id": "model-b",
+    "workers": 8,
+    "gate_type": "tier-priority-admission",
+    "gate_params": {
+      "tier_label": "tier",
+      "saturation_gate": "prometheus-query",
+      "saturation_gate_params": "{\"pool\":\"llm-d-router\",\"query\":\"clamp_max(sum(llm_d_epp_ready_endpoints{name=\\\"llm-d-router\\\",namespace=\\\"llm-d-async\\\"}) or vector(0), 1)\",\"fallback\":\"0.0\"}"
+    }
+  }
+]

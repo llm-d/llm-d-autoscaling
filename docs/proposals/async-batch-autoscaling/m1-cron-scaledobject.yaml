@@ -1,0 +1,27 @@
+# M1 — Scheduled batch window: scale the model server 0<->1 on a cron
+# schedule. Requests enqueued outside the window are held in the broker by
+# llm-d-async's fail-closed dispatch gate (see worker-pools-budget-gate.json)
+# and drain when the window opens.
+#
+# Before applying: set timezone/start/end for your schedule. On clusters with
+# on-demand accelerator provisioning (DWS flex-start, spot), start the window
+# one measured cold-start early — provisioning happens inside the window.
+# GPU-minutes budget = window length + cooldownPeriod.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vllm-batch-window
+  namespace: llm-d-async
+spec:
+  scaleTargetRef:
+    name: vllm
+  minReplicaCount: 0
+  maxReplicaCount: 1
+  cooldownPeriod: 60 # window end is authoritative; don't idle GPUs for the 300s default
+  triggers:
+  - type: cron
+    metadata:
+      timezone: Etc/UTC
+      start: "0 2 * * *"
+      end: "0 4 * * *"
+      desiredReplicas: "1"
