@@ -19,18 +19,24 @@ gates, and the growing backlog is itself the scale-up signal.
 
 The work is staged as three milestones, each a self-contained KEDA blueprint:
 
-1. **M1 — Scheduled windows (Cron, 0↔1)**: scale the model server up during a
-   configured time window and back to zero outside it, with llm-d-async
-   configured to hold requests while the pool has no ready backends.
+1. **M1 — Scheduled windows (Cron, 0↔N)**: scale the model server up to a
+   fixed operator-chosen replica count during a configured time window and
+   back to zero outside it, with llm-d-async configured to hold requests while
+   the pool has no ready backends.
 2. **M2 — Backlog-driven (0↔N)**: scale replicas proportionally to broker
    backlog; return to zero when the queue drains and in-flight work completes.
 3. **M3 — Deadline-proximity-driven**: compute the number of replicas required
    to meet outstanding deadlines — given a measured cold-start latency and
    per-replica throughput — and wake the pool at the latest safe moment.
 
-No new controllers and no llm-d-async code changes are required through M3;
-everything is expressed as KEDA `ScaledObject`s, Prometheus recording rules,
-and llm-d-async gate configuration.
+The component boundary is deliberate: **llm-d-async (the producer) owns any
+scaling logic KEDA cannot cleanly express, and emits it as a single derived
+metric; KEDA (the consumer) only actuates.** M1 and M2 need no llm-d-async
+code changes — they scale on raw metrics with plain single-trigger KEDA. M3's
+deadline math is the one piece that needs cross-metric composition with tuning
+constants, so the producer computes it and exposes one gauge
+(`llm_d_async_async_deadline_required_replicas`) that KEDA consumes as a
+threshold-1 passthrough. No new controllers are introduced at any milestone.
 
 ## Motivation
 
@@ -72,11 +78,14 @@ posture for a workload that runs a few minutes per hour wastes >90% of spend.
 
 ### Non-Goals
 
-- A deadline-aware planner **controller** (exact earliest-deadline-first
-  feasibility, per-item scheduling, `redis-leased-rate` lease writing). M3
-  deliberately approximates this in pure PromQL; the controller is future work.
+- A deadline-aware planner **controller** that owns *actuation* — writing
+  `redis-leased-rate` leases, pacing admission, deciding replica counts.
+  M3 keeps actuation in KEDA and adds only a producer-side derived *signal*;
+  the controller is a later boundary shift (future work).
 - Multi-pool or multi-model bin-packing and cost-aware variant selection.
-- Changes to llm-d-async, llm-d-router, or vLLM code.
+- Changes to llm-d-router or vLLM code. The only llm-d-async change in scope is
+  M3's derived-metric emission plus its config (`deadline_scaling.*`); M1 and
+  M2 need no llm-d-async code change.
 - Autoscaling the llm-d-async processor itself (it is CPU-cheap and can stay
   at fixed replicas; see `docs/operations/async-processor.md` in llm-d).
 - Scaling on token-weighted work estimates (future work; requires calibration).
@@ -120,6 +129,39 @@ Two properties make this loop sound:
    growing — while the model server is at zero replicas, which is precisely
    when interactive-path metrics (vLLM, EPP) go silent.
 
+### Component boundaries
+
+The design splits responsibility along one line: **the producer computes,
+the consumer actuates.** KEDA's Prometheus scaler evaluates one query per
+trigger and cannot do arithmetic *across* triggers, so any signal that
+requires composing several metrics with tuning constants must be composed
+before KEDA sees it. That composition belongs in llm-d-async, which already
+polls the broker and holds the configuration.
+
+| Layer | Owns | Does **not** own |
+| --- | --- | --- |
+| **Producer — llm-d-async** | The queue and dispatch gates (hold-back); all raw metrics; and the one *derived* metric M3 needs (`deadline_required_replicas`), computed from its own broker polls plus the tuning constants `R`, `C`, `maxReplicas`. | Actuation. It never scales anything or writes replica counts to the cluster; it only publishes numbers. |
+| **Consumer — KEDA / HPA** | Actuation: one `ScaledObject` per scale target, plain single-trigger scalers, and the scale-up/down behavior (stabilization, cooldown, activation). | Cross-metric math. It reads one number per trigger and applies a threshold. |
+| **Interface — the metric contract** | The stable boundary. Raw metrics are the durable interface every consumer may depend on; the derived metric is producer-side *policy* that can evolve without breaking raw-metric consumers. | — |
+
+Consequences of drawing the line here:
+
+- **M1 and M2 require no llm-d-async code change** — they scale on raw metrics
+  (M2 sums three raw series in a single PromQL query, which one KEDA trigger
+  handles). The raw metrics stay exposed precisely so this simple path never
+  depends on producer-side policy.
+- **M3 requires a producer-side feature**: llm-d-async computes the
+  required-replica count and exposes it as `deadline_required_replicas`. This
+  is a metric-emission + config change, not a controller — KEDA still owns the
+  scaling decision. It is the one place the "no code change" property is
+  traded away, in exchange for keeping the deadline math out of brittle
+  Prometheus recording rules and next to the data it needs.
+- The `redis-leased-rate` planner controller (Future work) sits one step
+  further along the *same* axis — it would move actuation *policy* (admission
+  pacing, desired replicas via a lease) into a dedicated component. This
+  proposal stops at "producer emits a signal, KEDA actuates"; the controller
+  is a later, larger boundary shift, not a prerequisite.
+
 ### User stories
 
 #### Story 1: Hourly recommendation refresh
@@ -157,16 +199,35 @@ The blueprints depend on the following llm-d-async series (subsystem
 `queue_name`, `pool_name`). This section is the compatibility promise the
 blueprints need from llm-d-async maintainers.
 
+**Raw metrics (the stable interface).** These describe queue state and are the
+durable contract every consumer may depend on. M1 and M2 use only these.
+
 | Series | Type | Meaning |
 | --- | --- | --- |
 | `llm_d_async_async_broker_backlog` | gauge | Undelivered/pending messages held by the broker queue (Redis `ZCARD`), polled every `--metrics-backlog-poll-interval` (default 15s). |
 | `llm_d_async_async_broker_backlog_source_available` | gauge | 1 when the last backlog read succeeded. A zero backlog is trustworthy **only** when this is 1; every query below joins on it. |
-| `llm_d_async_async_deadline_proximity_millis` | snapshot histogram | Per-poll distribution of milliseconds remaining until deadline for items still queued. Bucket boundaries (ms): 0, 1s, 5s, 15s, 30s, 1m, 2m, 5m, 10m, 30m, 1h, 2h, 6h, 24h. `le="0"` counts items already past deadline; cumulative buckets therefore include expired items in every horizon. Counts are exact (`ZCOUNT`), not sampled. **Not monotonic — never apply `rate()`/`increase()`.** Redis sorted-set transport only. |
+| `llm_d_async_async_deadline_proximity_millis` | snapshot histogram | Per-poll distribution of milliseconds remaining until deadline for items still queued. Bucket boundaries (ms): 0, 1s, 5s, 15s, 30s, 1m, 2m, 5m, 10m, 30m, 1h, 2h, 6h, 24h. `le="0"` counts items already past deadline; cumulative buckets therefore include expired items in every horizon. Counts are exact (`ZCOUNT`), not sampled. **Not monotonic — never apply `rate()`/`increase()`.** Redis sorted-set transport only. Consumed by the producer itself to compute the derived metric below; also exposed raw for inspection. |
 | `llm_d_async_async_queue_depth` | gauge | Requests pulled from the broker and buffered in-process awaiting a free worker. Summed alongside backlog and inflight so the metric stays above zero while work is buffered. |
 | `llm_d_async_async_inflight_requests` | gauge | Requests dispatched and awaiting completion. Used to hold off scale-to-zero while work is in flight. |
 | `llm_d_async_async_gate_decisions_total{reason}` | counter | Observability for hold-back (`reason="gate_closed"` climbing while the pool is at zero is the expected signature). |
 | `llm_d_async_async_gate_wait_requeues_total` | counter | Increments each time a gate-waiting request is requeued after `--gate-wait-timeout`. The only signal for the otherwise-invisible gate-wait layer (see the blind spot below). |
 | `llm_d_async_async_exceeded_deadline_requests_total` | counter | The failure metric every milestone's acceptance criteria reference. |
+
+**Derived metric (producer-side policy, M3 only).** Composed by llm-d-async
+from the deadline histogram plus configuration; it is *policy*, not raw state,
+and may change independently of the raw metrics above.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `llm_d_async_async_deadline_required_replicas` | gauge | Replicas required to clear queued work before its deadlines, `max` over horizons of `B(t) / (R·(t−C))` (see M3). Computed by the producer from its own bucket `ZCOUNT`s and the configured constants. KEDA consumes it as a threshold-1 passthrough. Emitted per `pool_name` (a KEDA query `max()`/`sum()`es to the scale target). |
+
+Producer configuration for the derived metric (proposed llm-d-async
+pool/queue config keys, alongside the existing gate params):
+`deadline_scaling.throughput_rps` (`R`), `deadline_scaling.cold_start_seconds`
+(`C`), `deadline_scaling.max_replicas`, and an optional
+`deadline_scaling.safety_factor` on `(t−C)`. Keeping these in the producer is
+the point of the refactor: the tuning constants live with the component that
+computes the signal, not scattered across Prometheus recording rules.
 
 Operational guardrail shipped with the blueprints: alert when
 `llm_d_async_async_broker_backlog_source_available == 0` for more than 5
@@ -299,12 +360,15 @@ CPU-only and cheap relative to a single accelerator.
 
 ## Design Details
 
-### Milestone 1 — KEDA Cron trigger, 0↔1 scaling
+### Milestone 1 — KEDA Cron trigger, 0↔N scaling
 
 Simplest case, and the foundation the later milestones build on: prove that a
 cluster can run with the model server at zero replicas most of the time,
 accept and hold inference requests throughout, and serve them during a
-scheduled window.
+scheduled window. The window holds a **fixed** replica count `N` that the
+operator sizes for the expected batch — the cron trigger's `desiredReplicas`
+is any integer, so 0↔N costs nothing beyond 0↔1. `N` is a static schedule
+input here, not derived from backlog; backlog-proportional sizing is M2.
 
 **Deliverables**
 - Gate configuration change (above) so the pool holds requests at zero
@@ -322,7 +386,7 @@ spec:
   scaleTargetRef:
     name: vllm
   minReplicaCount: 0
-  maxReplicaCount: 1
+  maxReplicaCount: 3        # ceiling; must be >= desiredReplicas
   cooldownPeriod: 60        # window end is authoritative; don't idle GPUs 300s
   triggers:
   - type: cron
@@ -330,7 +394,7 @@ spec:
       timezone: Etc/UTC
       start: "0 2 * * *"
       end: "0 4 * * *"
-      desiredReplicas: "1"
+      desiredReplicas: "3"  # fixed N for the window; size for the expected batch
 ```
 
 **Design notes and pitfalls**
@@ -343,7 +407,10 @@ spec:
   (`whenUnsatisfiable: DoNotScaleUp`). Start the window one measured
   cold-start early relative to when work must start, and alert on pods
   Pending longer than the expected provisioning time. The measured cold-start
-  distribution collected here becomes M3's `C` constant.
+  distribution collected here becomes M3's `C` constant. With `N > 1`, all
+  `N` replicas are requested at once at window start, so provisioning `N`
+  nodes may take longer and is more likely to hit accelerator quota — size
+  `N` (and `maxReplicaCount`) against available capacity.
 - *Deadlines vs. windows*: requests enqueued with deadlines that expire before
   the window opens will (correctly) complete as `DEADLINE_EXCEEDED` — producer
   deadlines must account for the schedule. This is also the negative test.
@@ -354,7 +421,7 @@ spec:
    `gate_wait_requeues_total` climb, nothing reaches the router; no request
    is failed or lost. (`broker_backlog` itself only moves once the burst
    exceeds the pool's worker count — see the gate-wait blind spot above.)
-2. At window start, replicas 0→1, the backlog drains to zero, and results are
+2. At window start, replicas 0→N, the backlog drains to zero, and results are
    delivered to the result queue.
 3. After window end + cooldown, replicas return to 0.
 4. `exceeded_deadline_requests_total` is unchanged for requests whose
@@ -496,32 +563,44 @@ activation threshold at (approximately) the latest safe scale-up time. This
 single knob is the "minimize footprint" behavior — the margin below 1.0
 absorbs the 15s broker poll, the KEDA poll interval, and bucket quantization.
 
-**Where the math lives.** PromQL cannot lift the `le` label into arithmetic,
-so the computation is a Prometheus recording-rule chain (the same pattern as
-the `slo-aware` guide): one rule per feasible horizon emitting
-`asyncq:deadline_replicas_required{horizon="…"}`, one rule for the infeasible
-horizon (`≤ C`), and a `max()` rollup that the ScaledObject queries with
-`threshold: "1"` / `metricType: AverageValue` (the metric *is* desired
-replicas). See
-[`async-batch-autoscaling/m3-deadline-prometheusrule.yaml`](async-batch-autoscaling/m3-deadline-prometheusrule.yaml)
-and
+**Where the math lives — the producer.** PromQL cannot lift the `le` label
+into arithmetic, and KEDA cannot compose it across triggers, so the
+computation lives in llm-d-async, next to the broker polls that already
+produce the bucket counts. Each poll, the producer evaluates `r(t)` for every
+feasible horizon from its own `ZCOUNT`s, takes the `max`, and publishes the
+result as `llm_d_async_async_deadline_required_replicas` (per `pool_name`).
+The tuning constants `R`, `C`, `max_replicas`, and the optional safety factor
+are producer configuration (see the metrics contract). KEDA then scales on one
+plain trigger — `metricType: AverageValue`, `threshold: "1"` — the metric *is*
+desired replicas. See
 [`async-batch-autoscaling/m3-deadline-scaledobject.yaml`](async-batch-autoscaling/m3-deadline-scaledobject.yaml).
-Constants `R` and `C` appear as literals with a header table in the rule file,
-per repository convention. The rule file's labels must match the target
-Prometheus's `ruleSelector` — this is the classic silent-failure mode of the
-recording-rule pattern.
+
+This is the boundary refactor: the deadline math moves out of a Prometheus
+recording-rule chain and into the component that owns both the data and the
+constants. It removes two footguns of the recording-rule approach — the
+`ruleSelector` silent-failure mode, and the `max_replicas` literal duplicated
+between the rule and the ScaledObject — since both now live once, in producer
+config. A recording-rule implementation of the same formula remains documented
+as a **fallback** for clusters pinned to an llm-d-async build that predates the
+derived metric (see
+[`async-batch-autoscaling/m3-deadline-prometheusrule.yaml`](async-batch-autoscaling/m3-deadline-prometheusrule.yaml)).
 
 **Degradation design.** The M3 ScaledObject keeps the M2 backlog trigger as a
 second trigger. KEDA ORs trigger activity and the HPA takes the max of their
-replica proposals, so a broken rule chain (rules not picked up, Prometheus
-restart) degrades to backlog-driven scaling — never to "asleep past a
-deadline". The M2 alert on `source_available` carries over unchanged.
+replica proposals, so if the derived metric goes stale or absent (producer
+restart, older build) scaling degrades to backlog-driven — never to "asleep
+past a deadline". The M2 alert on `source_available` carries over unchanged;
+add a companion alert on `absent(llm_d_async_async_deadline_required_replicas)`.
 
 **Known limitations (accepted for M3, listed for the record)**
-- *Bucket quantization*: an item due in 61 minutes is only constrained at the
-  2-hour boundary and can be up to one bucket-width late. Mitigations: a
-  safety divisor on `(t − C)`, or the conservative variant (ship commented
-  out) that evaluates `B(t)` against the next-lower boundary.
+- *Bucket quantization*: M3 computes from the deadline-proximity buckets (the
+  chosen implementation), so an item due in 61 minutes is only constrained at
+  the 2-hour boundary and can be up to one bucket-width late. Mitigation: the
+  producer's `deadline_scaling.safety_factor` shrinks the usable `(t−C)`
+  budget, waking earlier. Because the math now lives in the producer, a future
+  refinement can compute required replicas from the raw sorted-set deadline
+  scores directly and drop quantization entirely — no consumer-side change,
+  since the emitted metric is unchanged.
 - *Homogeneous-work assumption*: `R` in requests/second ignores per-request
   token variance. Future work calibrates live from
   `rate(llm_d_async_async_tokens_total{direction="output"}[10m])`.
@@ -558,7 +637,7 @@ with the `producer` module and how to measure `C` and `R`, lives in
 **M1 validation results (2026-09-21).** All four acceptance criteria passed:
 3 requests enqueued at 0 replicas were held (3 `gate_closed` decisions, 3
 gate-wait requeues, zero dispatched, zero lost); the 20:45 UTC window opened
-and KEDA scaled 0→1 at 20:45:26; the flex-start L4 node was provisioned by
+and KEDA scaled 0→1 at 20:45:26 (this run exercised N=1); the flex-start L4 node was provisioned by
 20:47:19 (~2 min); vLLM (Qwen3-8B) was Ready at 20:53:54 and all 3 requests
 completed with HTTP 200 results by 20:54:12; the pool scaled 1→0 at window
 end + 60s cooldown and the GPU node was reclaimed. **Measured cold start:
@@ -581,9 +660,9 @@ which is tracked as part of the M2 engineering work.
 
 | # | Milestone | Deliverables | Exit criteria |
 | --- | --- | --- | --- |
-| M1 | Cron 0↔1 | Gate hold-back config + audit note; `m1-cron-scaledobject.yaml`; validation runbook; measured cold-start distribution (`C`) | M1 acceptance criteria pass on the prototype cluster |
+| M1 | Cron 0↔N | Gate hold-back config + audit note; `m1-cron-scaledobject.yaml`; validation runbook; measured cold-start distribution (`C`) | M1 acceptance criteria pass on the prototype cluster |
 | M2 | Backlog 0↔N | `m2-backlog-scaledobject.yaml`; `source_available` alert rule; drain-safety guidance (`terminationGracePeriodSeconds`, inflight guard); gate-wait visibility fix in llm-d-async ([#464](https://github.com/llm-d/llm-d-async/issues/464)) or the requeues-rate query workaround; measured per-replica throughput (`R`); Redis-enqueue load path for the benchmark harness | M2 acceptance criteria pass; staging scenario `async-batch/backlog.yaml` runs in the test bed |
-| M3 | Deadline-proximity | `m3-deadline-prometheusrule.yaml` + `m3-deadline-scaledobject.yaml` (with M2 fallback trigger); limitations doc; two-cohort evaluation with GPU-minutes ratio | M3 acceptance criteria pass; comparison vs. M2 baseline reported |
+| M3 | Deadline-proximity | **llm-d-async feature**: emit `deadline_required_replicas` + `deadline_scaling.*` config (producer-side composition); `m3-deadline-scaledobject.yaml` (single derived-metric trigger + M2 fallback); recording-rule fallback for older builds; two-cohort evaluation with GPU-minutes ratio | M3 acceptance criteria pass; comparison vs. M2 baseline reported |
 | — | Graduation | `staging/async-batch/{baseline,cron-window,backlog,deadline-proximity}.yaml`; guide under `llm-d/guides/workload-autoscaling/`; strategy-menu row; cross-link from the batch-serving guides | Guide merged in llm-d |
 
 ## Alternatives
@@ -598,25 +677,39 @@ which is tracked as part of the M2 engineering work.
   prototype environment): requires operating a metrics adapter, has no cron
   or activation semantics, no scale-to-zero without gymnastics. KEDA subsumes
   it; this proposal replaces that pattern.
+- **Consumer-side composition (Prometheus recording rules) for M3**: keep the
+  deadline math out of llm-d-async and compute `deadline_required_replicas` in
+  a `PrometheusRule` chain (the `slo-aware` guide's pattern), leaving KEDA to
+  scale on the recorded series. This needs no llm-d-async change and is kept as
+  a documented fallback for older builds. It was rejected as the primary path
+  because it scatters the tuning constants (`R`, `C`, `max_replicas`) across
+  rule files away from the data, duplicates `max_replicas` between the rule and
+  the ScaledObject, and carries the `ruleSelector` silent-failure mode. The
+  producer already polls the broker and holds the config, so composing there is
+  both simpler to operate and closer to the data — the boundary this proposal
+  settles on.
 - **A deadline-aware planner controller now**: exact EDF feasibility,
   per-item deadlines (no bucket quantization), live throughput calibration,
   writing `redis-leased-rate` leases (`max_admission_rps`) to pace dispatch
   and desired replicas together. Strictly more capable than M3 — and
-  strictly more to build, operate, and get accepted. The PromQL
-  approximation ships value with zero new components and generates exactly
-  the operational data (measured `C`, `R`, quantization error) that a future
-  controller design needs. It is the headline item of future work, and the
-  `redis-leased-rate` gate (which fails closed on lease expiry and is
-  observable via the `async_drain_limit_*` gauges) is the ready-made
-  integration point llm-d-async already ships for it.
+  strictly more to build, operate, and get accepted. M3's producer-computed
+  metric ships value with no new component (just a gauge on the existing
+  processor) and generates exactly the operational data (measured `C`, `R`,
+  quantization error) that a future controller design needs. It is the
+  headline item of future work, and the `redis-leased-rate` gate (which fails
+  closed on lease expiry and is observable via the `async_drain_limit_*`
+  gauges) is the ready-made integration point llm-d-async already ships for it.
 
 ## Future work
 
 - The deadline-aware planner controller described above.
 - Token-weighted work estimates (`tokens_total`-calibrated `R`), replacing
   the homogeneous-request assumption.
-- KEDA `scalingModifiers` formula variant to fold the M2 and M3 triggers into
-  one composite metric.
+- Exact per-item deadline math in the producer (compute
+  `deadline_required_replicas` from the raw sorted-set scores instead of the
+  histogram buckets), dropping quantization with no consumer-side change.
+- Live `R` calibration in the producer (measured from recent completions)
+  instead of a static `deadline_scaling.throughput_rps` constant.
 - Per-queue/per-pool ScaledObjects for multi-model clusters (the metrics
   already carry `pool_name`; the blueprints sum over it today).
 - Benchmark-harness support for Redis-enqueue load generation, enabling

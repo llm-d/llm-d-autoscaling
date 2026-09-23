@@ -13,12 +13,16 @@ they land in follow-up commits once each is validated (see the file table).
 | File | Purpose | Status |
 | --- | --- | --- |
 | `worker-pools-readiness-gate.json` | **Validated hold-back config**: fail-closed `prometheus-query` inner gate on `llm_d_epp_ready_endpoints`. Replaces `worker-pools.json` in the llm-d-async ConfigMap. | committed |
-| `m1-cron-scaledobject.yaml` | M1: cron-windowed 0↔1 scaling. | committed |
+| `m1-cron-scaledobject.yaml` | M1: cron-windowed 0↔N scaling (fixed N for the window). | committed |
 | `worker-pools-budget-gate.json` | `prometheus-budget` variant — preferred once llm-d-async's cascade queries match the EPP's exported metric names (v0.10.0 queries deprecated `inference_pool_*` names; recent EPPs export only `llm_d_epp_*`, leaving this gate closed even with backends ready — [llm-d-async#460](https://github.com/llm-d/llm-d-async/issues/460)). | after #460 |
-| `m2-backlog-scaledobject.yaml` | M2: backlog-driven 0↔N scaling. | after M2 validation |
-| `m3-deadline-prometheusrule.yaml` | M3: recording rules computing replicas required to meet deadlines. | after M3 validation |
-| `m3-deadline-scaledobject.yaml` | M3: deadline-driven ScaledObject with M2 backlog fallback trigger. | after M3 validation |
+| `m2-backlog-scaledobject.yaml` | M2: backlog-driven 0↔N scaling (raw metrics, single-trigger KEDA). | after M2 validation |
+| `m3-deadline-scaledobject.yaml` | M3: deadline-driven ScaledObject on the producer's `deadline_required_replicas` metric (+ M2 backlog fallback trigger). | after M3 validation |
+| `m3-deadline-prometheusrule.yaml` | M3 **fallback**: recording-rule chain that computes the same metric consumer-side, for llm-d-async builds without the producer metric. | after M3 validation |
 | `backlog-source-alert-prometheusrule.yaml` | Alert when the backlog source is untrusted. | after M2 validation |
+
+M3 requires an llm-d-async build that emits `llm_d_async_async_deadline_required_replicas`
+and accepts the `deadline_scaling.*` config; the recording-rule file is the
+fallback for older builds. M1 and M2 need no llm-d-async code change.
 
 Apply exactly one ScaledObject per scale target at a time (M1 *or* M2 *or*
 M3) — multiple ScaledObjects fighting over one Deployment is undefined
@@ -162,11 +166,15 @@ while held produces a `DEADLINE_EXCEEDED` result there.
 
 ### M3 — deadline-proximity
 
-1. Replace the placeholder constants in `m3-deadline-prometheusrule.yaml`
-   (R from M2, C = p90 from M1) and apply it. **Verify the rules evaluate**
-   (`asyncq:deadline_replicas_required:max` returns a value in Prometheus)
-   before applying the ScaledObject — mismatched `ruleSelector` labels fail
-   silently.
+1. Configure the producer's `deadline_scaling.*` constants (R from M2,
+   C = p90 from M1, max_replicas, optional safety_factor) in the llm-d-async
+   pool/queue config and restart. **Verify the derived metric evaluates**
+   (`llm_d_async_async_deadline_required_replicas` returns a value in
+   Prometheus) before applying the ScaledObject.
+   *Fallback (older llm-d-async):* apply `m3-deadline-prometheusrule.yaml`
+   with the constants set as literals, verify `asyncq:deadline_replicas_required:max`
+   evaluates (mismatched `ruleSelector` labels fail silently), and point
+   trigger 1 of the ScaledObject at that series.
 2. Delete the M2 ScaledObject; apply `m3-deadline-scaledobject.yaml`.
 3. Two-cohort test with the pool at 0: enqueue cohort A (deadline +30 min)
    and cohort B (deadline +6 h). Expect: pool stays at 0 while
