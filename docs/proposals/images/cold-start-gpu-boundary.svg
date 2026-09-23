@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 344" width="900" height="344"
+     role="img" aria-labelledby="t d"
+     font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t">Cold-start timeline, split at the point the GPU is allocated</title>
+  <desc id="d">Everything left of the first CUDA context — pod startup and vLLM's 16 to 20 second
+  warm boot — needs no GPU and can be paid in advance by a waiting buffer pod. The 20 to 27
+  second GPU phase to the right holds the device and stays on the critical path.</desc>
+
+  <defs>
+    <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="6" height="6" fill="#f6f8fa"/>
+      <line x1="0" y1="0" x2="0" y2="6" stroke="#d8dee4" stroke-width="1.6"/>
+    </pattern>
+  </defs>
+
+  <rect width="900" height="344" fill="#fbfbfa"/>
+
+  <!-- the boundary -->
+  <text x="470" y="30" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1f2328">first CUDA context</text>
+  <text x="470" y="47" text-anchor="middle" font-size="11.5" fill="#6e7781">the GPU is allocated here</text>
+  <circle cx="470" cy="61" r="3.5" fill="#1f2328"/>
+  <line x1="470" y1="61" x2="470" y2="232" stroke="#1f2328" stroke-width="2"/>
+
+  <!-- side labels -->
+  <rect x="40" y="70" width="426" height="26" rx="13" fill="#eaf5ef" stroke="#cfe3d8"/>
+  <text x="253" y="87" text-anchor="middle" font-size="11.5" font-weight="600" letter-spacing="1" fill="#2f6f4f">NO GPU HELD</text>
+  <rect x="474" y="70" width="386" height="26" rx="13" fill="#fff4e5" stroke="#f0dcc0"/>
+  <text x="667" y="87" text-anchor="middle" font-size="11.5" font-weight="600" letter-spacing="1" fill="#9a5b0a">GPU HELD</text>
+
+  <!-- phases -->
+  <rect x="40" y="116" width="126" height="104" rx="4" fill="url(#hatch)" stroke="#c9d1d9" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="103" y="152" text-anchor="middle" font-size="12.5" font-weight="600" fill="#57606a">pod startup</text>
+  <text x="103" y="174" text-anchor="middle" font-size="11" fill="#6e7781">schedule · pull</text>
+  <text x="103" y="190" text-anchor="middle" font-size="11" fill="#6e7781">container create</text>
+
+  <rect x="170" y="116" width="296" height="104" rx="4" fill="#eaf5ef" stroke="#a8cdb8" stroke-width="1.2"/>
+  <text x="318" y="152" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">vLLM warm boot</text>
+  <text x="318" y="176" text-anchor="middle" font-size="11.5" fill="#57606a">imports · bytecode compile</text>
+  <text x="318" y="194" text-anchor="middle" font-size="11.5" fill="#57606a">engine config · socket bind</text>
+
+  <rect x="474" y="116" width="386" height="104" rx="4" fill="#fff4e5" stroke="#e8c893" stroke-width="1.2"/>
+  <text x="667" y="152" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">GPU phase</text>
+  <text x="667" y="176" text-anchor="middle" font-size="11.5" fill="#57606a">device init · weight load (61 GiB)</text>
+  <text x="667" y="194" text-anchor="middle" font-size="11.5" fill="#57606a">CUDA graph capture</text>
+
+  <!-- durations -->
+  <g stroke="#8c959f" stroke-width="1">
+    <line x1="40" y1="244" x2="166" y2="244" stroke-dasharray="3 3"/>
+    <line x1="170" y1="244" x2="466" y2="244"/>
+    <line x1="170" y1="238" x2="170" y2="250"/><line x1="466" y1="238" x2="466" y2="250"/>
+    <line x1="474" y1="244" x2="860" y2="244"/>
+    <line x1="474" y1="238" x2="474" y2="250"/><line x1="860" y1="238" x2="860" y2="250"/>
+  </g>
+  <text x="103" y="268" text-anchor="middle" font-size="11.5" font-style="italic" fill="#8c959f">varies</text>
+  <text x="318" y="269" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">16–20s</text>
+  <text x="667" y="269" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">20–27s</text>
+
+  <!-- takeaway -->
+  <text x="253" y="302" text-anchor="middle" font-size="12" fill="#57606a">already paid by a waiting buffer pod,</text>
+  <text x="253" y="319" text-anchor="middle" font-size="12" fill="#57606a">holding no GPU</text>
+  <text x="667" y="302" text-anchor="middle" font-size="12" fill="#57606a">unavoidable — on the critical path</text>
+  <text x="667" y="319" text-anchor="middle" font-size="12" fill="#57606a">of every scale-up</text>
+</svg>
