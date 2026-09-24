@@ -1,0 +1,618 @@
+fullnameOverride: qwen-qwe-1159b3a8-wen3-32b
+
+
+schedulerName: default-scheduler
+
+modelArtifacts:
+  name: Qwen/Qwen3-32B
+  uri: hf://Qwen/Qwen3-32B
+  size: 2Gi
+  authSecretName: "llm-d-hf-token"
+  mountPath: /model-cache
+  labels:
+    llm-d.ai/inferenceServing: "true"
+    llm-d.ai/model: qwen-qwe-1159b3a8-wen3-32b
+    llm-d.ai/guide: "pd-disaggregation"
+
+multinode: false
+
+accelerator:
+  type: cpu
+
+  dra: false
+
+
+routing:
+  servicePort: 8000
+  proxy:
+    enabled: true
+    image: "ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.10.0"
+    imagePullPolicy: Always
+    targetPort: 8200
+    connector: nixlv2
+    secure: false
+    zapEncoder: json
+    zapLogLevel: debug
+    debugLevel: 3
+
+
+decode:
+  create: true
+  replicas: 1
+
+  autoscaling:
+    enabled: false
+
+
+
+
+
+  parallelism:
+    tensor: 1
+    data: 1
+    dataLocal: 1
+    workers: 1
+
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: kubernetes.io/os
+            operator: In
+            values:
+            - "linux"
+
+
+
+
+  accelerator:
+    dra: false
+
+
+
+
+
+  initContainers:
+    - name: install-plugin
+      image: ghcr.io/lionelvillard/vllm-sim-deps:v0.3.0
+      imagePullPolicy: Always
+      command:
+      - sh
+      - -c
+      - cp -r /plugins/* /mnt/plugins/
+      env:
+      - name: VLLM_IS_DECODE
+        value: "1"
+      - name: HOME
+        value: "/tmp"
+      - name: USER
+        value: "llm-d"
+      - name: MODEL_SERVE_REF
+        value: "Qwen/Qwen3-32B"
+      - name: MODEL_NAME
+        value: "Qwen/Qwen3-32B"
+      - name: MODEL_PATH
+        value: "models/Qwen/Qwen3-32B"
+      - name: VLLM_CACHE_ROOT
+        value: "/tmp/vllm"
+      - name: VLLM_WORKER_MULTIPROC_METHOD
+        value: "spawn"
+      - name: VLLM_LOGGING_LEVEL
+        value: "INFO"
+      - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+        value: "120"
+      - name: VLLM_ALLOW_LONG_MAX_MODEL_LEN
+        value: "1"
+      - name: VLLM_SERVER_DEV_MODE
+        value: "1"
+      - name: VLLM_INFERENCE_PORT
+        value: "8000"
+      - name: VLLM_METRICS_PORT
+        value: "8200"
+      - name: VLLM_BLOCK_SIZE
+        value: "64"
+      - name: VLLM_MAX_MODEL_LEN
+        value: "16384"
+      - name: VLLM_LOAD_FORMAT
+        value: "auto"
+      - name: VLLM_ACCELERATOR_MEM_UTIL
+        value: "0.5"
+      - name: VLLM_MAX_NUM_SEQ
+        value: "256"
+      - name: VLLM_TENSOR_PARALLELISM
+        value: "1"
+      - name: VLLM_MAX_NUM_BATCHED_TOKENS
+        value: "256"
+      - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+        valueFrom:
+          fieldRef:
+            fieldPath: status.podIP
+      - name: VLLM_NIXL_SIDE_CHANNEL_PORT
+        value: "5557"
+      - name: UCX_TLS
+        value: "sm,cuda_ipc,cuda_copy,tcp"
+      - name: UCX_SOCKADDR_TLS_PRIORITY
+        value: "tcp"
+      - name: POD_IP
+        valueFrom:
+          fieldRef:
+            apiVersion: v1
+            fieldPath: status.podIP
+      - name: LLMDBENCH_POD_NS
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      - name: PYTHONPATH
+        value: "/plugins"
+      - name: VLLM_CPU_KVCACHE_SPACE
+        value: "15"
+      - name: VLLM_CPU_OMP_THREADS_BIND
+        value: "0-3"
+      - name: HF_HOME
+        value: "/tmp/huggingface"
+
+      volumeMounts:
+      - mountPath: /mnt/plugins
+        name: plugins
+
+
+  containers:
+  - name: "vllm"
+    image: "vllm/vllm-openai-cpu:v0.27.0-x86_64"
+    imagePullPolicy: IfNotPresent
+    mountModelVolume: false
+    modelCommand: custom
+    command:
+      - /bin/bash
+      - '-c'
+    args:
+      - |
+        /bin/true ; vllm serve /model --tokenizer=Qwen/Qwen3-32B --load-format=dummy --max-model-len=8192 --host=0.0.0.0 --served-model-name=Qwen/Qwen3-32B --port=$VLLM_METRICS_PORT --gpu-memory-utilization=0.5 --enforce-eager --no-enable-log-requests --disable-uvicorn-access-log --kv-transfer-config '{"kv_connector":"SimulatedNixlConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"bandwidth_gbps":100,"handshake_ms":2}}'
+    env:
+      - name: VLLM_IS_DECODE
+        value: "1"
+      - name: HOME
+        value: "/tmp"
+      - name: USER
+        value: "llm-d"
+      - name: MODEL_SERVE_REF
+        value: "Qwen/Qwen3-32B"
+      - name: MODEL_NAME
+        value: "Qwen/Qwen3-32B"
+      - name: MODEL_PATH
+        value: "models/Qwen/Qwen3-32B"
+      - name: VLLM_CACHE_ROOT
+        value: "/tmp/vllm"
+      - name: VLLM_WORKER_MULTIPROC_METHOD
+        value: "spawn"
+      - name: VLLM_LOGGING_LEVEL
+        value: "INFO"
+      - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+        value: "120"
+      - name: VLLM_ALLOW_LONG_MAX_MODEL_LEN
+        value: "1"
+      - name: VLLM_SERVER_DEV_MODE
+        value: "1"
+      - name: VLLM_INFERENCE_PORT
+        value: "8000"
+      - name: VLLM_METRICS_PORT
+        value: "8200"
+      - name: VLLM_BLOCK_SIZE
+        value: "64"
+      - name: VLLM_MAX_MODEL_LEN
+        value: "16384"
+      - name: VLLM_LOAD_FORMAT
+        value: "auto"
+      - name: VLLM_ACCELERATOR_MEM_UTIL
+        value: "0.5"
+      - name: VLLM_MAX_NUM_SEQ
+        value: "256"
+      - name: VLLM_TENSOR_PARALLELISM
+        value: "1"
+      - name: VLLM_MAX_NUM_BATCHED_TOKENS
+        value: "256"
+      - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+        valueFrom:
+          fieldRef:
+            fieldPath: status.podIP
+      - name: VLLM_NIXL_SIDE_CHANNEL_PORT
+        value: "5557"
+      - name: UCX_TLS
+        value: "sm,cuda_ipc,cuda_copy,tcp"
+      - name: UCX_SOCKADDR_TLS_PRIORITY
+        value: "tcp"
+      - name: POD_IP
+        valueFrom:
+          fieldRef:
+            apiVersion: v1
+            fieldPath: status.podIP
+      - name: LLMDBENCH_POD_NS
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      - name: PYTHONPATH
+        value: "/plugins"
+      - name: VLLM_CPU_KVCACHE_SPACE
+        value: "15"
+      - name: VLLM_CPU_OMP_THREADS_BIND
+        value: "0-3"
+      - name: HF_HOME
+        value: "/tmp/huggingface"
+
+    ports:
+      - containerPort: 8200
+        name: metrics
+        protocol: TCP
+    resources:
+      limits:
+        memory: 20Gi
+        cpu: "4"
+      requests:
+        memory: 20Gi
+        cpu: "4"
+    extraConfig:
+      startupProbe:
+        httpGet:
+          path: /health
+          port: 8200
+        failureThreshold: 60
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        timeoutSeconds: 5
+      livenessProbe:
+        tcpSocket:
+          port: 8200
+        failureThreshold: 10
+        periodSeconds: 5
+        timeoutSeconds: 15
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8200
+        failureThreshold: 10
+        periodSeconds: 5
+        timeoutSeconds: 15
+    volumeMounts:
+      - name: dshm
+        mountPath: /dev/shm
+      - name: plugins
+        mountPath: /plugins
+      - name: vllm-sim-model-config
+        mountPath: /model
+        readOnly: true
+
+  volumes:
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 500Mi
+    - name: plugins
+      emptyDir: {}
+    - name: vllm-sim-model-config
+      configMap:
+        name: vllm-sim-model-config
+
+  monitoring:
+    podmonitor:
+      enabled: true
+      portName: "metrics"
+      path: "/metrics"
+      interval: "15s"
+      metricRelabelings:
+
+
+prefill:
+  create: true
+  replicas: 1
+
+  autoscaling:
+    enabled: false
+
+
+
+
+
+  parallelism:
+    tensor: 1
+    data: 1
+    dataLocal: 1
+    workers: 1
+
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: kubernetes.io/os
+            operator: In
+            values:
+            - "linux"
+
+
+
+
+  accelerator:
+    dra: false
+
+
+
+
+
+  initContainers:
+    - name: install-plugin
+      image: ghcr.io/lionelvillard/vllm-sim-deps:v0.3.0
+      imagePullPolicy: Always
+      command:
+      - sh
+      - -c
+      - cp -r /plugins/* /mnt/plugins/
+      env:
+      - name: VLLM_IS_PREFILL
+        value: "1"
+      - name: HOME
+        value: "/tmp"
+      - name: USER
+        value: "llm-d"
+      - name: MODEL_SERVE_REF
+        value: "Qwen/Qwen3-32B"
+      - name: MODEL_NAME
+        value: "Qwen/Qwen3-32B"
+      - name: MODEL_PATH
+        value: "models/Qwen/Qwen3-32B"
+      - name: VLLM_CACHE_ROOT
+        value: "/tmp/vllm"
+      - name: VLLM_WORKER_MULTIPROC_METHOD
+        value: "spawn"
+      - name: VLLM_LOGGING_LEVEL
+        value: "INFO"
+      - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+        value: "120"
+      - name: VLLM_ALLOW_LONG_MAX_MODEL_LEN
+        value: "1"
+      - name: VLLM_SERVER_DEV_MODE
+        value: "1"
+      - name: VLLM_INFERENCE_PORT
+        value: "8000"
+      - name: VLLM_METRICS_PORT
+        value: "8200"
+      - name: VLLM_BLOCK_SIZE
+        value: "64"
+      - name: VLLM_MAX_MODEL_LEN
+        value: "16384"
+      - name: VLLM_LOAD_FORMAT
+        value: "auto"
+      - name: VLLM_ACCELERATOR_MEM_UTIL
+        value: "0.5"
+      - name: VLLM_MAX_NUM_SEQ
+        value: "256"
+      - name: VLLM_TENSOR_PARALLELISM
+        value: "1"
+      - name: VLLM_MAX_NUM_BATCHED_TOKENS
+        value: "256"
+      - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+        valueFrom:
+          fieldRef:
+            fieldPath: status.podIP
+      - name: VLLM_NIXL_SIDE_CHANNEL_PORT
+        value: "5557"
+      - name: UCX_TLS
+        value: "sm,cuda_ipc,cuda_copy,tcp"
+      - name: UCX_SOCKADDR_TLS_PRIORITY
+        value: "tcp"
+      - name: POD_IP
+        valueFrom:
+          fieldRef:
+            apiVersion: v1
+            fieldPath: status.podIP
+      - name: LLMDBENCH_POD_NS
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      - name: PYTHONPATH
+        value: "/plugins"
+      - name: VLLM_CPU_KVCACHE_SPACE
+        value: "15"
+      - name: VLLM_CPU_OMP_THREADS_BIND
+        value: "0-3"
+      - name: HF_HOME
+        value: "/tmp/huggingface"
+
+      volumeMounts:
+      - mountPath: /mnt/plugins
+        name: plugins
+
+
+  containers:
+  - name: "vllm"
+    image: "vllm/vllm-openai-cpu:v0.27.0-x86_64"
+    imagePullPolicy: IfNotPresent
+    mountModelVolume: false
+    modelCommand: custom
+    command:
+      - /bin/bash
+      - '-c'
+    args:
+      - |
+        /bin/true ; vllm serve /model --tokenizer=Qwen/Qwen3-32B --load-format=dummy --max-model-len=8192 --host=0.0.0.0 --served-model-name=Qwen/Qwen3-32B --port=$VLLM_INFERENCE_PORT --gpu-memory-utilization=0.5 --enforce-eager --no-enable-log-requests --disable-uvicorn-access-log --kv-transfer-config '{"kv_connector":"SimulatedNixlConnector","kv_role":"kv_producer","kv_connector_extra_config":{"bandwidth_gbps":100,"handshake_ms":2}}'
+    env:
+      - name: VLLM_IS_PREFILL
+        value: "1"
+      - name: HOME
+        value: "/tmp"
+      - name: USER
+        value: "llm-d"
+      - name: MODEL_SERVE_REF
+        value: "Qwen/Qwen3-32B"
+      - name: MODEL_NAME
+        value: "Qwen/Qwen3-32B"
+      - name: MODEL_PATH
+        value: "models/Qwen/Qwen3-32B"
+      - name: VLLM_CACHE_ROOT
+        value: "/tmp/vllm"
+      - name: VLLM_WORKER_MULTIPROC_METHOD
+        value: "spawn"
+      - name: VLLM_LOGGING_LEVEL
+        value: "INFO"
+      - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+        value: "120"
+      - name: VLLM_ALLOW_LONG_MAX_MODEL_LEN
+        value: "1"
+      - name: VLLM_SERVER_DEV_MODE
+        value: "1"
+      - name: VLLM_INFERENCE_PORT
+        value: "8000"
+      - name: VLLM_METRICS_PORT
+        value: "8200"
+      - name: VLLM_BLOCK_SIZE
+        value: "64"
+      - name: VLLM_MAX_MODEL_LEN
+        value: "16384"
+      - name: VLLM_LOAD_FORMAT
+        value: "auto"
+      - name: VLLM_ACCELERATOR_MEM_UTIL
+        value: "0.5"
+      - name: VLLM_MAX_NUM_SEQ
+        value: "256"
+      - name: VLLM_TENSOR_PARALLELISM
+        value: "1"
+      - name: VLLM_MAX_NUM_BATCHED_TOKENS
+        value: "256"
+      - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+        valueFrom:
+          fieldRef:
+            fieldPath: status.podIP
+      - name: VLLM_NIXL_SIDE_CHANNEL_PORT
+        value: "5557"
+      - name: UCX_TLS
+        value: "sm,cuda_ipc,cuda_copy,tcp"
+      - name: UCX_SOCKADDR_TLS_PRIORITY
+        value: "tcp"
+      - name: POD_IP
+        valueFrom:
+          fieldRef:
+            apiVersion: v1
+            fieldPath: status.podIP
+      - name: LLMDBENCH_POD_NS
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      - name: PYTHONPATH
+        value: "/plugins"
+      - name: VLLM_CPU_KVCACHE_SPACE
+        value: "15"
+      - name: VLLM_CPU_OMP_THREADS_BIND
+        value: "0-3"
+      - name: HF_HOME
+        value: "/tmp/huggingface"
+
+    ports:
+      - containerPort: 8000
+        name: metrics
+        protocol: TCP
+    resources:
+      limits:
+        memory: 20Gi
+        cpu: "4"
+      requests:
+        memory: 20Gi
+        cpu: "4"
+    extraConfig:
+      startupProbe:
+        httpGet:
+          path: /health
+          port: 8000
+        failureThreshold: 60
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        timeoutSeconds: 5
+      livenessProbe:
+        tcpSocket:
+          port: 8000
+        failureThreshold: 3
+        periodSeconds: 5
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8000
+        failureThreshold: 3
+        periodSeconds: 5
+    volumeMounts:
+      - name: dshm
+        mountPath: /dev/shm
+      - name: plugins
+        mountPath: /plugins
+      - name: vllm-sim-model-config
+        mountPath: /model
+        readOnly: true
+
+  volumes:
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 500Mi
+    - name: plugins
+      emptyDir: {}
+    - name: vllm-sim-model-config
+      configMap:
+        name: vllm-sim-model-config
+
+  monitoring:
+    podmonitor:
+      enabled: true
+      portName: "metrics"
+      path: "/metrics"
+      interval: "15s"
+      labels:
+
+      annotations:
+
+      relabelings:
+
+      metricRelabelings:
+
+
+extraObjects:
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: allow-thanos-querier-api-access-lionel-bench-model-sim-32b-pd-token
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: allow-thanos-querier-api-access
+    subjects:
+    - kind: ServiceAccount
+      name: keda-prometheus-auth
+      namespace: lionel-bench-model-sim-32b-pd-token
+  - apiVersion: v1
+    data:
+      config.json: |
+        {
+          "architectures": ["SimulatedForCausalLM"],
+          "model_type": "qwen3",
+          "hidden_size": 5120,
+          "num_hidden_layers": 64,
+          "num_attention_heads": 64,
+          "num_key_value_heads": 8,
+          "head_dim": 128,
+          "intermediate_size": 25600,
+          "vocab_size": 151936,
+          "max_position_embeddings": 40960,
+          "eos_token_id": 151645,
+          "torch_dtype": "bfloat16",
+          "latency": {
+            "type": "physics",
+            "hardware": {
+              "peak_tflops": 989.0,
+              "hbm_gbps": 3350.0,
+              "weight_dtype": "bfloat16"
+            },
+            "beta": [3.119229, 1.182904, 0.146612],
+            "tp": 1,
+            "deterministic_length": true
+          }
+        }
+    kind: ConfigMap
+    metadata:
+      name: vllm-sim-model-config

@@ -1,0 +1,162 @@
+
+
+
+
+
+
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inference-perf-pdwob69c
+  namespace: lionel-bench-model-sim-32b-pd-token
+  labels:
+    app: llmdbench-harness-launcher
+    function: load_generator
+    llmdbench.ai/session-id: "villardl-20260909-132550-010"
+spec:
+  containers:
+  - name: harness
+    image: ghcr.io/llm-d/llm-d-benchmark:nightly
+    imagePullPolicy: Always
+    command: ["sh", "-c"]
+    args:
+    - >-
+      for script in /workspace/harnesses/*; do
+        [ -f "$script" ] || continue;
+        cp "$script" /usr/local/bin/;
+        chmod +x "/usr/local/bin/$(basename "$script")";
+      done;
+      export LLMDBENCH_RUN_EXPERIMENT_HARNESS=inference-perf-llm-d-benchmark.sh; export LLMDBENCH_RUN_EXPERIMENT_ANALYZER=inference-perf-analyze_results.sh; export LLMDBENCH_RUN_EXPERIMENT_RESULTS_DIR=/requests/inference-perf-1788974766-7gxjeb_1; export LLMDBENCH_CONTROL_WORK_DIR=/requests/inference-perf-1788974766-7gxjeb_1; export LLMDBENCH_RUN_EXPERIMENT_HARNESS_WORKLOAD_NAME=guide_pd-disaggregation_2.yaml; export LLMDBENCH_HARNESS_START=$(date -u +%Y-%m-%dT%H:%M:%SZ); export LLMDBENCH_HARNESS_ARGS='--workload guide_pd-disaggregation_2.yaml'; export LLMDBENCH_HARNESS_VERSION=$(grep '^inference-perf:' /workspace/repos.txt 2>/dev/null | cut -d' ' -f3 || echo 'unknown'); llm-d-benchmark.sh
+    resources:
+      limits:
+        cpu: "16"
+        memory: 32Gi
+      requests:
+        cpu: "16"
+        memory: 32Gi
+    env:
+    # Stage markers are logged in local time, then compared against `date -u`
+    # scrape timestamps when clipping per-stage series.
+    - name: TZ
+      value: "UTC"
+    - name: LLMDBENCH_RUN_EXPERIMENT_LAUNCHER
+      value: "1"
+    - name: LLMDBENCH_MAGIC_ENVAR
+      value: "harness_pod"
+    - name: LLMDBENCH_DEPLOY_METHODS
+      value: "modelservice"
+    - name: LLMDBENCH_CLUSTER_TYPE
+      value: "OpenShift"
+    - name: LLMDBENCH_RUN_WORKSPACE_DIR
+      value: "/workspace"
+    - name: LLMDBENCH_CONTROL_WORK_DIR
+      value: "/requests/inference-perf-1788974766-7gxjeb_1"
+    - name: LLMDBENCH_DEPLOY_CURRENT_MODEL
+      value: "Qwen/Qwen3-32B"
+    - name: LLMDBENCH_DEPLOY_CURRENT_TOKENIZER
+      value: "Qwen/Qwen3-32B"
+    - name: LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+      value: "http://172.30.128.7:80"
+    - name: LLMDBENCH_HARNESS_STACK_TYPE
+      value: "llm-d"
+    - name: LLMDBENCH_HARNESS_NAME
+      value: "inference-perf"
+    - name: LLMDBENCH_RUN_EXPERIMENT_ID
+      value: "inference-perf-1788974766-7gxjeb"
+    - name: LLMDBENCH_DESCRIPTION_TEXT
+      value: ""
+    - name: LLMDBENCH_DESCRIPTION_KEYWORDS
+      value: ""
+    - name: RAYON_NUM_THREADS
+      value: "4"
+    - name: HOME
+      value: "/requests/.home"
+    - name: HF_HOME
+      value: "/requests/.cache/huggingface"
+    - name: XDG_CACHE_HOME
+      value: "/requests/.cache"
+    - name: MPLCONFIGDIR
+      value: "/requests/.cache/matplotlib"
+    - name: HF_TOKEN_SECRET
+      value: "llm-d-hf-token"
+    # HuggingFace harness binaries split between the two env-var
+    # names: guidellm and a number of vLLM utilities read HF_TOKEN,
+    # while huggingface_hub-based libraries also accept
+    # HUGGING_FACE_HUB_TOKEN.  Setting both from the same secretKeyRef
+    # eliminates the question -- any harness that reads either name
+    # gets the token.
+    - name: HF_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: llm-d-hf-token
+          key: HF_TOKEN
+          # optional: offline / external-endpoint harnesses start without the secret.
+          optional: true
+    - name: HUGGING_FACE_HUB_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: llm-d-hf-token
+          key: HF_TOKEN
+          optional: true
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.name
+    - name: POD_UID
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.uid
+    - name: LLMDBENCH_VLLM_COMMON_NAMESPACE
+      value: "lionel-bench-model-sim-32b-pd-token"
+    - name: LLMDBENCH_BASE64_CONTEXT_CONTENTS
+      value: "YXBpVmVyc2lvbjogdjEKY2x1c3RlcnM6Ci0gY2x1c3RlcjoKICAgIGluc2VjdXJlLXNraXAtdGxzLXZlcmlmeTogdHJ1ZQogICAgc2VydmVyOiBodHRwczovL2FwaS5wb2twcm9kMDAxLmV0ZTE0LnJlcy5pYm0uY29tOjY0NDMKICBuYW1lOiBhcGktcG9rcHJvZDAwMS1ldGUxNC1yZXMtaWJtLWNvbTo2NDQzCmNvbnRleHRzOgotIGNvbnRleHQ6CiAgICBjbHVzdGVyOiBhcGktcG9rcHJvZDAwMS1ldGUxNC1yZXMtaWJtLWNvbTo2NDQzCiAgICBuYW1lc3BhY2U6IGxpb25lbC1jb2xkLXN0YXJ0CiAgICB1c2VyOiB2aWxsYXJkQHVzLmlibS5jb20vYXBpLXBva3Byb2QwMDEtZXRlMTQtcmVzLWlibS1jb206NjQ0MwogIG5hbWU6IGxpb25lbC1jb2xkLXN0YXJ0L2FwaS1wb2twcm9kMDAxLWV0ZTE0LXJlcy1pYm0tY29tOjY0NDMvdmlsbGFyZEB1cy5pYm0uY29tCmN1cnJlbnQtY29udGV4dDogbGlvbmVsLWNvbGQtc3RhcnQvYXBpLXBva3Byb2QwMDEtZXRlMTQtcmVzLWlibS1jb206NjQ0My92aWxsYXJkQHVzLmlibS5jb20Ka2luZDogQ29uZmlnCnByZWZlcmVuY2VzOiB7fQp1c2VyczoKLSBuYW1lOiB2aWxsYXJkQHVzLmlibS5jb20vYXBpLXBva3Byb2QwMDEtZXRlMTQtcmVzLWlibS1jb206NjQ0MwogIHVzZXI6CiAgICB0b2tlbjogc2hhMjU2fmtOM0xvZnpvd3Q1TXVDd1hYVEJaWXNnVktETlROckpjZ055WGlEWDhzcTAK"
+    - name: LLMDBENCH_VLLM_COMMON_INFERENCE_PORT
+      value: "8000"
+    - name: LLMDBENCH_RUN_EXPERIMENT_RESULTS_DIR_PREFIX
+      value: "/requests"
+    - name: LLMDBENCH_HARNESS_STACK_NAME
+      value: "qwen-qwe-1159b3a8-wen3-32b"
+    - name: LLMDBENCH_VLLM_COMMON_METRICS_SCRAPE_ENABLED
+      value: "false"
+    - name: LLMDBENCH_VLLM_COMMON_METRICS_PORT
+      value: "8200"
+    - name: LLMDBENCH_VLLM_MONITORING_METRICS_PATH
+      value: "/metrics"
+    - name: LLMDBENCH_EPP_METRICS_SECRET
+      value: "inference-gateway-sa-metrics-reader-secret"
+    - name: LLMDBENCH_TIME_SERIES_METRICS
+      value: >-
+        ["vllm:kv_cache_usage_perc","vllm:gpu_cache_usage_perc","vllm:cpu_cache_usage_perc","vllm:gpu_memory_usage_bytes","vllm:cpu_memory_usage_bytes","container_memory_usage_bytes","DCGM_FI_DEV_GPU_UTIL","DCGM_FI_DEV_POWER_USAGE","vllm:num_requests_running","vllm:num_requests_waiting","vllm:prefix_cache_hits_total","vllm:prefix_cache_queries_total","vllm:external_prefix_cache_hits_total","vllm:external_prefix_cache_queries_total","vllm:prefix_cache_hit_rate","vllm:external_prefix_cache_hit_rate","vllm:nixl_xfer_time_seconds_sum","vllm:nixl_xfer_time_seconds_count","vllm:nixl_bytes_transferred_sum","vllm:nixl_bytes_transferred_count","vllm:num_preemptions_total","vllm:prompt_tokens_total","vllm:generation_tokens_total","inference_pool_average_kv_cache_utilization","inference_pool_average_queue_size","inference_pool_average_running_requests","inference_pool_ready_pods","llm_d_epp_flow_control_pool_saturation","llm_d_epp_flow_control_queue_size","llm_d_epp_request_running"]
+    - name: LLMDBENCH_METRICS_EMBED_TIME_SERIES
+      value: "true"
+    - name: LLMDBENCH_METRICS_TS_MAX_POINTS
+      value: "256"
+    - name: LLMDBENCH_STANDALONE_ENABLED
+      value: "false"
+    - name: LLMDBENCH_STANDALONE_LAUNCHER_ENABLED
+      value: "false"
+    - name: LLMDBENCH_FMA_ENABLED
+      value: "false"
+    - name: LLMDBENCH_VLLM_COMMON_VLLM_LOAD_FORMAT
+      value: "auto"
+    volumeMounts:
+    - name: results
+      mountPath: /requests
+    - name: inference-perf-profiles
+      mountPath: /workspace/profiles/inference-perf
+    - name: harness-scripts
+      mountPath: /workspace/harnesses
+  volumes:
+  - name: results
+    persistentVolumeClaim:
+      claimName: workload-pvc
+  - name: inference-perf-profiles
+    configMap:
+      name: inference-perf-profiles
+  - name: harness-scripts
+    configMap:
+      name: llmdbench-harness-scripts
+      defaultMode: 0755
+  serviceAccountName: inference-perf-runner
+  restartPolicy: Never

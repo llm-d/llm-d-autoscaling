@@ -1,0 +1,144 @@
+results:
+  request_performance:
+    aggregate:
+      requests:
+        failures: 120
+        total: 120
+run:
+  cid: 1b9e0ff7-ef8b-5f2d-bf19-e0f6aeabc83e
+  description: inference-perf-1788974766-7gxjeb
+  eid: dcb81ff5-a975-5900-a98a-6283fa4cf810
+  pid: e252ccf2-ea4b-4168-a062-22f20f57ed92
+  time:
+    duration: PT433.541273804S
+    end: '2026-09-09T17:33:22Z'
+    start: '2026-09-09T17:26:08Z'
+  uid: 3a914773-45be-47ae-8f60-e55eb369693e
+  user: namespace=lionel-bench-model-sim-32b-pd-token
+scenario:
+  load:
+    metadata:
+      cfg_id: ce6a0b7c9cbd00e399f44e28e78ef99ffd486abf902530e578928a15a520bbf6
+      schema_version: 0.0.1
+    native:
+      args:
+        workload: guide_pd-disaggregation_2.yaml
+      config:
+        api:
+          streaming: true
+          type: completion
+        data:
+          input_distribution:
+            max: 1024
+            mean: 1024
+            min: 1024
+            std_dev: 0
+          output_distribution:
+            max: 1024
+            mean: 1024
+            min: 1024
+            std_dev: 0
+          type: random
+        load:
+          num_workers: 100
+          stages:
+          - concurrency_level: null
+            duration: 120
+            num_requests: null
+            rate: 1
+          type: constant
+          worker_max_concurrency: 100
+        report:
+          request_lifecycle:
+            per_request: true
+            per_stage: true
+            summary: true
+        server:
+          base_url: http://172.30.128.7:80
+          ignore_eos: true
+          model_name: Qwen/Qwen3-32B
+          type: vllm
+        storage:
+          local_storage:
+            path: /requests/inference-perf-1788974766-7gxjeb_1
+        tokenizer:
+          pretrained_model_name_or_path: Qwen/Qwen3-32B
+    standardized:
+      input_seq_len:
+        distribution: gaussian
+        max: 1024
+        min: 1024
+        value: 1024
+      output_seq_len:
+        distribution: gaussian
+        max: 1024
+        min: 1024
+        value: 1024
+      parallelism: 1
+      rate_qps: 1.0
+      source: random
+      stage: 0
+      tool: inference-perf
+      tool_version: v0.6.1
+  stack:
+  - metadata:
+      cfg_id: 16c0d563b61c6a0a42e93b5b09a5994db4ab86017d1944d93c85c2dd9f95e420
+      label: ''
+      schema_version: 0.0.1
+    native:
+      args: {}
+      envars: {}
+    standardized:
+      accelerator:
+        count: 1
+        model: auto
+        parallelism:
+          dp: 1
+          dp_local: 1
+          ep: 1
+          pp: 1
+          tp: 1
+          workers: 1
+      kind: inference_engine
+      model:
+        name: Qwen/Qwen3-32B
+      replicas: 1
+      role: prefill
+      tool: ''
+      tool_version: '//:'
+  - metadata:
+      cfg_id: 16c0d563b61c6a0a42e93b5b09a5994db4ab86017d1944d93c85c2dd9f95e420
+      label: ''
+      schema_version: 0.0.1
+    native:
+      args: {}
+      envars: {}
+    standardized:
+      accelerator:
+        count: 1
+        model: auto
+        parallelism:
+          dp: 1
+          dp_local: 1
+          ep: 1
+          pp: 1
+          tp: 1
+          workers: 1
+      kind: inference_engine
+      model:
+        name: Qwen/Qwen3-32B
+      replicas: 1
+      role: decode
+      tool: ''
+      tool_version: '//:'
+  - metadata:
+      cfg_id: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+      label: Inference Scheduler (EPP)
+      schema_version: 0.0.1
+    native:
+      config: {}
+    standardized:
+      kind: generic
+      tool: inference_scheduler
+      tool_version: ''
+version: '0.2'
