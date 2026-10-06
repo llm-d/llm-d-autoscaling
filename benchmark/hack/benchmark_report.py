@@ -303,16 +303,25 @@ def cmd_configure(args):
 # snapshot
 # --------------------------------------------------------------------------
 
-def _run_window_epochs(meta):
+def _run_window_epochs(meta, allow_open_ended=False):
     """Return (namespace, from_epoch_s, to_epoch_s) for a run_metadata dict, buffered by
-    SNAPSHOT_WINDOW_BUFFER_SECONDS on each side, or None if the run window isn't recorded yet."""
-    if not meta or not meta.get("harness_start") or not meta.get("harness_stop"):
+    SNAPSHOT_WINDOW_BUFFER_SECONDS on each side, or None if the run window isn't available yet.
+
+    With allow_open_ended=True, a run that has started but has no harness_stop yet returns
+    a window with to_epoch_s=None (open-ended/live) instead of None -- used for live Grafana
+    links on in-progress experiments. Snapshot capture needs concrete Prometheus query bounds,
+    so it must call this with the default (both timestamps required)."""
+    if not meta or not meta.get("harness_start"):
         return None
     start = yaml.safe_load(f'x: {meta["harness_start"]}')["x"]
-    stop = yaml.safe_load(f'x: {meta["harness_stop"]}')["x"]
-    if not isinstance(start, datetime.datetime) or not isinstance(stop, datetime.datetime):
+    if not isinstance(start, datetime.datetime):
         return None
     start_s = start.timestamp() - SNAPSHOT_WINDOW_BUFFER_SECONDS
+
+    stop_raw = meta.get("harness_stop")
+    stop = yaml.safe_load(f'x: {stop_raw}')["x"] if stop_raw else None
+    if not isinstance(stop, datetime.datetime):
+        return (meta.get("namespace", ".*"), start_s, None) if allow_open_ended else None
     stop_s = stop.timestamp() + SNAPSHOT_WINDOW_BUFFER_SECONDS
     return meta.get("namespace", ".*"), start_s, stop_s
 
@@ -331,10 +340,16 @@ def _live_dashboard_url(grafana_url, dashboard_uid, namespace, start_s, stop_s):
     """Build a Grafana dashboard URL time-boxed to a run window and scoped to its namespace,
     so the dashboard shows only the data for that run. Namespace + time window is the whole
     of a session's identity here -- the pods carry no session-id label to filter on; see
-    "Identifying a session's metrics" in docs/benchmark-report.md."""
+    "Identifying a session's metrics" in docs/benchmark-report.md.
+
+    stop_s=None means the run hasn't finished yet: the window stays open-ended (to=now)
+    and auto-refreshes every 5s so the dashboard tracks the run live. A concrete stop_s
+    freezes the window to a fixed historical range instead, with no auto-refresh."""
+    to_param = "now" if stop_s is None else str(int(stop_s * 1000))
+    refresh_param = "&refresh=5s" if stop_s is None else ""
     return (
         f"{grafana_url.rstrip('/')}/d/{dashboard_uid}"
-        f"?orgId=1&from={int(start_s * 1000)}&to={int(stop_s * 1000)}"
+        f"?orgId=1&from={int(start_s * 1000)}&to={to_param}{refresh_param}"
         f"&var-namespace={urllib.parse.quote(namespace)}"
     )
 
@@ -583,7 +598,7 @@ def _render_experiment(experiment_dir):
     metric_rows = list(_flatten(metrics)) if metrics else []
 
     snapshot = _load_yaml(os.path.join(experiment_dir, "grafana_snapshot.yaml"))
-    window = _run_window_epochs(meta)
+    window = _run_window_epochs(meta, allow_open_ended=True)
     live_url = snapshot.get("live_dashboard_url") if snapshot else (
         _live_dashboard_url(DEFAULT_GRAFANA_URL, DASHBOARD_UID, *window) if window else None
     )
@@ -944,9 +959,10 @@ def _scan_experiment(workspace, experiment_dir, grafana_url=DEFAULT_GRAFANA_URL,
     grafana = _load_yaml(os.path.join(experiment_dir, "grafana_snapshot.yaml")) or None
 
     # Live dashboard link, time-boxed to this run and scoped to its namespace, computed
-    # straight from the run window -- available as soon as run_metadata.yaml exists, with
-    # no snapshot required (it just needs Grafana + Prometheus still holding the data).
-    window = _run_window_epochs(meta)
+    # straight from the run window -- available as soon as run_metadata.yaml records a
+    # harness_start, with no snapshot required (it just needs Grafana + Prometheus still
+    # holding the data). Open-ended (to=now, auto-refreshing) until harness_stop lands.
+    window = _run_window_epochs(meta, allow_open_ended=True)
     grafana_live_url = _live_dashboard_url(grafana_url, dashboard_uid, *window) if window else None
 
     harness_delta_seconds = _parse_iso8601_duration_seconds(meta.get("harness_delta")) if meta else None
@@ -1046,15 +1062,16 @@ def _scan_session(workspace, session_id, grafana_url=DEFAULT_GRAFANA_URL, dashbo
         stage_label += " (dry-run)"
 
     # Session-level live dashboard link, scoped to this session's namespace and its whole
-    # lifetime so far -- unlike an experiment's link (only available once run_metadata.yaml
-    # records a finished harness_start/harness_stop), this works from the moment the first
-    # log line lands, including while standup/run is still in progress (end of window is
-    # "now" until torn down, then freezes at the last observed log activity).
-    session_window_to = last_ts if (stage == "torn_down" and last_ts) else now
+    # lifetime so far -- this works from the moment the first log line lands, including
+    # while standup/run is still in progress. While in progress the window stays
+    # open-ended (to=now, auto-refreshing every 5s) so the dashboard tracks the run live;
+    # once torn down it freezes to the last observed log activity.
+    session_window_finished = stage == "torn_down" and last_ts
     session_grafana_live_url = (
         _live_dashboard_url(
             grafana_url, dashboard_uid, namespace or ".*",
-            first_ts.timestamp(), session_window_to.timestamp(),
+            first_ts.timestamp(),
+            last_ts.timestamp() if session_window_finished else None,
         )
         if first_ts else None
     )
@@ -1167,26 +1184,49 @@ def _discover_cluster_configs(benchmark_dir):
     return out
 
 
-def _discover_harnesses(llmd_benchmark_dir):
+def _harness_workload_files(harness_dir):
+    """{workload_id: filename} for one harness dir. Most profiles are `.yaml.in` Jinja
+    templates the CLI renders at run time via `-w <name>.yaml`; a few are already-rendered
+    plain `.yaml`. Either way workload_id is the name without the `.in` suffix."""
+    return {
+        (f[: -len(".in")] if f.endswith(".in") else f): f
+        for f in sorted(os.listdir(harness_dir))
+        if f.endswith((".yaml", ".yml", ".yaml.in", ".yml.in"))
+        and os.path.isfile(os.path.join(harness_dir, f))
+    }
+
+
+def _discover_harnesses(llmd_benchmark_dir, benchmark_dir=None):
+    """Every harness + its available workload profiles: the sibling llm-d-benchmark clone's
+    shipped profiles under workload/profiles/<harness>/, plus (if benchmark_dir is given)
+    this repo's own repo-local overlays under benchmark/workload/<harness>/ -- e.g. a custom
+    staged ramp derived from a shipped profile. A local workload's `-w` name needn't exist in
+    the sibling clone at all: the launcher runs it with `--workload-file-path` instead, which
+    the CLI uses in place of resolving `-w` under its own workload/profiles/<harness> (see
+    llm-d-benchmark's step_05_render_profiles.py)."""
+    harnesses = {}
+
     profiles_root = os.path.join(llmd_benchmark_dir, "workload", "profiles")
-    if not os.path.isdir(profiles_root):
-        return []
-    harnesses = []
-    for entry in sorted(os.listdir(profiles_root)):
-        harness_dir = os.path.join(profiles_root, entry)
-        if not os.path.isdir(harness_dir):
-            continue
-        # Most profiles are `.yaml.in` Jinja templates the CLI renders at run
-        # time via `-w <name>.yaml`; a few are already-rendered plain `.yaml`.
-        # Either way the `-w` flag takes the name without the `.in` suffix.
-        workloads = sorted({
-            f[: -len(".in")] if f.endswith(".in") else f
-            for f in os.listdir(harness_dir)
-            if f.endswith((".yaml", ".yml", ".yaml.in", ".yml.in"))
-            and os.path.isfile(os.path.join(harness_dir, f))
-        })
-        harnesses.append({"id": entry, "workloads": workloads})
-    return harnesses
+    if os.path.isdir(profiles_root):
+        for entry in sorted(os.listdir(profiles_root)):
+            harness_dir = os.path.join(profiles_root, entry)
+            if os.path.isdir(harness_dir):
+                harnesses[entry] = [
+                    {"id": wid, "local": False} for wid in _harness_workload_files(harness_dir)
+                ]
+
+    local_root = os.path.join(benchmark_dir, "workload") if benchmark_dir else None
+    if local_root and os.path.isdir(local_root):
+        for entry in sorted(os.listdir(local_root)):
+            harness_dir = os.path.join(local_root, entry)
+            if not os.path.isdir(harness_dir):
+                continue
+            harnesses.setdefault(entry, []).extend(
+                {"id": wid, "local": True, "path": os.path.join(harness_dir, fname)}
+                for wid, fname in _harness_workload_files(harness_dir).items()
+            )
+
+    return [{"id": hid, "workloads": workloads} for hid, workloads in sorted(harnesses.items())]
 
 
 def _current_kube_context():
@@ -1529,7 +1569,7 @@ def build_launch_meta(benchmark_dir, llmd_benchmark_dir):
     return {
         "specs": _discover_specs(benchmark_dir),
         "cluster_configs": _discover_cluster_configs(benchmark_dir),
-        "harnesses": _discover_harnesses(llmd_benchmark_dir),
+        "harnesses": _discover_harnesses(llmd_benchmark_dir, benchmark_dir),
         "kube_context": _current_kube_context(),
         "llmd_benchmark_dir": llmd_benchmark_dir,
         "llmdbenchmark_bin_found": os.path.isfile(llmdbenchmark_bin),
@@ -1808,15 +1848,20 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             return argv
 
         def validate_harness_workload():
+            """Returns (harness, workload_flags), where workload_flags is the argv fragment
+            selecting the profile -- `--workload-file-path <path>` for a repo-local workload
+            (see _discover_harnesses), `-w <name>` for one shipped by the sibling clone."""
             harness = body.get("harness")
             workload = body.get("workload")
             if harness not in harnesses_by_id:
                 self._send_json(400, {"error": f"Unknown harness: {harness!r}"})
                 return None
-            if workload not in harnesses_by_id[harness]["workloads"]:
+            entry = next((w for w in harnesses_by_id[harness]["workloads"] if w["id"] == workload), None)
+            if entry is None:
                 self._send_json(400, {"error": f"Unknown workload {workload!r} for harness {harness!r}"})
                 return None
-            return harness, workload
+            workload_flags = ["--workload-file-path", entry["path"]] if entry["local"] else ["-w", entry["id"]]
+            return harness, workload_flags
 
         def spawn(argv):
             return subprocess.Popen(
@@ -1828,8 +1873,8 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             hw = validate_harness_workload()
             if hw is None:
                 return
-            harness, workload = hw
-            argv_chain = [make_argv("standup"), make_argv("smoketest"), make_argv("run", ["-l", harness, "-w", workload])]
+            harness, workload_flags = hw
+            argv_chain = [make_argv("standup"), make_argv("smoketest"), make_argv("run", ["-l", harness] + workload_flags)]
 
             def orchestrate():
                 # Each phase gets its own workspace directory (the CLI always mints a
@@ -1854,8 +1899,8 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             hw = validate_harness_workload()
             if hw is None:
                 return
-            harness, workload = hw
-            argv += ["-l", harness, "-w", workload]
+            harness, workload_flags = hw
+            argv += ["-l", harness] + workload_flags
 
         try:
             proc = spawn(argv)

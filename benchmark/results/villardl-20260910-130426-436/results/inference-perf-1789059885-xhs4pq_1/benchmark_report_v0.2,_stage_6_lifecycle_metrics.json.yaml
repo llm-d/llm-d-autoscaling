@@ -1,0 +1,168 @@
+results:
+  request_performance:
+    aggregate:
+      requests:
+        failures: 135
+        total: 135
+run:
+  cid: 1b9e0ff7-ef8b-5f2d-bf19-e0f6aeabc83e
+  description: inference-perf-1789059885-xhs4pq
+  eid: a5c153cb-dc33-530f-9aec-314639bd2942
+  pid: 37093e29-772f-4c36-963f-e0d9c5a41bcd
+  time:
+    duration: PT3451.663642208S
+    end: '2026-09-10T18:02:18Z'
+    start: '2026-09-10T17:04:47Z'
+  uid: 7f0e785b-abb3-4d53-b860-9c3835c2e618
+  user: namespace=lionel-bench-model-sim-32b-pd-token
+scenario:
+  load:
+    metadata:
+      cfg_id: a4af390fd8c29468fa94400169a1c61ef8cf63ec670ae827aea28b0aa0b17c05
+      schema_version: 0.0.1
+    native:
+      args:
+        workload: prefill-heavy.yaml
+      config:
+        api:
+          streaming: true
+          type: completion
+        data:
+          input_distribution:
+            max: 8192
+            mean: 8192
+            min: 8192
+            std_dev: 0
+          output_distribution:
+            max: 256
+            mean: 256
+            min: 256
+            std_dev: 0
+          type: random
+        load:
+          num_workers: 64
+          stages:
+          - concurrency_level: null
+            duration: 300
+            num_requests: null
+            rate: 0.15
+          - concurrency_level: null
+            duration: 300
+            num_requests: null
+            rate: 0.3
+          - concurrency_level: null
+            duration: 420
+            num_requests: null
+            rate: 0.5
+          - concurrency_level: null
+            duration: 600
+            num_requests: null
+            rate: 0.8
+          - concurrency_level: null
+            duration: 600
+            num_requests: null
+            rate: 1.4
+          - concurrency_level: null
+            duration: 300
+            num_requests: null
+            rate: 0.5
+          - concurrency_level: null
+            duration: 900
+            num_requests: null
+            rate: 0.15
+          type: constant
+          worker_max_concurrency: 100
+        report:
+          request_lifecycle:
+            per_request: true
+            per_stage: true
+            summary: true
+        server:
+          base_url: http://172.30.126.130:80
+          ignore_eos: true
+          model_name: Qwen/Qwen3-32B
+          type: vllm
+        storage:
+          local_storage:
+            path: /requests/inference-perf-1789059885-xhs4pq_1
+        tokenizer:
+          pretrained_model_name_or_path: Qwen/Qwen3-32B
+    standardized:
+      input_seq_len:
+        distribution: gaussian
+        max: 8192
+        min: 8192
+        value: 8192
+      output_seq_len:
+        distribution: gaussian
+        max: 256
+        min: 256
+        value: 256
+      parallelism: 1
+      rate_qps: 0.15
+      source: random
+      stage: 6
+      tool: inference-perf
+      tool_version: v0.6.1
+  stack:
+  - metadata:
+      cfg_id: 16c0d563b61c6a0a42e93b5b09a5994db4ab86017d1944d93c85c2dd9f95e420
+      label: ''
+      schema_version: 0.0.1
+    native:
+      args: {}
+      envars: {}
+    standardized:
+      accelerator:
+        count: 1
+        model: auto
+        parallelism:
+          dp: 1
+          dp_local: 1
+          ep: 1
+          pp: 1
+          tp: 1
+          workers: 1
+      kind: inference_engine
+      model:
+        name: Qwen/Qwen3-32B
+      replicas: 1
+      role: prefill
+      tool: ''
+      tool_version: '//:'
+  - metadata:
+      cfg_id: 16c0d563b61c6a0a42e93b5b09a5994db4ab86017d1944d93c85c2dd9f95e420
+      label: ''
+      schema_version: 0.0.1
+    native:
+      args: {}
+      envars: {}
+    standardized:
+      accelerator:
+        count: 1
+        model: auto
+        parallelism:
+          dp: 1
+          dp_local: 1
+          ep: 1
+          pp: 1
+          tp: 1
+          workers: 1
+      kind: inference_engine
+      model:
+        name: Qwen/Qwen3-32B
+      replicas: 1
+      role: decode
+      tool: ''
+      tool_version: '//:'
+  - metadata:
+      cfg_id: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+      label: Inference Scheduler (EPP)
+      schema_version: 0.0.1
+    native:
+      config: {}
+    standardized:
+      kind: generic
+      tool: inference_scheduler
+      tool_version: ''
+version: '0.2'
