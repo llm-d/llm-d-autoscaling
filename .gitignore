@@ -39,13 +39,9 @@ biran-*/
 llmd/
 llmd-infra/
 
-# Per-session kubeconfig (embeds a live cluster token) and raw setup command
-# capture logs (which duplicate that token via `oc config view`) -- never
-# commit these, unlike the rest of benchmark/results/.
-benchmark/results/*/environment/
-benchmark/results/*/setup/commands/
-benchmark/results/*/logs/
-benchmark/results/*/plan/
+# Benchmark run output (includes a per-session kubeconfig with a live
+# cluster token and raw setup command logs) -- never commit.
+benchmark/results/
 
 *.tgz
 actionlint
