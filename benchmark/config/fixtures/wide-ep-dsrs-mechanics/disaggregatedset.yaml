@@ -1,0 +1,72 @@
+apiVersion: disaggregatedset.x-k8s.io/v1
+kind: DisaggregatedSet
+metadata:
+  name: wide-ep-dsrs
+  labels:
+    llm-d.ai/test: "1525-dsrs-mechanics"
+    llm-d.ai/fixture: wide-ep-dsrs-mechanics
+spec:
+  # External role scaling is intentionally exercised with one slice only.
+  slices: 1
+  roles:
+    - name: prefill
+      spec:
+        replicas: 1
+        leaderWorkerTemplate:
+          size: 2
+          workerTemplate:
+            metadata:
+              labels:
+                llm-d.ai/test: "1525-dsrs-mechanics"
+                llm-d.ai/role: prefill
+            spec:
+              containers:
+                - name: cpu
+                  image: registry.k8s.io/e2e-test-images/busybox:1.29-4
+                  command: ["/bin/sh", "-c"]
+                  args:
+                    - "touch /tmp/ready; trap : TERM INT; sleep 3600 & wait"
+                  readinessProbe:
+                    exec:
+                      command: ["/bin/sh", "-c", "test -f /tmp/ready"]
+                    periodSeconds: 2
+                    timeoutSeconds: 1
+                  resources:
+                    requests:
+                      cpu: 10m
+                      memory: 16Mi
+                    limits:
+                      cpu: 100m
+                      memory: 64Mi
+    - name: decode
+      # Decode is representative only; this does not establish a production
+      # role or capacity policy for NVIDIA Wide-EP.
+      scaling:
+        mode: External
+      spec:
+        leaderWorkerTemplate:
+          size: 2
+          workerTemplate:
+            metadata:
+              labels:
+                llm-d.ai/test: "1525-dsrs-mechanics"
+                llm-d.ai/role: decode
+            spec:
+              containers:
+                - name: cpu
+                  image: registry.k8s.io/e2e-test-images/busybox:1.29-4
+                  command: ["/bin/sh", "-c"]
+                  args:
+                    - "touch /tmp/ready; trap : TERM INT; sleep 3600 & wait"
+                  readinessProbe:
+                    exec:
+                      command: ["/bin/sh", "-c", "test -f /tmp/ready"]
+                    periodSeconds: 2
+                    timeoutSeconds: 1
+                  resources:
+                    requests:
+                      cpu: 10m
+                      memory: 16Mi
+                    limits:
+                      cpu: 100m
+                      memory: 64Mi
