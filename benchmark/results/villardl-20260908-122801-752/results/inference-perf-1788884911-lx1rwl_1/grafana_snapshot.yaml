@@ -1,7 +1,0 @@
-experiment_id: inference-perf-1788884911-lx1rwl
-namespace: lionel-bench-model-sim-32b-pd
-session_id: villardl-20260908-122801-752
-captured_at: '2026-09-08T18:00:27Z'
-snapshot_url: http://localhost:3000/dashboard/snapshot/qmsItcqg8PEWKXz3VwymLEcvvuyrqpf2
-snapshot_delete_url: http://localhost:3000/api/snapshots-delete/oQrFxJtb03ZVWBlHozIkDp0vwRSvwM6I
-live_dashboard_url: http://localhost:3000/d/llm-d-autoscaling-benchmark-run?orgId=1&from=1788884857000&to=1788885423000&var-namespace=lionel-bench-model-sim-32b-pd&var-session_id=villardl-20260908-122801-752
