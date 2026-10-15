@@ -262,7 +262,7 @@ object's, so `$namespace` scopes them correctly as-is.
 |-----|--------|
 | **vLLM - capacity & queueing** | KV cache utilization (per pod), queue size (per pod), fleet running/waiting, waiting by reason, preemptions, prefix cache hit rate (local + KV-connector) |
 | **vLLM - throughput & latency** | token throughput, completed requests by finish reason, TTFT, inter-token latency, end-to-end latency, request queue time (p50/p95/p99) |
-| **Replicas & autoscaling** | serving replicas by role (prefill/decode, counted from the metrics themselves), Deployment spec/available/unavailable, HPA desired vs current vs min/max, KEDA trigger values + activation, WVA desired vs current, EPP ready endpoints, KEDA autoscaler errors & health |
+| **Replicas & autoscaling** | serving replicas by role (prefill/decode, counted from the metrics themselves), Deployment spec/available/unavailable, HPA desired vs current vs min/max, KEDA trigger values + activation, WVA desired vs current, EPP ready endpoints, KEDA autoscaler errors & health, namespace Pending/Running/total pods |
 | **EPP (router / endpoint picker)** | pool KV utilization and spread, pool queue/running averages, per-endpoint queue size, request + error rate, in-flight requests, router-observed latency, scheduling latency, flow-control saturation and queue, in-flight tokens per endpoint |
 
 Notes on what may legitimately come up empty:
@@ -275,6 +275,16 @@ Notes on what may legitimately come up empty:
   cost of a strategy. "Serving replicas by role" is the only one that is
   workload-API-agnostic -- it works for LeaderWorkerSet and standalone
   deployments, where `kube_deployment_*` has nothing to say.
+- **Namespace Pods by Phase** uses `kube_pod_status_phase` to show Pending,
+  Running, and total pods before they expose inference metrics. Compare it
+  with desired replicas and ready endpoints when diagnosing slow scale-up.
+  Pending can include scheduling delays, image pulls, and initialization;
+  Running does not imply Ready. This panel includes **all pods in the selected
+  namespace**, including the router and benchmark harness, and total includes
+  Succeeded, Failed, and Unknown phases. It is not a model server replica count.
+  Queries deduplicate by namespace, pod, and UID before aggregation, so
+  multiple scrape targets do not inflate the count. Zero phase gauges remain
+  zero; missing metrics remain gaps, rather than being reported as zero pods.
 - **EPP metrics are queried under both names.** llm-d-router renamed them to
   `llm_d_epp_*` and kept the `inference_pool_*` / `inference_objective_*` /
   `inference_extension_*` originals as deprecated aliases; each panel is
