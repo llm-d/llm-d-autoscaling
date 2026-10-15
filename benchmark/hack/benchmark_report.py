@@ -44,6 +44,7 @@ import datetime
 import glob
 import http.server
 import json
+import math
 import mimetypes
 import os
 import re
@@ -417,7 +418,7 @@ def _prometheus_series_to_frame(refid, expr, step_s, labels, times_s, values):
                 "typeVersion": [0, 1],
             },
         },
-        "data": {"values": [times_s, values]},
+        "data": {"values": [times_s, [v if math.isfinite(v) else None for v in values]]},
     }
 
 
