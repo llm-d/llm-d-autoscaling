@@ -1599,11 +1599,19 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             services = discover_grafana_services(context=self.kube_context)
             self._send_json(200, {"target": target, "services": services})
         elif path.startswith("/results/"):
-            rel_match = re.fullmatch(r'(?:[a-zA-Z0-9][a-zA-Z0-9._-]*/)*[a-zA-Z0-9][a-zA-Z0-9._-]*', path[len("/results/"):])
+            raw = path[len("/results/"):]
+            if not raw or '..' in raw.split('/'):
+                self._send_error(403, "Forbidden")
+                return
+            rel_match = re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._/-]*', raw)
             if not rel_match:
                 self._send_error(403, "Forbidden")
                 return
-            requested = os.path.join(os.path.realpath(self.workspace), rel_match.group(0))
+            root = os.path.realpath(self.workspace)
+            requested = os.path.realpath(os.path.join(root, rel_match.group(0)))
+            if not requested.startswith(root + os.sep):
+                self._send_error(403, "Forbidden")
+                return
             if not os.path.isfile(requested):
                 self._send_error(404, "Not found")
                 return
