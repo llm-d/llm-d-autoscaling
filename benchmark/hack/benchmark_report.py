@@ -1639,10 +1639,11 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._send_error(403, "Forbidden (cross-origin delete rejected)")
             return
 
-        session_id = urllib.parse.unquote(path[len(prefix):])
-        if not session_id or "/" in session_id or session_id in (".", ".."):
+        sid_match = re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._-]*', urllib.parse.unquote(path[len(prefix):]))
+        if not sid_match:
             self._send_error(400, "Bad request: expected /results/<session-id>")
             return
+        session_id = sid_match.group(0)
 
         root = Path(self.workspace).resolve()
         target = root / session_id
@@ -1650,7 +1651,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._send_error(404, "Not found")
             return
 
-        shutil.rmtree(target)
+        shutil.rmtree(str(target))
         self._send_bytes(json.dumps({"deleted": session_id}).encode(), "application/json")
 
     def _read_json_body(self):
