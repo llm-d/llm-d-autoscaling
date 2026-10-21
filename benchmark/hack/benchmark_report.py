@@ -1639,14 +1639,18 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._send_error(403, "Forbidden (cross-origin delete rejected)")
             return
 
-        session_id = urllib.parse.unquote(path[len(prefix):])
-        if not session_id or "/" in session_id or session_id in (".", ".."):
+        sid_match = re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._-]*', urllib.parse.unquote(path[len(prefix):]))
+        if not sid_match:
             self._send_error(400, "Bad request: expected /results/<session-id>")
             return
+        session_id = sid_match.group(0)
 
-        root = Path(self.workspace).resolve()
-        target = root / session_id
-        if os.path.islink(target) or target.resolve().parent != root or not target.is_dir():
+        root = os.path.realpath(self.workspace)
+        target = os.path.realpath(os.path.join(root, session_id))
+        if not target.startswith(root + os.sep):
+            self._send_error(404, "Not found")
+            return
+        if os.path.islink(target) or not os.path.isdir(target):
             self._send_error(404, "Not found")
             return
 
