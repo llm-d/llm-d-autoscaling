@@ -1,0 +1,31 @@
+# Guardrail alert for M2/M3: fires when llm-d-async cannot read backlog depth
+# from the broker (Redis/PubSub). While source_available == 0, the KEDA query's
+# `and (llm_d_async_async_broker_backlog_source_available == 1)` join drops the
+# untrusted series and falls back to vector(0) — safe against false scale-up on
+# stale readings, but blind for scale-down.
+#
+# Ensure the metadata.labels match your Prometheus CR's ruleSelector
+# (e.g. release: llmd for kube-prometheus-stack installed by llm-d guides).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: async-backlog-source-rules
+  namespace: llm-d-async
+  labels:
+    release: llmd
+spec:
+  groups:
+  - name: llm-d-async-autoscaling.rules
+    rules:
+    - alert: AsyncBrokerBacklogSourceUnavailable
+      expr: llm_d_async_async_broker_backlog_source_available == 0
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "llm-d-async broker backlog source unavailable (queue={{ $labels.queue_name }})"
+        description: >-
+          llm_d_async_async_broker_backlog_source_available has been 0 for >5m
+          on queue {{ $labels.queue_name }} in namespace {{ $labels.namespace }}.
+          Backlog-driven KEDA scaling signals are degraded while the broker
+          cannot be polled.
