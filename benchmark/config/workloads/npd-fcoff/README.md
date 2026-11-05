@@ -216,6 +216,40 @@ Three things to know about the bootstrap arm:
   `--set npdFcoff.minReplicas=0`, or patch the live ScaledObject's
   `minReplicaCount` and scale the Deployment to 0, as this validation did.
 
+## GPU knee (pokprod001)
+
+Measured 2026-11-05 with the `baseline` spec pinned at one replica
+(`--set npdFcoff.staticReplicas=1`), `ocp/vllm-npd.yaml`, namespace
+`npdfc-knee`: Qwen3-8B bf16 on one H100 80GB, upstream vLLM v0.31.0 (the
+research digest), `--max-model-len 32768`, `--max-num-seqs 128`, EPP v0.11.0
+with flow control off. The workload was `knee.yaml.in` replaying `gpu-knee.csv`,
+the research `raw/knee` schedule. Reduced with `analyze.py knee`; the output is
+in `benchmark/results/npd-fcoff-gpu-20261105/knee.json`.
+
+| offered req/s | ν (work tok/s) | A (TTFT ≤ 1 s) | TTFT p50 / p90 / p99 (s) | ITL p50 (ms) | errors | research A |
+|---|---|---|---|---|---|---|
+| 0.95 | 8,184 | 1.000 | 0.28 / 0.49 / 0.79 | 8.8 | 0 | 1.000 |
+| 1.93 | 16,626 | 0.976 | 0.29 / 0.70 / 1.08 | 15.3 | 0 | 0.986 |
+| 2.90 | 24,953 | 0.849 | 0.54 / 1.11 / 1.63 | 36.8 | 0 | 0.901 |
+| 4.12 | 35,520 | 0.021 | 24.6 / 40.8 / 46.9 | 100.9 | 8.7 % | 0.028 |
+| 5.03 | 43,359 | 0.000 | — | — | 100 % | 0.000 |
+| 6.01 | 51,773 | 0.000 | — | — | 100 % | 0.000 |
+
+**C_P = 2.13 req/s → ν_max = 18,331 work tok/s → `thresholdWork` 12,832.**
+The research knee on the same model, engine and GPU type was 2.42 req/s
+(ν_max 20,884, threshold 14,619). Here A crosses 0.95 earlier, so the knee
+is 12 % lower. Part of that is the reduction: the research analysis
+interpolated between nominal stage rates, and on this run that alone gives
+2.20 req/s. The rest is the plant: router path, node and harness all differ,
+and A at 2.9 req/s is 0.849 here against 0.901. The cliff is in the same
+place: A collapses between 2.9 and 4.1 req/s, and at 5 req/s and above every
+request hits the 60 s client timeout. Prefix-cache hit rate was 0, so the
+prompts were uncached as intended.
+
+Use the measured value on this plant:
+`--set npdFcoff.thresholdWork=12832`. The scenario default stays at the
+research number (14,619) so the original configuration is reproducible.
+
 ## What differs from the GPU benchmark
 
 The check is signal-level equivalence, not identical absolute numbers.

@@ -11,24 +11,23 @@
 # Unlike ocp/vllm.yaml (P/D, NixlConnector), this overlay serves the aggregated
 # path: no KV-transfer config, no routing sidecar, one Deployment.
 #
-# Image: the research plant ran docker.io/vllm/vllm-openai@sha256:a4a4c043...
-# (v0.31.0). This overlay uses ghcr.io/llm-d/llm-d-cuda, the llm-d vLLM build
-# llm-d-benchmark resolves for `tag: auto`; pin a v0.31.0-based tag to match
-# the research numbers exactly, and re-measure the knee if you change it.
+# Image: pinned to the research plant's engine, upstream vLLM v0.31.0 by
+# digest. `ghcr.io/llm-d/llm-d-cuda` with `tag: auto` resolves to an older
+# llm-d build (0.3.0 at the time of writing), whose knee is not comparable to
+# the research one. The knee is a property of the engine: re-measure it
+# (knee.yaml.in) whenever this image changes.
 #
 # Merge note: dicts deep-merge, lists replace wholesale. This overlay sets
 # `keda.prometheus` (connection/auth only); `keda.scaledObjects` (the law)
 # stays in the scenario.
 #
 # KEDA PROMETHEUS AUTH (OpenShift): triggers go through the Thanos Querier
-# route with bearer-token auth. The ServiceAccount + ClusterRoleBinding below
-# grant it read access; create the `prometheus-auth` Secret once per namespace
-# after standup:
-#   oc create token wva-prometheus-auth -n <namespace> --duration=24h > /tmp/tok
-#   oc get cm openshift-service-ca.crt -n <namespace> \
-#     -o jsonpath='{.data.service-ca\.crt}' > /tmp/ca.crt
-#   oc create secret generic prometheus-auth -n <namespace> \
-#     --from-file=ca.crt=/tmp/ca.crt --from-literal=bearerToken="$(cat /tmp/tok)"
+# with bearer-token auth. llm-d-benchmark's standup creates the
+# `keda-prometheus-auth` ServiceAccount and fills the `prometheus-auth` Secret
+# with a token for it (keda.prometheus.saName, default keda-prometheus-auth);
+# the ClusterRoleBinding below grants THAT account Thanos read access. Binding
+# any other account leaves the token unauthorized: Thanos answers 403 and the
+# ScaledObject reports TriggerError.
 # User-workload monitoring must keep the `namespace` label on the vLLM and EPP
 # series (it does by default); every trigger term filters on it.
 keda:
@@ -39,10 +38,6 @@ keda:
     secretName: prometheus-auth
 
 extraObjects:
-  - apiVersion: v1
-    kind: ServiceAccount
-    metadata:
-      name: wva-prometheus-auth
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -53,7 +48,7 @@ extraObjects:
       name: allow-thanos-querier-api-access
     subjects:
       - kind: ServiceAccount
-        name: wva-prometheus-auth
+        name: keda-prometheus-auth
         namespace: ${namespace.name}
 
 # GPU scheduling. Uncomment nodeSelector to pin to the research plant's GPU.
@@ -78,8 +73,8 @@ images:
     repository: ghcr.io/llm-d/llm-d-benchmark
     tag: v0.8.9
   vllm:
-    repository: ghcr.io/llm-d/llm-d-cuda
-    tag: auto
+    repository: docker.io/vllm/vllm-openai
+    tag: v0.31.0@sha256:a4a4c0437bf7240089da5f08aa370c4aee17ae5290f7a3b468825ee26c4c3a6b
 
 vllmCommon:
   volumes:

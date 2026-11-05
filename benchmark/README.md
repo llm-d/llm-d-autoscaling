@@ -244,7 +244,7 @@ be unchanged.
 | `staging/pd-disaggregation/kv-early` | experiment | not yet run |
 | `staging/lws-pd-disaggregation` | WIP / test bed | dry-run render only |
 | `staging/optimized-baseline/npd-fcoff` | experiment | live on kind (`k8s/model-sim-qwen3-8b-npd`): standup → staircase / mix-shift / overload runs; dry-run on `ocp/vllm-npd` |
-| `staging/optimized-baseline/baseline` | experiment (control) | dry-run render on both npd overlays |
+| `staging/optimized-baseline/baseline` | experiment (control) | dry-run on kind; live knee run on `ocp/vllm-npd` (pokprod001, 1× H100) |
 
 Dry-run composition is confirmed for the three P/D backend overlays. A live
 end-to-end run on a cluster has been exercised only for
