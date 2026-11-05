@@ -1,0 +1,210 @@
+# BACKEND OVERLAY — vLLM CPU + latency-simulation plugin, Qwen3-8B, single
+# Deployment (no P/D), plain Kubernetes / kind
+# Apply with: --cluster-config benchmark/config/cluster-configs/k8s/model-sim-qwen3-8b-npd.yaml
+#
+# The kind stand-in for the npd-fcoff GPU plant
+# (scenarios/staging/optimized-baseline/{baseline,npd-fcoff}.yaml). It is the
+# research repo's kind sync-validation plant
+# (llm-d-autoscaling-research experiments/epp-input-rate/kind, the `eppir-vllm`
+# Deployment) expressed as an llm-d-benchmark overlay:
+#   - real vLLM v0.31.0 serving stack on CPU (scheduler, KV-block accounting,
+#     /metrics) with the forward pass replaced by SimulatedForCausalLM from
+#     ghcr.io/lionelvillard/vllm-sim-deps (copied into /plugins by an
+#     initContainer; PYTHONPATH=/plugins loads it);
+#   - a deliberately tiny model config (1 layer, 128 hidden, vocab 1024) so a
+#     step costs ~nothing on CPU, and a LINEAR latency model whose sleep makes
+#     the step time: 0.6 ms + 0.02433 ms/prefill-token + 0.05104 ms per 1k
+#     tokens of context (C1's H100 step-time fit);
+#   - Qwen3-8B tokenizer (downloaded from HuggingFace at startup), so the
+#     harness's text prompts tokenize to the lengths it asked for and
+#     vllm:prefix_cache_queries_total counts real prompt tokens.
+# vllm:* metrics are the real engine's, so the npd-fcoff trigger reads exactly
+# the series it reads on GPUs. What differs is capacity: the research repo
+# measured this simulator's knee at 3.26 req/s of 8192:128 (26.7k work tok/s,
+# findings/epp-work-rate.md ms2) against 2.42 req/s (20.9k) on the H100, so
+# thresholds and request rates from the GPU run do not carry over unchanged.
+# See benchmark/config/workloads/npd-fcoff/README.md for the kind constants.
+#
+# KV cache: --num-gpu-blocks-override 12400 x --block-size 32 = 396,800 tokens
+# of simulated KV (the research plant's figure); VLLM_CPU_KVCACHE_SPACE=1 GiB
+# is enough because the model has a single 128-wide KV head.
+#
+# Image: docker.io/vllm/vllm-openai-cpu, pinned by the arm64 digest of the
+# v0.31.0 tag (the research plant's image; kind on Apple silicon is arm64).
+# There is no non-docker.io publication of the vLLM CPU image; on x86 nodes
+# pin the amd64 digest of the same tag (sha256:8024248339dc...).
+#
+# Merge note: dicts deep-merge, lists replace wholesale. This overlay never
+# sets `keda.scaledObjects` (the strategy stays with the scenario); the
+# scenario's keda.prometheus already targets kube-prometheus-stack's
+# `prometheus-operated` service in `monitoring`, which is what the kind setup
+# in benchmark/README.md installs.
+
+# Plant constants, not strategy: the research kind plant's
+# (experiments/epp-input-rate/manifests/laws/constants-kind.env). 9000 work
+# tok/s/replica is that file's sync-validation threshold — a placeholder, NOT
+# 0.70 x the knee above (that would be ~18.7k) — chosen so the kind workloads
+# step through 1-3 replicas. maxReplicas 3 fits a laptop kind cluster.
+npdFcoff:
+  thresholdWork: "9000"
+  maxReplicas: 3
+  staticReplicas: 2
+
+affinity:
+  enabled: true
+  nodeSelector:
+    kubernetes.io/os: linux
+
+accelerator:
+  count: 0
+  memory: 80                       # passes the capacity planner's sanity check
+
+model:
+  gpuMemoryUtilization: 0
+  blockSize: 32
+
+images:
+  # The default `nightly` harness image is amd64-only and ships inference-perf
+  # v0.6; v0.8.9 is multi-arch with inference-perf v0.7.0, which the npd-fcoff
+  # workloads need (per_request_fields, stage_teardown_grace_seconds).
+  benchmark:
+    repository: ghcr.io/llm-d/llm-d-benchmark
+    tag: v0.8.9
+    pullPolicy: IfNotPresent
+  vllm:
+    repository: docker.io/vllm/vllm-openai-cpu
+    tag: v0.31.0@sha256:045fb648a61cfcd32d4b9ca5d0c391013afadae0178d2e23ac292597f2f64036
+    pullPolicy: IfNotPresent
+
+# kind's local-path provisioner offers ReadWriteOnce only.
+storage:
+  workloadPvc:
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: standard
+  modelPvc:
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: standard
+
+monitoring:
+  installPrometheusCrds: false     # kube-prometheus-stack already provides them
+
+# The upstream harness default (16 CPU / 32Gi) does not fit a kind node.
+harness:
+  resources:
+    cpu: "2"
+    memory: 4Gi
+
+decode:
+  mountModelVolume: false
+  accelerator:
+    count: 0
+  resources:
+    limits:
+      memory: 5Gi
+      cpu: "2"
+    requests:
+      memory: 2Gi
+      cpu: 250m
+  initContainers:
+    - name: install-plugin
+      image: ghcr.io/lionelvillard/vllm-sim-deps:v0.3.0
+      imagePullPolicy: IfNotPresent
+      command:
+        - sh
+        - -c
+        - cp -r /plugins/* /mnt/plugins/
+      volumeMounts:
+        - name: plugins
+          mountPath: /mnt/plugins
+  extraEnvVars:
+    - name: PYTHONPATH
+      value: "/plugins"
+    # The research plant's settings: single-process engine, no OMP binding.
+    - name: VLLM_SIM_MULTIPROC_METHOD
+      value: "spawn"
+    - name: VLLM_ENABLE_V1_MULTIPROCESSING
+      value: "0"
+    - name: VLLM_CPU_KVCACHE_SPACE
+      value: "1"
+    - name: VLLM_CPU_OMP_THREADS_BIND
+      value: "nobind"
+    - name: OMP_NUM_THREADS
+      value: "1"
+    - name: HF_HOME
+      value: "/tmp/huggingface"
+  additionalVolumeMounts:
+    - name: plugins
+      mountPath: /plugins
+    - name: vllm-sim-model-config
+      mountPath: /model
+      readOnly: true
+  additionalVolumes:
+    - name: plugins
+      type: emptyDir
+    - name: vllm-sim-model-config
+      type: configMap
+      configMap:
+        name: vllm-sim-npd-model-config
+  # Readiness on /health: the sim is up ~30 s after start (no weights).
+  probes:
+    startup:
+      path: /health
+      failureThreshold: 60
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 5
+    readiness:
+      path: /health
+      failureThreshold: 3
+      periodSeconds: 5
+      timeoutSeconds: 5
+  vllm:
+    customCommand: >-
+      exec vllm serve /model
+      --tokenizer=Qwen/Qwen3-8B
+      --served-model-name=Qwen/Qwen3-8B
+      --load-format=dummy
+      --generation-config=vllm
+      --host=0.0.0.0
+      --port=$VLLM_INFERENCE_PORT
+      --max-model-len=32768
+      --max-num-batched-tokens=8192
+      --max-num-seqs=1024
+      --block-size=32
+      --num-gpu-blocks-override=12400
+      --distributed-executor-backend=uni
+      --no-enable-log-requests
+      --disable-uvicorn-access-log
+
+extraObjects:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: vllm-sim-npd-model-config
+    data:
+      config.json: |
+        {
+          "architectures": ["SimulatedForCausalLM"],
+          "model_type": "qwen3",
+          "hidden_size": 128,
+          "num_hidden_layers": 1,
+          "num_attention_heads": 1,
+          "num_key_value_heads": 1,
+          "head_dim": 128,
+          "intermediate_size": 256,
+          "vocab_size": 1024,
+          "max_position_embeddings": 40960,
+          "bos_token_id": 1,
+          "eos_token_id": 1023,
+          "torch_dtype": "bfloat16",
+          "latency": {
+            "type": "linear",
+            "base_ms": 0.6,
+            "prefill_ms_per_token": 0.02433,
+            "decode_ms_per_seq": 0.0,
+            "ctx_ms_per_ktoken": 0.05104,
+            "deterministic_length": true
+          }
+        }

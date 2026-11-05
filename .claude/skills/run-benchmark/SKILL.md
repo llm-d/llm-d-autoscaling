@@ -40,6 +40,8 @@ guardrails** for running one.
 | `benchmark/config/specification/staging/pd-disaggregation/queue-aggressive.yaml.j2` | experiment |
 | `benchmark/config/specification/staging/pd-disaggregation/kv-early.yaml.j2` | experiment |
 | `benchmark/config/specification/staging/lws-pd-disaggregation.yaml.j2` | WIP |
+| `benchmark/config/specification/staging/optimized-baseline/baseline.yaml.j2` | experiment (control, static fleet) |
+| `benchmark/config/specification/staging/optimized-baseline/npd-fcoff.yaml.j2` | experiment (EPP work-rate law; workloads in `benchmark/config/workloads/npd-fcoff/`) |
 
 Run `ls benchmark/config/specification/**/*.yaml.j2` to pick up specs added since
 this was written. A bare name like `pd-disaggregation` or
@@ -52,6 +54,8 @@ this was written. A bare name like `pd-disaggregation` or
 | `benchmark/config/cluster-configs/ocp/model-sim-qwen3-32b.yaml` | real vLLM (CPU) + simulation plugin | no | **default for local/Kind**; native `vllm:` metrics; per-model |
 | `benchmark/config/cluster-configs/k8s/inference-sim.yaml` | llm-d-inference-sim | no | fake server; lowest fidelity |
 | `benchmark/config/cluster-configs/ocp/vllm.yaml` | real vLLM | yes | GPU cluster only |
+| `benchmark/config/cluster-configs/k8s/model-sim-qwen3-8b-npd.yaml` | real vLLM (CPU) + simulation plugin | no | `optimized-baseline` specs only (no P/D); kind |
+| `benchmark/config/cluster-configs/ocp/vllm-npd.yaml` | real vLLM | yes | `optimized-baseline` specs only (no P/D) |
 
 All three expose native `vllm:` metrics, so a scenario's KEDA strategy
 (triggers/thresholds/scaleTargetRef) is unchanged across backends. All three

@@ -1,0 +1,216 @@
+apiVersion: v1
+data:
+  latest: 'analyze: false
+
+    endpoint_url: ''''
+
+    experiment_ids:
+
+    - inference-perf-1793863421-e5d8ib
+
+    harness: inference-perf
+
+    hostname: Lionels-MacBook-Pro-2.local
+
+    model: Qwen/Qwen3-8B
+
+    namespace: npdfc
+
+    output: local
+
+    parallelism: 1
+
+    pvc_name: workload-pvc
+
+    pvc_results_paths:
+
+    - /requests/inference-perf-1793863421-e5d8ib_1
+
+    pvc_results_prefix: /requests
+
+    timestamp: 20261105T075406Z
+
+    user: villardl
+
+    workload: agentic.yaml
+
+    '
+  run-20261105T060136Z: 'analyze: false
+
+    endpoint_url: ''''
+
+    experiment_ids:
+
+    - inference-perf-1793857567-dlqb4m
+
+    harness: inference-perf
+
+    hostname: Lionels-MacBook-Pro-2.local
+
+    model: Qwen/Qwen3-8B
+
+    namespace: npdfc
+
+    output: local
+
+    parallelism: 1
+
+    pvc_name: workload-pvc
+
+    pvc_results_paths:
+
+    - /requests/inference-perf-1793857567-dlqb4m_1
+
+    pvc_results_prefix: /requests
+
+    timestamp: 20261105T060136Z
+
+    user: villardl
+
+    workload: stair.yaml
+
+    '
+  run-20261105T063157Z: 'analyze: false
+
+    endpoint_url: ''''
+
+    experiment_ids:
+
+    - inference-perf-1793859005-lhq2gu
+
+    harness: inference-perf
+
+    hostname: Lionels-MacBook-Pro-2.local
+
+    model: Qwen/Qwen3-8B
+
+    namespace: npdfc
+
+    output: local
+
+    parallelism: 1
+
+    pvc_name: workload-pvc
+
+    pvc_results_paths:
+
+    - /requests/inference-perf-1793859005-lhq2gu_1
+
+    pvc_results_prefix: /requests
+
+    timestamp: 20261105T063157Z
+
+    user: villardl
+
+    workload: mixshift.yaml
+
+    '
+  run-20261105T065256Z: 'analyze: false
+
+    endpoint_url: ''''
+
+    experiment_ids:
+
+    - inference-perf-1793860576-naihtr
+
+    harness: inference-perf
+
+    hostname: Lionels-MacBook-Pro-2.local
+
+    model: Qwen/Qwen3-8B
+
+    namespace: npdfc
+
+    output: local
+
+    parallelism: 1
+
+    pvc_name: workload-pvc
+
+    pvc_results_paths:
+
+    - /requests/inference-perf-1793860576-naihtr_1
+
+    pvc_results_prefix: /requests
+
+    timestamp: 20261105T065256Z
+
+    user: villardl
+
+    workload: overload.yaml
+
+    '
+  run-20261105T072004Z: 'analyze: false
+
+    endpoint_url: http://qwen-qwe-9117f9be-qwen3-8b-router-epp.npdfc.svc.cluster.local:80
+
+    experiment_ids:
+
+    - inference-perf-1793862769-tknbqd
+
+    harness: inference-perf
+
+    hostname: Lionels-MacBook-Pro-2.local
+
+    model: Qwen/Qwen3-8B
+
+    namespace: npdfc
+
+    output: local
+
+    parallelism: 1
+
+    pvc_name: workload-pvc
+
+    pvc_results_paths:
+
+    - /requests/inference-perf-1793862769-tknbqd_1
+
+    pvc_results_prefix: /requests
+
+    timestamp: 20261105T072004Z
+
+    user: villardl
+
+    workload: bootstrap.yaml
+
+    '
+  run-20261105T075406Z: 'analyze: false
+
+    endpoint_url: ''''
+
+    experiment_ids:
+
+    - inference-perf-1793863421-e5d8ib
+
+    harness: inference-perf
+
+    hostname: Lionels-MacBook-Pro-2.local
+
+    model: Qwen/Qwen3-8B
+
+    namespace: npdfc
+
+    output: local
+
+    parallelism: 1
+
+    pvc_name: workload-pvc
+
+    pvc_results_paths:
+
+    - /requests/inference-perf-1793863421-e5d8ib_1
+
+    pvc_results_prefix: /requests
+
+    timestamp: 20261105T075406Z
+
+    user: villardl
+
+    workload: agentic.yaml
+
+    '
+kind: ConfigMap
+metadata:
+  name: llm-d-benchmark-run-parameters
+  namespace: npdfc

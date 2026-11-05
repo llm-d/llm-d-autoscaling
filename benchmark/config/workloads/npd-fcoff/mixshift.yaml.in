@@ -1,0 +1,67 @@
+# MIX-SHIFT — research raw/synth-mix (law) and raw/baseline-mix (static).
+# Same offered work rate, 4.74x different req/s: 600 s of 4.9 req/s at 8192:128
+# (nu = 42,210) then 600 s of 23.22 req/s at 128:512 (nu = 42,193). Expected:
+# replicas hold steady across the shift (a req/s trigger would ask ~10).
+# Trace: gpu-mixshift.csv (GPU) / kind-mixshift.csv (kind, the research ms2 shape).
+#
+# Run with --workload-file-path <this file> --dataset <trace .csv>; see README.md.
+load:
+  # Open-loop replay of a generated trace (benchmark/hack/npd-fcoff/gen_traces.py):
+  # arrival times and prompt:output lengths are the research loadgen.py's, by
+  # construction, for the same schedule/mix/seed. One stage; `rate` is unused by
+  # trace_replay and `duration` only bounds the stage.
+  type: trace_replay
+  trace:
+    file: REPLACE_ENV_LLMDBENCH_RUN_DATASET_DIR/REPLACE_ENV_LLMDBENCH_RUN_DATASET_FILE
+    format: AzurePublicDataset
+  stages:
+    - rate: 1
+      duration: 1200
+  # research client timeout (--timeout 60): a stuck request becomes a failure
+  # instead of an unbounded backlog. 60 s is also the A = 0 floor of the knee.
+  request_timeout: 60
+  # research drain (--drain 240): in-flight requests get 240 s after the last
+  # arrival before they are cancelled.
+  stage_teardown_grace_seconds: 240
+  # Pinned: the default is the host cpu_count (cgroup-unaware). The worst
+  # in-flight backlog (16 req/s x 60 s timeout) must fit num_workers x
+  # worker_max_concurrency, or the replay stops being open-loop.
+  num_workers: 4
+  worker_max_concurrency: 512
+api:
+  type: completion
+  streaming: true
+server:
+  type: vllm
+  model_name: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+  base_url: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+  ignore_eos: true
+tokenizer:
+  pretrained_model_name_or_path: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_TOKENIZER
+data:
+  type: random
+  # Prompt/output lengths come from the trace rows; random token ids, so every
+  # prompt token is uncached prefill work (loadgen.py's prompts were random too).
+  trace:
+    file: REPLACE_ENV_LLMDBENCH_RUN_DATASET_DIR/REPLACE_ENV_LLMDBENCH_RUN_DATASET_FILE
+    format: AzurePublicDataset
+report:
+  request_lifecycle:
+    summary: true
+    per_stage: true
+    per_request: true
+    # Keep per-request records small: timings, lengths, errors — no payloads.
+    per_request_fields:
+      request: false
+      response: false
+      info: true
+      response_chunks: false
+      computed_metrics: true
+  # A = fraction of requests with TTFT <= 1 s — the research benchmark's
+  # attainment definition (knee = A 0.95 crossing).
+  goodput:
+    constraints:
+      ttft: 1
+storage:
+  local_storage:
+    path: /workspace

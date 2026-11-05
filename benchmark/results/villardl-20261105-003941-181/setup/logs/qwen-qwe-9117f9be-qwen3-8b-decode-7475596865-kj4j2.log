@@ -1,0 +1,104 @@
+W1105 05:40:05.770000 1 torch/_library/triton.py:53] Triton not available, find_triton_kernels = []
+(APIServer pid=1) INFO 11-05 05:40:05 [api_utils.py:347] 
+(APIServer pid=1) INFO 11-05 05:40:05 [api_utils.py:347]        █     █     █▄   ▄█
+(APIServer pid=1) INFO 11-05 05:40:05 [api_utils.py:347]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.31.0
+(APIServer pid=1) INFO 11-05 05:40:05 [api_utils.py:347]   █▄█▀ █     █     █     █  model   /model
+(APIServer pid=1) INFO 11-05 05:40:05 [api_utils.py:347]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=1) INFO 11-05 05:40:05 [api_utils.py:347] 
+(APIServer pid=1) INFO 11-05 05:40:05 [api_utils.py:286] non-default args: {'model_tag': '/model', 'host': '0.0.0.0', 'disable_uvicorn_access_log': True, 'model': '/model', 'tokenizer': 'Qwen/Qwen3-8B', 'max_model_len': 32768, 'served_model_name': ['Qwen/Qwen3-8B'], 'generation_config': 'vllm', 'load_format': 'dummy', 'distributed_executor_backend': 'uni', 'block_size': 32, 'num_gpu_blocks_override': 12400, 'max_num_batched_tokens': 8192, 'max_num_seqs': 1024}
+(APIServer pid=1) WARNING 11-05 05:40:05 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_TENSOR_PARALLELISM
+(APIServer pid=1) WARNING 11-05 05:40:05 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_IS_DECODE
+(APIServer pid=1) WARNING 11-05 05:40:05 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_MAX_NUM_SEQ
+(APIServer pid=1) WARNING 11-05 05:40:05 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_MAX_MODEL_LEN
+(APIServer pid=1) WARNING 11-05 05:40:05 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_SIM_MULTIPROC_METHOD
+(APIServer pid=1) WARNING 11-05 05:40:05 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_BLOCK_SIZE
+(APIServer pid=1) WARNING 11-05 05:40:05 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_ACCELERATOR_MEM_UTIL
+(APIServer pid=1) WARNING 11-05 05:40:05 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_METRICS_PORT
+(APIServer pid=1) WARNING 11-05 05:40:05 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_LOAD_FORMAT
+(APIServer pid=1) WARNING 11-05 05:40:05 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_MAX_NUM_BATCHED_TOKENS
+(APIServer pid=1) WARNING 11-05 05:40:05 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_INFERENCE_PORT
+(APIServer pid=1) WARNING 11-05 05:40:05 [arg_utils.py:1910] The global random seed is set to 0. Since VLLM_ENABLE_V1_MULTIPROCESSING is set to False, this may affect the random state of the Python process that launched vLLM.
+(APIServer pid=1) INFO 11-05 05:40:09 [model.py:699] Resolved architecture: SimulatedForCausalLM
+(APIServer pid=1) INFO 11-05 05:40:09 [model.py:2109] Using max model len 32768
+(APIServer pid=1) INFO 11-05 05:40:09 [scheduler.py:308] Chunked prefill is enabled with max_num_batched_tokens=8192.
+(APIServer pid=1) INFO 11-05 05:40:09 [kernel.py:408] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['native'])
+(APIServer pid=1) WARNING 11-05 05:40:09 [vllm.py:747] Model Runner V2 requires Triton; using the V1 model runner instead.
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+(EngineCore pid=38) INFO 11-05 05:40:16 [core.py:129] Initializing a V1 LLM engine (v0.31.0) with config: model='/model', speculative_config=None, tokenizer='Qwen/Qwen3-8B', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=main, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=32768, download_dir=None, load_format=dummy, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=True, quantization=None, quantization_config=None, enforce_eager=False, aux_output_config=AuxOutputConfig(enable_return_routed_experts=False, max_bytes=None), kv_cache_dtype=auto, device_config=cpu, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, per_request_spec_decode_metrics='none', kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=0, served_model_name=Qwen/Qwen3-8B, enable_prefix_caching=True, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.DYNAMO_TRACE_ONCE: 2>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['none', '+gelu', '+gelu_tanh', '+gelu_and_mul'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': None, 'compile_ranges_endpoints': [8192], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'dce': True, 'size_asserts': False, 'nan_asserts': False, 'epilogue_fusion': True, 'cpp.dynamic_threads': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': False, 'fuse_act_quant': False, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': None, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, moe_backend='auto', sparse_indexer_topk_backend='auto', linear_backend='auto', linear_backend_per_quant=None)
+/opt/venv/lib/python3.12/site-packages/vllm/triton_utils/dispatcher.py:138: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  if hasattr(value, "__dict__"):
+/opt/venv/lib/python3.12/site-packages/vllm/triton_utils/dispatcher.py:139: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  wrapper = lookup(vars(value).get("kernel"))
+W1105 05:40:17.099000 38 torch/_library/triton.py:53] Triton not available, find_triton_kernels = []
+(EngineCore pid=38) WARNING 11-05 05:40:17 [indexer_topk.py:35] Failed to import the DeepSelect extension (vllm._deepselect_C): No module named 'vllm._deepselect_C'
+[W1105 05:40:17.427834324 utils.cpp:68] Warning: NUMA binding: Using MEMBIND policy for memory allocation on the NUMA nodes (0). Memory allocations will be strictly bound to these NUMA nodes. (function init_cpu_memory_env)
+(EngineCore pid=38) WARNING 11-05 05:40:17 [vllm.py:747] Model Runner V2 requires Triton; using the V1 model runner instead.
+(EngineCore pid=38) INFO 11-05 05:40:17 [parallel_state.py:1825] world_size=1 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_f34724ca950243ca9a8f28ddea11a50c backend=gloo
+(EngineCore pid=38) INFO 11-05 05:40:17 [parallel_state.py:2269] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, ETP rank 0, EP rank N/A, EPLB rank N/A
+(EngineCore pid=38) INFO 11-05 05:40:17 [cpu_model_runner.py:69] Starting to load model /model...
+(EngineCore pid=38) INFO 11-05 05:40:17 [utils.py:343] Using LBHNC KV cache layout.
+(EngineCore pid=38) INFO 11-05 05:40:17 [cpu_model_runner.py:88] Warming up model for the compilation...
+(EngineCore pid=38) INFO 11-05 05:40:20 [cpu_model_runner.py:92] Warming up done.
+(EngineCore pid=38) INFO 11-05 05:40:20 [cpu_worker.py:260] Explicitly set (1.0/5.0) GiB for KV cache on node 0.
+(EngineCore pid=38) INFO 11-05 05:40:20 [kv_cache_utils.py:2772] Overriding num_gpu_blocks=65536 with num_gpu_blocks_override=12400
+(EngineCore pid=38) INFO 11-05 05:40:20 [kv_cache_utils.py:2464] CPU KV cache size: 396,800 tokens, Maximum concurrency for 32,768 tokens per request: 12.11x
+(EngineCore pid=38) INFO 11-05 05:40:20 [core.py:380] init engine (profile, create kv cache, warmup model) took 3.03 s
+(EngineCore pid=38) WARNING 11-05 05:40:21 [vllm.py:1750] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(EngineCore pid=38) INFO 11-05 05:40:21 [kernel.py:408] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['native'])
+(APIServer pid=1) INFO 11-05 05:40:21 [entry.py:132] Supported tasks: ['generate']
+(APIServer pid=1) WARNING 11-05 05:40:21 [__init__.py:44] SECURITY WARNING: Development endpoints are enabled! This should NOT be used in production!
+(APIServer pid=1) INFO 11-05 05:40:21 [factories.py:76] Scale-out endpoints are disabled. Set --enable-scale-out to enable them.
+(APIServer pid=1) WARNING 11-05 05:40:21 [__init__.py:125] Found endpoint plugin(s) ['sim_tuner'] but VLLM_PLUGINS is not set. Endpoint plugins add HTTP routes and must be explicitly allowlisted via VLLM_PLUGINS to be loaded.
+(APIServer pid=1) INFO 11-05 05:40:23 [hf.py:646] Detected the chat template content format to be 'string'. You can set `--chat-template-content-format` to override this.
+(APIServer pid=1) INFO 11-05 05:40:23 [entry.py:136] Starting vLLM server on http://0.0.0.0:8000
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:60] Available routes are:
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /openapi.json, Methods: HEAD, GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /docs, Methods: HEAD, GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /docs/oauth2-redirect, Methods: HEAD, GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /redoc, Methods: HEAD, GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /load, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /version, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /kv_event_sources, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /health, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /metrics, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /tokenize, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /detokenize, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /v1/models, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /ping, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /ping, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /invocations, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /reset_prefix_cache, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /reset_mm_cache, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /reset_encoder_cache, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /pause, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /resume, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /abort_requests, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /is_paused, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /init_weight_transfer_engine, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /start_weight_update, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /start_draft_weight_update, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /update_weights, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /finish_weight_update, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /update_weight_version, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /weight_info, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /get_world_size, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /collective_rpc, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /server_info, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /sleep, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /release_kv_cache_memory, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /wake_up, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /is_sleeping, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /v1/chat/completions, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /v1/chat/completions/batch, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /v1/responses, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /v1/responses/{response_id}, Methods: GET
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /v1/responses/{response_id}/cancel, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /v1/completions, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /v1/messages, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /v1/messages/count_tokens, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /generative_scoring, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /scale_elastic_ep, Methods: POST
+(APIServer pid=1) INFO 11-05 05:40:23 [launcher.py:69] Route: /is_scaling_elastic_ep, Methods: POST
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.

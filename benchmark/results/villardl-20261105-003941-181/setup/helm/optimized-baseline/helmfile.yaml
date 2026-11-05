@@ -1,0 +1,34 @@
+helmDefaults:
+  createNamespace: false
+---
+
+
+repositories:
+  - name: llm-d-modelservice
+    url: https://llm-d-incubation.github.io/llm-d-modelservice/
+  - name: llm-d-infra
+    url: https://llm-d-incubation.github.io/llm-d-infra/
+
+releases:
+
+  - name: qwen-qwe-9117f9be-qwen3-8b-ms
+    namespace: npdfc
+    chart: llm-d-modelservice/llm-d-modelservice
+    version: v0.4.16
+    installed: true
+    needs:
+      - npdfc/qwen-qwe-9117f9be-qwen3-8b-router
+    values:
+      - ms-values.yaml
+    labels:
+      kind: inference-stack
+
+  - name: qwen-qwe-9117f9be-qwen3-8b-router
+    namespace: npdfc
+    chart: oci://ghcr.io/llm-d/charts/llm-d-router-standalone
+    version: v0.11.0
+    installed: true
+    values:
+      - router-values.yaml
+    labels:
+      kind: inference-stack

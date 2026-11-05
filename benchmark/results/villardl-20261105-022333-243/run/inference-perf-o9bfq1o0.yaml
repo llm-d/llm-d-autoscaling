@@ -1,0 +1,140 @@
+
+
+
+
+
+
+
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inference-perf-o9bfq1o0
+  namespace: npdfc
+  labels:
+    app: "llmdbench-harness-launcher"
+    function: load_generator
+    llmdbench.ai/treatment: "e5d8ib"
+spec:
+  containers:
+  - name: harness
+    image: ghcr.io/llm-d/llm-d-benchmark:v0.8.9
+    imagePullPolicy: IfNotPresent
+    command: ["sh", "-c"]
+    args:
+    - >-
+      for script in /workspace/harnesses/*; do
+        [ -f "$script" ] || continue;
+        cp "$script" /usr/local/bin/;
+        chmod +x "/usr/local/bin/$(basename "$script")";
+      done;
+      export LLMDBENCH_RUN_EXPERIMENT_HARNESS=inference-perf-llm-d-benchmark.sh; export LLMDBENCH_RUN_EXPERIMENT_ANALYZER=inference-perf-analyze_results.sh; export LLMDBENCH_RUN_EXPERIMENT_RESULTS_DIR=/requests/inference-perf-1793863421-e5d8ib_1; export LLMDBENCH_CONTROL_WORK_DIR=/requests/inference-perf-1793863421-e5d8ib_1; export LLMDBENCH_RUN_EXPERIMENT_HARNESS_WORKLOAD_NAME=agentic.yaml; export LLMDBENCH_HARNESS_START=$(date -u +%Y-%m-%dT%H:%M:%SZ); export LLMDBENCH_HARNESS_ARGS='--workload agentic.yaml'; export LLMDBENCH_HARNESS_VERSION=$(grep '^inference-perf:' /workspace/repos.txt 2>/dev/null | cut -d' ' -f3 || echo 'unknown'); llm-d-benchmark.sh
+    resources:
+      limits:
+        cpu: "2"
+        memory: 128Gi
+      requests:
+        cpu: "2"
+        memory: 4Gi
+    env:
+    # Stage markers are logged in local time, then compared against `date -u`
+    # scrape timestamps when clipping per-stage series.
+    - name: TZ
+      value: "UTC"
+    - name: LLMDBENCH_RUN_EXPERIMENT_LAUNCHER
+      value: "1"
+    - name: LLMDBENCH_MAGIC_ENVAR
+      value: "harness_pod"
+    - name: LLMDBENCH_DEPLOY_METHODS
+      value: "modelservice"
+    - name: LLMDBENCH_CLUSTER_TYPE
+      value: "Kind"
+    - name: LLMDBENCH_RUN_WORKSPACE_DIR
+      value: "/workspace"
+    - name: LLMDBENCH_CONTROL_WORK_DIR
+      value: "/requests/inference-perf-1793863421-e5d8ib_1"
+    - name: LLMDBENCH_DEPLOY_CURRENT_MODEL
+      value: "Qwen/Qwen3-8B"
+    - name: LLMDBENCH_DEPLOY_CURRENT_TOKENIZER
+      value: "Qwen/Qwen3-8B"
+    - name: LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+      value: "http://10.96.93.110:80"
+    - name: LLMDBENCH_HARNESS_STACK_TYPE
+      value: "llm-d"
+    - name: LLMDBENCH_HARNESS_NAME
+      value: "inference-perf"
+    - name: LLMDBENCH_RUN_EXPERIMENT_ID
+      value: "inference-perf-1793863421-e5d8ib"
+    - name: LLMDBENCH_DESCRIPTION_TEXT
+      value: ""
+    - name: LLMDBENCH_DESCRIPTION_KEYWORDS
+      value: ""
+    - name: RAYON_NUM_THREADS
+      value: "4"
+    - name: HOME
+      value: "/requests/.home"
+    - name: HF_HOME
+      value: "/requests/.cache/huggingface"
+    - name: XDG_CACHE_HOME
+      value: "/requests/.cache"
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.name
+    - name: POD_UID
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.uid
+    - name: LLMDBENCH_VLLM_COMMON_NAMESPACE
+      value: "npdfc"
+    - name: LLMDBENCH_BASE64_CONTEXT_CONTENTS
+      value: "YXBpVmVyc2lvbjogdjEKY2x1c3RlcnM6Ci0gY2x1c3RlcjoKICAgIGNlcnRpZmljYXRlLWF1dGhvcml0eS1kYXRhOiBMUzB0TFMxQ1JVZEpUaUJEUlZKVVNVWkpRMEZVUlMwdExTMHRDazFKU1VSQ1ZFTkRRV1V5WjBGM1NVSkJaMGxKV1ZCYWNVcE1NMHhOY25kM1JGRlpTa3R2V2tsb2RtTk9RVkZGVEVKUlFYZEdWRVZVVFVKRlIwRXhWVVVLUVhoTlMyRXpWbWxhV0VwMVdsaFNiR042UVdWR2R6QjVUbXBCTkUxVVJYaE5la1V5VGtST1lVWjNNSHBPYWtFMFRVUm5lRTE2U1hoT1JFNWhUVUpWZUFwRmVrRlNRbWRPVmtKQlRWUkRiWFF4V1cxV2VXSnRWakJhV0UxM1oyZEZhVTFCTUVkRFUzRkhVMGxpTTBSUlJVSkJVVlZCUVRSSlFrUjNRWGRuWjBWTENrRnZTVUpCVVVOMVJHZHNNa3BXU2pCdkszWkVjV3RtVkd0amRFdDZSbWRJVURoc1ZVNUtLemhuZUZVeFlWTTFUWGhPTmxGS1JFbEZSMFp5V0dwd1UyTUtWV3RpTldwa2RXcEZOelJHYm5kcE5VOWxVMHBqYUZBdksxTjZaVkU1TjJKM1kzRTNkM0Z1YjJoWE5sQmhiMVV2Vld3M1ZXWXhaRXhQU1VkNGFVeDRTQXA2WlhCYVIydEdMMG94WmxvMmNtVjRURWxMY0ZsQ1dtaEdOVlI0SzNoeE4xZDBSRlp3TUhoMmFGcGpNakYyUlZZNGJsZFJaamxZWkZrM0szaHZRVGRHQ2xjME5FMVRNRTl2UXpVcmVXMU1MMHBZVlZCcVRqRkZUR3h0UVZGMGJEWmhRM2RMU1dGTVEySlBSWFpVWlhacWFFY3hjMnBOUjBSUWJqQnFVM2hNZVhBS1VXMUhXVUpLVldOQ1UyRTFOM0pvVldNclR6aG1hR3BtWlRab2IweHpVVGhJY25KUlVEbE1aV0V4ZFhWVksxWmhlRkUzY0RJemRsTk5aVmhRVTFKcFpncFNNVXBVYjJWWWJsZDJSWEY1VDBsWGIyNTBaM1ZqY1dWWGVVNDNRV2ROUWtGQlIycFhWRUpZVFVFMFIwRXhWV1JFZDBWQ0wzZFJSVUYzU1VOd1JFRlFDa0puVGxaSVVrMUNRV1k0UlVKVVFVUkJVVWd2VFVJd1IwRXhWV1JFWjFGWFFrSlViME5oYzIxVlVEZEZibXBrVlhkdGEwbENXSGRpZFV4YWFuUnFRVllLUW1kT1ZraFNSVVZFYWtGTloyZHdjbVJYU214amJUVnNaRWRXZWsxQk1FZERVM0ZIVTBsaU0wUlJSVUpEZDFWQlFUUkpRa0ZSUW5kU1kyWk5WalZCVndwR2FYaHZOWEpYY1c4eU1uRm1SbHBQVGpGd1VVZGpjVWR0TlhOeVR6bDFjVzh6UVUxemEyNXRlVzlVWVhvMGNWWmFaeXRYV2k5RFJtUnVTM0lyZDBwSkNreEpXVlpKVUZKWldqTjFkMnREVFc4MGFHNUVRbmhvTWtvdlZtRnRWMFFyT0RRNGRXRTBUM0phY3paSVVYVnFZa1l6WmxKcU1IVTBWekpJYUc1d0swc0tWMHgyVkZsd1ozWlBOMk5qVTBSR05FRkRNMnRvTjNaYVQyMW1hMjhyZEV4dFRETmpkVVZvWjBsWGRYcDNTVWdyZGpSRmMzcGFXRVY0TVM4NFRuZFNkd294Y0VGUGJTczBMMnhGWVhaTmRYWnRiRVEyWVRsM1NtVnVWVzFYUTBOM1ZHazRXV1E0VjFwbFZuVTFaRzlyY2xGT1dVa3Jja2hPV1VOSVpXWnZUM3BEQ25oVGVrZGhWVFowVVZweWRXSTFOalpzVFRKR2FXdHVVMGQ1VDJ4SWNsSllla1J3TDAweVUwZDNWMFJ1ZDNCbk9VNVNkRzkwUlhac1FXVXdaa3Q2Y2xJS1JWQkxjV2hqYmtsTWVsWjJDaTB0TFMwdFJVNUVJRU5GVWxSSlJrbERRVlJGTFMwdExTMEsKICAgIHNlcnZlcjogaHR0cHM6Ly8xMjcuMC4wLjE6NTEyNjAKICBuYW1lOiBraW5kLWtpbmQtd3ZhLWdwdS1jbHVzdGVyCmNvbnRleHRzOgotIGNvbnRleHQ6CiAgICBjbHVzdGVyOiBraW5kLWtpbmQtd3ZhLWdwdS1jbHVzdGVyCiAgICBuYW1lc3BhY2U6IGtlZGEtdGVzdAogICAgdXNlcjoga2luZC1raW5kLXd2YS1ncHUtY2x1c3RlcgogIG5hbWU6IGtpbmQta2luZC13dmEtZ3B1LWNsdXN0ZXIKY3VycmVudC1jb250ZXh0OiBraW5kLWtpbmQtd3ZhLWdwdS1jbHVzdGVyCmtpbmQ6IENvbmZpZwp1c2VyczoKLSBuYW1lOiBraW5kLWtpbmQtd3ZhLWdwdS1jbHVzdGVyCiAgdXNlcjoKICAgIGNsaWVudC1jZXJ0aWZpY2F0ZS1kYXRhOiBMUzB0TFMxQ1JVZEpUaUJEUlZKVVNVWkpRMEZVUlMwdExTMHRDazFKU1VSTFZFTkRRV2hIWjBGM1NVSkJaMGxKVG1scFdWZDZPVUpsWkRCM1JGRlpTa3R2V2tsb2RtTk9RVkZGVEVKUlFYZEdWRVZVVFVKRlIwRXhWVVVLUVhoTlMyRXpWbWxhV0VwMVdsaFNiR042UVdWR2R6QjVUbXBCTkUxVVJYaE5la1V5VGtST1lVWjNNSGxPZWtFMFRWUkZlRTE2U1hoT1JFNWhUVVIzZUFwSWVrRmtRbWRPVmtKQmIxUkdiWFF4V1cxV2FGcEhNRFpaTW5neFl6TlNiR05wTVdoYVJ6RndZbTVOZUVkVVFWaENaMDVXUWtGTlZFVkhkREZaYlZaNUNtSnRWakJhV0UxMFdWZFNkR0ZYTkhkblowVnBUVUV3UjBOVGNVZFRTV0l6UkZGRlFrRlJWVUZCTkVsQ1JIZEJkMmRuUlV0QmIwbENRVkZFWVc1RlJFSUtOVEZoV2xVNFRYRTRVR2xzUnpoSFRrSlNVVzVoYTBsRFVuUXJUR3R6YW5Ga01FdG9kVkJvYzBkQlYzRnhXak5pV1ZCTFVsSnRkVVkyU0haV2EyOTVaQW94WVZaWlIxVjJSbTAxVEhaelRDczJlR0Z3UjJkbVFpdFhPVzVvY0UxMVIyWXdXbXRFVlVaeVoyVk5jMjAyY1V4b1owbEpkRUpNZUU5RGVERjZSSGRIQ2pVcmIyeFpUblZVWjFKa2EyTlJSbFFyV25CeFMwUlFNQzlzVFVScmNYbDVjWFpSTUhKak4wRkZiVUl6TDJsU09EUXZWMWRDUjFoT05rdEZiVzFKYkVvS2VYRlVZemxFT1ROMk1GSlNNa0pCU21OMVNUSjJVREZqVGxORWJFdHRkVkJSSzNJd1pHODJSa1paVlZGb1MwaFdORk16UjJ4VVFtMXlUbGRpZGxWdFJBcDVTV3B2YzFsSFVFcDRNREI0U0hObFRuRk9UVzVzYUhreldWZ3ZRbEpaV1RjemFUUlBPVGxrTWl0bk1UVkdkVkpIYVV4TVJuRmxSRTlWWjJabk5HWTRDbTgwVVZoT1RGVmlTbWRKUm5OTFdFWkJaMDFDUVVGSGFsWnFRbFZOUVRSSFFURlZaRVIzUlVJdmQxRkZRWGRKUm05RVFWUkNaMDVXU0ZOVlJVUkVRVXNLUW1kbmNrSm5SVVpDVVdORVFXcEJUVUpuVGxaSVVrMUNRV1k0UlVGcVFVRk5RamhIUVRGVlpFbDNVVmxOUW1GQlJrOW5TbkY1V2xFdmMxTmxUakZVUXdwaFVXZEdaa0oxTkhSdFR6Sk5RVEJIUTFOeFIxTkpZak5FVVVWQ1EzZFZRVUUwU1VKQlVVRkdjWEpDY0hSV1RsYzVZVEphVDFOWWNGaFdSMGRwU1ZWbkNuRTFUV2haTDFwa1pIcDBhMDFzU25OeWNWSm1PVFJ3WmxBclJWY3daakIwY0RaNFEyaE1lRE56UlZaclkwVkxPVGxMZURCMWNXMUhNRzFhTTB4aWQyd0tjWGg1VVVsQmVEazFXV2RUVWxGTlFrNXpVMEp5Y2xreFUwNW9lbVJKVWs4eFFVWmtSMnBvWkdjM2NtZFFLMVpWT1V0a01uZEVSelZQTDJkUVYxTXplUXBRVlZaU2JuRk5NRWMyY2pkc2RFTkdibkJUZDFaa0syNVpWblFyWTA1eVZuQnpXRkpLUlVReU1IUXZaMVZLVEUwcmEycE9NbVZuTUVGRFVTdENTV05MQ2sxM2EyRkZVVVJCWmsxU1p5czNNMmx1Y1dkVWEyTnhUWGxVUzFkNFlXRjJhRzFDZG5aWGNsa3pabXhvUTNKQlpIbHlVMlJTU1V0NFRIY3ZORmxaZVVvS1lWVlVhR1prVFZKRE1UVnVVelJhZWxFdmIxaGthemhhUW1KNU1IWnhNRXhzTUZOd1FWRXlkMVpqZWtrNWNGaHVUbFF2V0hSeWFsb3lWa0pzQ2kwdExTMHRSVTVFSUVORlVsUkpSa2xEUVZSRkxTMHRMUzBLCiAgICBjbGllbnQta2V5LWRhdGE6IExTMHRMUzFDUlVkSlRpQlNVMEVnVUZKSlZrRlVSU0JMUlZrdExTMHRMUXBOU1VsRmIzZEpRa0ZCUzBOQlVVVkJNbkI0UVhkbFpGZHRWbEJFUzNaRU5IQlNka0pxVVZWVlNqSndRMEZyWW1acE5VeEpObTVrUTI5aWFqUmlRbWRHQ25GeGJXUXlNa1I1YTFWYWNtaGxhRGN4V2t0TmJtUlhiRmRDYkV4NFduVlROemRETDNWelYzRlNiMGgzWm14MldqUmhWRXhvYmpsSFdrRXhRbUUwU0dvS1RFcDFjV2swV1VORFRGRlRPRlJuYzJSamR6aENkV1p4U2xkRVltczBSVmhhU0VWQ1ZTOXRZV0ZwWjNvNVVEVlVRVFZMYzNOeGNqQk9Tek5QZDBKS1p3cGtMelJyWms5UU1XeG5VbXg2Wldsb1NuQnBTbE5qY1dzelVGRXZaRGM1UlZWa1oxRkRXRXhwVG5KNk9WaEVWV2MxVTNCeWFqQlFjVGxJWVU5b1VsZEdDa1ZKVTJneFpVVjBlSEJWZDFweGVsWnROekZLWnpocFNUWk1SMEpxZVdOa1RrMVNOMGhxWVdwVVNqVlpZM1F5Umk5M1ZWZEhUemswZFVSMlpsaGtkbThLVG1WU1ltdFNiMmw1ZUdGdVozcHNTVWcwVDBndlMwOUZSbnBUTVVkNVdVTkNZa05zZUZGSlJFRlJRVUpCYjBsQ1FWRkVRMHN6YzFKUU1ITmFNRTQxVHdvMk9ETk9lVkZPTTBsQlYzZHdTalpSY1hsaGRrd3JZMjgyYkdwVGEwSnhSekpEWkdkWFJuVlFiVmRMWVZOdVVVTmpiVnBpV1d4c2JtSXpXREk1UkVSeUNrTmhNMUJITm5sUlZtcFdVbVoxVWk5T01VbHNTekY0YVhvdlZsUjBUSEJuY0ZCUFJXdGFZeTloWmpKM1oxWkZOVEFyTUZwcVFtWmtRVzE0YTFkek1YUUtSRWxKWTJkdmNuUmlXWGRNYzJvelJEUTBhMVZoVm1wbVRWSjZURVU1YUhNNU1FYzRVVUZwY1ZSaGVHaEdjM1pMVUZwcWJqTTVNbXhXZVdOeWVtNUVSZ3BTZUdsMFQwbDNkRzVuVWt4NVRrTjFjV1JKUjBFMWMxTmlabVJTYjNOS2QwOVVNRXN2WVZjelZHdFZaekZ6VFVoVVpISkxWazlLVGl0TlEzaHFLek5EQ2tKdFFrMVNVVVJOZHpoaVZuUkZZME50U2paWWEyVXJla3QyU3pCUlozWlhRa1ZGY21WeVZrODNjV3RtU0doV2JsYzNjVmxLUzFsbGJqVnRZME5uV1RZS2VqbFZiVUprUVZwQmIwZENRVTUyZDNsdFYwUlFXa3h4UW1OYWQxaEVkblppYTJGdUswdFRPV3hFVGxkMFFuWlhTamhLYTBKeE1FeFdia1pEZW05TmJBcG5OVXBXWm01TFluTmliMlpHYzFoelkzUlBhR1paTXk5UmQzZFRPRmxHTDJjd1JqazVUMGx6VGtoamRqTTNPVzg0UnpCaE5FOHhjMnRoVUhjMFdIcDZDazAzYWsxQkwyMDBXbmRpT1hkMVQwVTJOMWxNVUd4YVZYQXJkWFIwTDJkM2NrazRTVEJqYWxKNFRESlpXRU5wYTBOT1RFMXdjM0pRUVc5SFFrRlFOWG9LYjFsaVVuWk5XVTlqUWtVMmRrUkJSbWRsUTNGNWVIVTRWa3RXVW1aS1NqVTRlbEZOTURSclYwWkRSWFphTUdweFkzbDVjVlpXU1dvelUyaDJZMHRNU2dweWNHRlRSRXAwWlVscWRXbHliMHh2UTJOR1ZGY3JOa3cxUVhaRlJISTBSRGx0UmpsdmNteHJXbVJhU1RGMU9FUlBVV3A1Y0hkTGQxUklaRE5sZURkdkNreHJOVzAzTVN0aE5scDJRbkpaUzA0cmFqbDBUV1ZwU0U5bmJqUklWV05GTjFkNE9GY3hjM0pCYjBkQllUSjVLM3B5Ynpsa2RXRk1SRFZQVGpKV1FtMEtORzFtYTJ0RlNuZG5iWEpWTm1OMU9TczNjSHBqUlROaVYwNUxlVzR5WmxKVVkxbHZWSEkwZUVoeFJsVjBSRTQzUjJ4alJWSnFhbkJtU204NFJESTFRd3B2T1doeWNGcFVSbmN6YkVWd1pUaFNhalZxVkZJclVVSmtjblZQZURCTVlXWnRXbGhuY2psSmQzbGtjVFl3Ym1VdmVtMWhjSFozVDFWS1V6TkRTMmgwQ21kRFpHdHVPWFZzV25BeGJWWm5kRmx4S3pFNVoyY3dRMmRaUWtGcGFsaE1VelJITVZCek5VRkpTVlJDVEZoU2RUbDNUa1JwY2xwNGNFVlRWSEJ4YTBFS1dqaDRlamxuZVhaRGFWbEtaMkZaY2tONE1WQkZNV1Y1VUU5dU1UaEhMeTlOZUZwT2FHdG1jV3h0TTNKUFJUTmFTVzV4Y2k5QlIyY3hiRGRwTlZsQ2JBbzFRV05XVUZKcWVtcEdRWGRIWTBseGRXUnRVWFpuVkROUVNFRllUemc0WWtKa1RISnFhRUkwSzBaM05WSkRabGxXUzNOWVJITXllVE0yVFZaak0wOUNDbFU1TW1OT2QwdENaMFJsUVZKTE5FRjZZVEJOVVhKNGRrUXlSMEppUTI5RGIzWXZXRFpFTjNCNllrVTRhblJLYW14QmIzVkJiMkpuZWxJMmNHaDNVV29LVG1GWllWbFZiblJqTnl0b2QyVmFUVU5aWlVOU1QyTk9ZbVJIUzNFeFUyNTRNM2RyY1hSdFJuZFZjVGR4ZW5OT1ZtTXZNV2xtWml0dU5pdGhLM0puUVFwaFZTdEZWMHRLYXpGelkweG1SMlpWV0daQ2JISm9VMHRWYmxaMWMyRlpVeTlRUm01UFIwRkhVbWRQZFN0aGJubDVRbU4xQ2kwdExTMHRSVTVFSUZKVFFTQlFVa2xXUVZSRklFdEZXUzB0TFMwdENnPT0K"
+    - name: LLMDBENCH_VLLM_COMMON_INFERENCE_PORT
+      value: "8000"
+    - name: LLMDBENCH_RUN_EXPERIMENT_RESULTS_DIR_PREFIX
+      value: "/requests"
+    - name: LLMDBENCH_HARNESS_STACK_NAME
+      value: "qwen-qwe-9117f9be-qwen3-8b"
+    - name: LLMDBENCH_VLLM_COMMON_METRICS_SCRAPE_ENABLED
+      value: "false"
+    - name: LLMDBENCH_VLLM_COMMON_METRICS_PORT
+      value: "8200"
+    - name: LLMDBENCH_VLLM_MONITORING_METRICS_PATH
+      value: "/metrics"
+    - name: LLMDBENCH_EPP_METRICS_SECRET
+      value: "inference-gateway-sa-metrics-reader-secret"
+    - name: LLMDBENCH_TIME_SERIES_METRICS
+      value: >-
+        ["vllm:kv_cache_usage_perc","vllm:gpu_cache_usage_perc","vllm:cpu_cache_usage_perc","vllm:gpu_memory_usage_bytes","vllm:cpu_memory_usage_bytes","container_memory_usage_bytes","DCGM_FI_DEV_GPU_UTIL","DCGM_FI_DEV_POWER_USAGE","vllm:num_requests_running","vllm:num_requests_waiting","vllm:prefix_cache_hits_total","vllm:prefix_cache_queries_total","vllm:external_prefix_cache_hits_total","vllm:external_prefix_cache_queries_total","vllm:prefix_cache_hit_rate","vllm:external_prefix_cache_hit_rate","vllm:kv_offload_total_bytes_total","vllm:kv_offload_total_time_total","vllm:nixl_xfer_time_seconds_sum","vllm:nixl_xfer_time_seconds_count","vllm:nixl_bytes_transferred_sum","vllm:nixl_bytes_transferred_count","vllm:num_preemptions_total","vllm:prompt_tokens_total","vllm:generation_tokens_total","inference_pool_average_kv_cache_utilization","inference_pool_average_queue_size","inference_pool_average_running_requests","inference_pool_ready_pods","llm_d_epp_flow_control_pool_saturation","llm_d_epp_flow_control_queue_size","llm_d_epp_request_running"]
+    - name: LLMDBENCH_METRICS_EMBED_TIME_SERIES
+      value: "true"
+    - name: LLMDBENCH_METRICS_TS_MAX_POINTS
+      value: "256"
+    - name: LLMDBENCH_STANDALONE_ENABLED
+      value: "false"
+    - name: LLMDBENCH_STANDALONE_LAUNCHER_ENABLED
+      value: "false"
+    - name: LLMDBENCH_FMA_ENABLED
+      value: "false"
+    - name: LLMDBENCH_VLLM_COMMON_VLLM_LOAD_FORMAT
+      value: "auto"
+    volumeMounts:
+    - name: results
+      mountPath: /requests
+    - name: inference-perf-profiles
+      mountPath: /workspace/profiles/inference-perf
+    - name: harness-scripts
+      mountPath: /workspace/harnesses
+  volumes:
+  - name: results
+    persistentVolumeClaim:
+      claimName: workload-pvc
+  - name: inference-perf-profiles
+    configMap:
+      name: inference-perf-profiles
+  - name: harness-scripts
+    configMap:
+      name: llmdbench-harness-scripts
+      defaultMode: 0755
+  serviceAccountName: inference-perf-runner
+  restartPolicy: Never

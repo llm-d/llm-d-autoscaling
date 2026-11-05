@@ -39,7 +39,7 @@ destroy-kind-cluster: ## Destroy the Kind cluster created by create-kind-cluster
 
 .PHONY: lint-scripts
 lint-scripts: ## Syntax-check the shell scripts in this repository (excluding legacy/)
-	@for script in hack/kind-emulator/*.sh benchmark/hack/*.sh; do \
+	@for script in hack/kind-emulator/*.sh benchmark/hack/*.sh benchmark/hack/*/*.sh; do \
 		[ -f "$$script" ] || continue; \
 		echo "bash -n $$script"; \
 		bash -n "$$script"; \

@@ -1,0 +1,98 @@
+# AGENTIC — research raw/agentic-r2 (task 0426) / scripts/agentic.py (task 0427).
+# The research run replayed AgentX-shaped sessions (context-growth curve scaled
+# 1:8 to fit --max-model-len 32768) through aiperf: shared prefixes via growing
+# per-session history, heavy-tailed outputs, think time, subagent fan-out;
+# 0.5 req/s for 600 s then 1.5 req/s for 1200 s. Measured means: L_p 18.3k,
+# L_out 360 — far from the 8192/128 fallback constants, which is the point of
+# this workload (the vLLM running-ratio means must carry the real mix).
+#
+# Closest inference-perf equivalent: `conversation_replay` — every
+# conversation opens with the same 4,096-token shared system prompt plus a
+# per-conversation dynamic prompt, then grows turn by turn (each turn's prompt
+# = full history + new input), with lognormal input/output lengths and a
+# tool-call pause between turns. Requests arrive Poisson at the stage rate and
+# are assigned round-robin to conversation slots; a slot serializes its turns.
+# Deltas from the research workload (see README.md): no subagent fan-out; the
+# context-growth curve is distribution-shaped, not AgentX-measured; the 600 s
+# stage boundary drains in-flight requests before the 1.5 req/s stage starts
+# (inference-perf ends a stage only when all its requests finish).
+#
+# Run with --workload-file-path <this file> (no --dataset: content is generated).
+load:
+  type: poisson
+  interval: 0
+  stages:
+    - rate: 0.5
+      duration: 600
+    - rate: 1.5
+      duration: 1200
+  request_timeout: 60
+  stage_teardown_grace_seconds: 240
+  num_workers: 4
+  worker_max_concurrency: 512
+api:
+  type: completion
+  streaming: true
+server:
+  type: vllm
+  model_name: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+  base_url: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+  ignore_eos: true
+tokenizer:
+  pretrained_model_name_or_path: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_TOKENIZER
+data:
+  type: conversation_replay
+  conversation_replay:
+    seed: 7
+    # Enough slots that a slot's serial turns never cap the offered rate:
+    # 1.5 req/s x (~2 s turn + ~2 s tool pause) needs ~6; 64 leaves headroom.
+    num_conversations: 64
+    max_model_len: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MAX_MODEL_LEN
+    shared_system_prompt_len: 4096
+    dynamic_system_prompt_len:
+      type: lognormal
+      min: 256
+      max: 8192
+      mean: 2048
+      std_dev: 1500
+    turns_per_conversation:
+      type: lognormal
+      min: 2
+      max: 30
+      mean: 10
+      std_dev: 6
+    input_tokens_per_turn:
+      type: lognormal
+      min: 64
+      max: 6000
+      mean: 1200
+      std_dev: 1000
+    output_tokens_per_turn:
+      type: lognormal
+      min: 16
+      max: 4096
+      mean: 360
+      std_dev: 500
+    tool_call_latency_sec:
+      type: lognormal
+      min: 0
+      max: 30
+      mean: 2
+      std_dev: 3
+report:
+  request_lifecycle:
+    summary: true
+    per_stage: true
+    per_request: true
+    per_request_fields:
+      request: false
+      response: false
+      info: true
+      response_chunks: false
+      computed_metrics: true
+  goodput:
+    constraints:
+      ttft: 1
+storage:
+  local_storage:
+    path: /workspace

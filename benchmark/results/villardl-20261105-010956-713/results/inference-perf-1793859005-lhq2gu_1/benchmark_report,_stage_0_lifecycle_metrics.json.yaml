@@ -1,0 +1,235 @@
+metadata:
+  eid: inference-perf-1793859005-lhq2gu
+metrics:
+  latency:
+    inter_token_latency:
+      max: 0.8819575009983964
+      mean: 0.00192368515884489
+      min: 0.0
+      p0p1: 0.0
+      p1: 0.0
+      p10: 0.0
+      p25: 0.0010130830050911754
+      p5: 0.0
+      p50: 0.00178191700251773
+      p75: 0.0025173329922836274
+      p90: 0.0036826669820584357
+      p95: 0.004521166003542021
+      p99: 0.0067301430378575045
+      p99p9: 0.01266474550147591
+      units: s/token
+    normalized_time_per_output_token:
+      max: 0.018672358476333247
+      mean: 0.002492597532005151
+      min: 5.4182635632167815e-05
+      p0p1: 8.69115894499371e-05
+      p1: 0.0017028072643748492
+      p10: 0.0018434751383774373
+      p25: 0.001923391758223939
+      p5: 0.0017957055123924823
+      p50: 0.002034088094179371
+      p75: 0.0021799578521166057
+      p90: 0.0037443266025748447
+      p95: 0.005488252217751973
+      p99: 0.0094421947630643
+      p99p9: 0.015111043137157502
+      units: s/token
+    request_latency:
+      max: 2.352717168017989
+      mean: 0.9347424284244422
+      min: 0.4332270840241108
+      p0p1: 0.4353943294092896
+      p1: 0.44097589790588243
+      p10: 0.5240067090082449
+      p25: 0.9220333339908393
+      p5: 0.4552975794009399
+      p50: 0.9824357079924084
+      p75: 1.0361267925036373
+      p90: 1.0832821751886514
+      p95: 1.112909029397997
+      p99: 1.2244640850822923
+      p99p9: 1.9250407807838124
+      units: s
+    time_per_output_token:
+      max: 0.016068897671997547
+      mean: 0.0021027130504663724
+      min: 2.56007479563303e-05
+      p0p1: 5.3270164280579927e-05
+      p1: 0.0016698534800916702
+      p10: 0.0017938384806232511
+      p25: 0.0018720516860509556
+      p5: 0.0017537235968749286
+      p50: 0.0019752454453182203
+      p75: 0.002086127251422539
+      p90: 0.0022183696393218194
+      p95: 0.00252229403561069
+      p99: 0.005786711365655184
+      p99p9: 0.011522392296570408
+      units: s/token
+    time_to_first_token:
+      max: 1.9038642090163194
+      mean: 0.05782075245175511
+      min: 0.00876391600468196
+      p0p1: 0.00909784102125559
+      p1: 0.009618075479520484
+      p10: 0.010592808201909065
+      p25: 0.011637353993137367
+      p5: 0.010186687484383583
+      p50: 0.01348012502421625
+      p75: 0.01773735450115055
+      p90: 0.22468063359847293
+      p95: 0.2299899337842361
+      p99: 0.5175061162468058
+      p99p9: 0.7796909165325107
+      units: s
+  requests:
+    failures: 0
+    input_length:
+      mean: 0.0
+      units: count
+    output_length:
+      max: 8319.0
+      mean: 449.34763636363635
+      min: 116.0
+      p0p1: 118.0
+      p1: 121.0
+      p10: 125.0
+      p25: 492.0
+      p5: 123.0
+      p50: 498.0
+      p75: 502.0
+      p90: 505.0
+      p95: 507.0
+      p99: 513.0
+      p99p9: 8315.126
+      units: count
+    total: 6875
+  throughput:
+    output_tokens_per_sec: 2572.5446688149464
+    requests_per_sec: 5.725065540865791
+    total_tokens_per_sec: 11121.83375609298
+  time:
+    duration: 1199.8414762379834
+scenario:
+  host:
+    accelerator: []
+    type: []
+  load:
+    args:
+      api:
+        headers: null
+        response_format: null
+        session_id_header_key: null
+        session_token_header_key: null
+        slo_tpot_header: null
+        slo_ttft_header: null
+        slo_unit: null
+        streaming: true
+        type: completion
+      circuit_breakers: null
+      data:
+        conversation_replay: null
+        corpus_file_path: null
+        input_distribution: null
+        multimodal: null
+        otel_trace_replay: null
+        output_distribution: null
+        path: null
+        shared_prefix: null
+        synthetic_agentic: null
+        trace:
+          file: /requests/datasets/kind-mixshift.csv
+          format: AzurePublicDataset
+        type: random
+        use_chat_template: false
+        visionarena: null
+        weka_trace_replay: null
+      load:
+        base_seed: 1793859006044
+        circuit_breakers: []
+        interval: 1.0
+        lora_traffic_split: null
+        num_workers: 4
+        request_retries: 0
+        request_retry_backoff_sec: 0.5
+        request_timeout: 60.0
+        stage_teardown_grace_seconds: 240.0
+        stages:
+        - concurrency_level: null
+          duration: 1200
+          num_requests: null
+          rate: 1.0
+        sweep: null
+        trace:
+          file: /requests/datasets/kind-mixshift.csv
+          format: AzurePublicDataset
+        type: trace_replay
+        worker_max_concurrency: 512
+        worker_max_tcp_connections: 2500
+      metrics: null
+      report:
+        goodput:
+          constraints:
+            ttft: 1.0
+        prometheus:
+          per_stage: false
+          summary: true
+        request_lifecycle:
+          max_error_messages: 100
+          per_adapter: true
+          per_adapter_stage: false
+          per_request: true
+          per_request_fields:
+            computed_metrics: true
+            info: true
+            request: false
+            response: false
+            response_chunks: false
+          per_stage: true
+          percentiles:
+          - 0.1
+          - 1.0
+          - 5.0
+          - 10.0
+          - 25.0
+          - 50.0
+          - 75.0
+          - 90.0
+          - 95.0
+          - 99.0
+          - 99.9
+          summary: true
+          use_server_output_tokens: false
+        session_lifecycle:
+          per_session: false
+          per_stage: true
+          summary: true
+      server:
+        api_key: null
+        base_url: http://10.96.93.110:80
+        cert_path: null
+        ignore_eos: true
+        key_path: null
+        model_name: Qwen/Qwen3-8B
+        type: vllm
+      storage:
+        google_cloud_storage: null
+        local_storage:
+          path: /requests/inference-perf-1793859005-lhq2gu_1
+          report_file_prefix: null
+        simple_storage_service: null
+      tokenizer:
+        load_timeout: 300.0
+        pretrained_model_name_or_path: Qwen/Qwen3-8B
+        token: null
+        trust_remote_code: null
+    metadata:
+      stage: 0
+    name: inference-perf
+  model:
+    name: Qwen/Qwen3-8B
+  platform:
+    engine: []
+    metadata:
+      inferenceScheduler: {}
+version: '0.1'

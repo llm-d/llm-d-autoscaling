@@ -1,0 +1,9 @@
+apiVersion: v1
+data:
+  invocation_cluster_config: L1VzZXJzL3ZpbGxhcmRsLy5jb21tYW5kLWNlbnRlci93b3JrdHJlZXMvdGFzay0wNDMzL2xsbS1kLWF1dG9zY2FsaW5nL2JlbmNobWFyay9jb25maWcvY2x1c3Rlci1jb25maWdzL2s4cy9tb2RlbC1zaW0tcXdlbjMtOGItbnBkLnlhbWw=
+  invocation_spec: L1VzZXJzL3ZpbGxhcmRsLy5jb21tYW5kLWNlbnRlci93b3JrdHJlZXMvdGFzay0wNDMzL2xsbS1kLWF1dG9zY2FsaW5nL2JlbmNobWFyay9jb25maWcvc3BlY2lmaWNhdGlvbi9zdGFnaW5nL29wdGltaXplZC1iYXNlbGluZS9ucGQtZmNvZmYueWFtbC5qMg==
+kind: Secret
+metadata:
+  name: llm-d-benchmark-standup-invocation
+  namespace: npdfc
+type: Opaque

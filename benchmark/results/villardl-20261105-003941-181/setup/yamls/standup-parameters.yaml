@@ -1,0 +1,39 @@
+apiVersion: v1
+data:
+  accelerator_model: auto
+  chart_version_gaie: ''
+  chart_version_inference_pool: v1.6.2
+  chart_version_llm_d_infra: v1.4.0
+  chart_version_modelservice: v0.4.16
+  cluster_name: 127.0.0.1
+  decode_data_local_parallelism: '1'
+  decode_data_parallelism: '1'
+  decode_replicas: '1'
+  decode_tensor_parallelism: '1'
+  decode_workers_parallelism: '1'
+  deploy_methods: modelservice
+  deployed_at: '2026-11-05T05:40:26Z'
+  deployed_by: villardl
+  gateway_class: epponly
+  harness_namespace: npdfc
+  image_vllm: docker.io/vllm/vllm-openai-cpu:v0.31.0@sha256:045fb648a61cfcd32d4b9ca5d0c391013afadae0178d2e23ac292597f2f64036
+  inference_port: '8000'
+  model_huggingface_id: Qwen/Qwen3-8B
+  model_name: Qwen/Qwen3-8B
+  model_short_name: qwen3-8b
+  multinode_enabled: 'false'
+  namespace: npdfc
+  platform_type: Kind
+  prefill_data_local_parallelism: '1'
+  prefill_data_parallelism: '1'
+  prefill_enabled: 'false'
+  prefill_replicas: '0'
+  prefill_tensor_parallelism: '1'
+  prefill_workers_parallelism: '1'
+  release: llmdbench
+  tool_name: llm-d-benchmark
+  tool_version: 0.8.0
+kind: ConfigMap
+metadata:
+  name: llm-d-benchmark-standup-parameters
+  namespace: npdfc

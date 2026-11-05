@@ -1,0 +1,25 @@
+# optimized-baseline KEDA experiment: npd-fcoff (staging / test bed).
+# Delta from baseline: the npd-fcoff work-rate law drives the Deployment
+#   (D1 + D15) x (L_p + 3.3 * L_out) work tok/s, threshold 0.70 x nu_max,
+#   min 1 / max 6, +1 pod/180 s up, -1 pod/300 s down after 300 s.
+# Ported from llm-d-autoscaling-research task 0426 (GPU evaluation). Requires a
+# knee-calibrated npdFcoff.thresholdWork — see the scenario header.
+# Select a backend at run time with:
+#   --cluster-config benchmark/config/cluster-configs/{k8s/model-sim-qwen3-8b-npd,ocp/vllm-npd}.yaml
+# Workloads and protocol: benchmark/config/workloads/npd-fcoff/README.md.
+
+# [REQUIRED]
+{% set base_dir = base_dir | default('../') -%}
+base_dir: {{ base_dir }}
+
+# [REQUIRED] Reuse upstream llm-d-benchmark defaults (sibling clone) — not vendored.
+values_file:
+  path: {{ base_dir }}/../llm-d-benchmark/config/templates/values/defaults.yaml
+
+# [REQUIRED]
+template_dir:
+  path: {{ base_dir }}/../llm-d-benchmark/config/templates/jinja
+
+# [OPTIONAL]
+scenario_file:
+  path: {{ base_dir }}/benchmark/config/scenarios/staging/optimized-baseline/npd-fcoff.yaml

@@ -32,16 +32,23 @@ benchmark/
     ├── scenarios/            # BACKEND-AGNOSTIC deployment + scaling strategy
     │   ├── guides/           #   recommended (one file per guide)
     │   └── staging/          #   WIP + KEDA experiments (one dir per guide)
-    │       └── pd-disaggregation/
-    │           ├── baseline.yaml         # control = recommended strategy
-    │           ├── queue-aggressive.yaml # variant (<strategy>.yaml)
-    │           ├── kv-early.yaml          # variant
-    │           └── token-aware.yaml       # variant
+    │       ├── pd-disaggregation/
+    │       │   ├── baseline.yaml         # control = recommended strategy
+    │       │   ├── queue-aggressive.yaml # variant (<strategy>.yaml)
+    │       │   ├── kv-early.yaml          # variant
+    │       │   └── token-aware.yaml       # variant
+    │       └── optimized-baseline/        # single Deployment, no P/D
+    │           ├── baseline.yaml         # control = static fleet
+    │           └── npd-fcoff.yaml        # variant: EPP work-rate law
+    ├── workloads/            # repo-local harness profiles (--workload-file-path)
+    │   └── npd-fcoff/        #   research GPU benchmark port + README
     └── cluster-configs/      # swappable backend overlays (--cluster-config), grouped by platform
         ├── k8s/
-        │   └── inference-sim.yaml       #   llm-d-inference-sim
+        │   ├── inference-sim.yaml          #   llm-d-inference-sim
+        │   └── model-sim-qwen3-8b-npd.yaml #   real vLLM (CPU) + sim plugin, no P/D, kind
         └── ocp/
             ├── vllm.yaml                #   real vLLM, GPU
+            ├── vllm-npd.yaml            #   real vLLM, GPU, no P/D
             └── model-sim-qwen3-32b.yaml # real vLLM (CPU) + latency-simulation plugin (per-model)
 ```
 
@@ -99,6 +106,12 @@ Rules:
   unchanged).
 - **Promote a winner** by copying its `keda:` block back into
   `scenarios/guides/<guide>.yaml`; retire the losing variants.
+- A guide with no recommended strategy in this repo yet (e.g.
+  `optimized-baseline`) uses a **static fleet** as `baseline.yaml`, still
+  differing from its variants only in `keda:`.
+- Workloads that upstream profiles cannot express go under
+  `workloads/<experiment>/` and are passed with `--workload-file-path`
+  (and `--dataset` for replayed traces).
 
 Run an experiment exactly like a guide, pointing `--spec` at its `.j2`:
 
@@ -230,10 +243,13 @@ be unchanged.
 | `staging/pd-disaggregation/queue-aggressive` | experiment | not yet run |
 | `staging/pd-disaggregation/kv-early` | experiment | not yet run |
 | `staging/lws-pd-disaggregation` | WIP / test bed | dry-run render only |
+| `staging/optimized-baseline/npd-fcoff` | experiment | live on kind (`k8s/model-sim-qwen3-8b-npd`): standup → staircase / mix-shift / overload runs; dry-run on `ocp/vllm-npd` |
+| `staging/optimized-baseline/baseline` | experiment (control) | dry-run render on both npd overlays |
 
-Dry-run composition is confirmed for the three backend overlays. A live
-end-to-end run on a cluster (standup → workload → teardown) has not yet been
-exercised for these specs.
+Dry-run composition is confirmed for the three P/D backend overlays. A live
+end-to-end run on a cluster has been exercised only for
+`staging/optimized-baseline/npd-fcoff` on kind; see
+[`config/workloads/npd-fcoff/README.md`](config/workloads/npd-fcoff/README.md).
 
 ## Observability
 

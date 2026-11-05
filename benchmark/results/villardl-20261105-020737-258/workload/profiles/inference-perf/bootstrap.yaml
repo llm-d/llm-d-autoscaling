@@ -1,0 +1,69 @@
+# COLD START / BOOTSTRAP — research kind raw/npd-fcoff-r1 bootstrap phase.
+# Deployment at 0, ScaledObject minReplicas 0 (--set npdFcoff.minReplicas=0),
+# fresh 1 req/s client at 8192:128. Expected: D1 + D15 counts the requests the
+# empty pool rejects (EPP 503 ServiceUnavailable), the trigger reads
+# lambda x (LP_DEF + 3.3 x LOUT_DEF) from the constant fallback, and KEDA
+# scales 0 -> 1. First-request latency includes the model-server start.
+# Trace: gpu-bootstrap.csv / kind-bootstrap.csv.
+#
+# Run with --workload-file-path <this file> --dataset <trace .csv>; see README.md.
+load:
+  # Open-loop replay of a generated trace (benchmark/hack/npd-fcoff/gen_traces.py):
+  # arrival times and prompt:output lengths are the research loadgen.py's, by
+  # construction, for the same schedule/mix/seed. One stage; `rate` is unused by
+  # trace_replay and `duration` only bounds the stage.
+  type: trace_replay
+  trace:
+    file: /requests/datasets/kind-bootstrap.csv
+    format: AzurePublicDataset
+  stages:
+    - rate: 1
+      duration: 600
+  # research client timeout (--timeout 60): a stuck request becomes a failure
+  # instead of an unbounded backlog. 60 s is also the A = 0 floor of the knee.
+  request_timeout: 60
+  # research drain (--drain 240): in-flight requests get 240 s after the last
+  # arrival before they are cancelled.
+  stage_teardown_grace_seconds: 240
+  # Pinned: the default is the host cpu_count (cgroup-unaware). The worst
+  # in-flight backlog (16 req/s x 60 s timeout) must fit num_workers x
+  # worker_max_concurrency, or the replay stops being open-loop.
+  num_workers: 4
+  worker_max_concurrency: 512
+api:
+  type: completion
+  streaming: true
+server:
+  type: vllm
+  model_name: Qwen/Qwen3-8B
+  base_url: http://qwen-qwe-9117f9be-qwen3-8b-router-epp.npdfc.svc.cluster.local:80
+  ignore_eos: true
+tokenizer:
+  pretrained_model_name_or_path: Qwen/Qwen3-8B
+data:
+  type: random
+  # Prompt/output lengths come from the trace rows; random token ids, so every
+  # prompt token is uncached prefill work (loadgen.py's prompts were random too).
+  trace:
+    file: /requests/datasets/kind-bootstrap.csv
+    format: AzurePublicDataset
+report:
+  request_lifecycle:
+    summary: true
+    per_stage: true
+    per_request: true
+    # Keep per-request records small: timings, lengths, errors — no payloads.
+    per_request_fields:
+      request: false
+      response: false
+      info: true
+      response_chunks: false
+      computed_metrics: true
+  # A = fraction of requests with TTFT <= 1 s — the research benchmark's
+  # attainment definition (knee = A 0.95 crossing).
+  goodput:
+    constraints:
+      ttft: 1
+storage:
+  local_storage:
+    path: /workspace

@@ -1,0 +1,76 @@
+apiVersion: v1
+data:
+  latest: 'analyze: false
+
+    endpoint_url: ''''
+
+    experiment_ids:
+
+    - inference-perf-1793857567-dlqb4m
+
+    harness: inference-perf
+
+    hostname: Lionels-MacBook-Pro-2.local
+
+    model: Qwen/Qwen3-8B
+
+    namespace: npdfc
+
+    output: local
+
+    parallelism: 1
+
+    pvc_name: workload-pvc
+
+    pvc_results_paths:
+
+    - /requests/inference-perf-1793857567-dlqb4m_1
+
+    pvc_results_prefix: /requests
+
+    timestamp: 20261105T060136Z
+
+    user: villardl
+
+    workload: stair.yaml
+
+    '
+  run-20261105T060136Z: 'analyze: false
+
+    endpoint_url: ''''
+
+    experiment_ids:
+
+    - inference-perf-1793857567-dlqb4m
+
+    harness: inference-perf
+
+    hostname: Lionels-MacBook-Pro-2.local
+
+    model: Qwen/Qwen3-8B
+
+    namespace: npdfc
+
+    output: local
+
+    parallelism: 1
+
+    pvc_name: workload-pvc
+
+    pvc_results_paths:
+
+    - /requests/inference-perf-1793857567-dlqb4m_1
+
+    pvc_results_prefix: /requests
+
+    timestamp: 20261105T060136Z
+
+    user: villardl
+
+    workload: stair.yaml
+
+    '
+kind: ConfigMap
+metadata:
+  name: llm-d-benchmark-run-parameters
+  namespace: npdfc
