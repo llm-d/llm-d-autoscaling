@@ -1599,16 +1599,25 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             services = discover_grafana_services(context=self.kube_context)
             self._send_json(200, {"target": target, "services": services})
         elif path.startswith("/results/"):
-            requested = Path(self.workspace).resolve() / Path(path[len("/results/"):])
-            root = Path(self.workspace).resolve()
-            if root not in requested.resolve().parents and requested.resolve() != root:
+            raw = path[len("/results/"):]
+            if not raw or '..' in raw.split('/'):
                 self._send_error(403, "Forbidden")
                 return
-            if not requested.is_file():
+            rel_match = re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._/-]*', raw)
+            if not rel_match:
+                self._send_error(403, "Forbidden")
+                return
+            root = os.path.realpath(self.workspace)
+            requested = os.path.realpath(os.path.join(root, rel_match.group(0)))
+            if not requested.startswith(root + os.sep):
+                self._send_error(403, "Forbidden")
+                return
+            if not os.path.isfile(requested):
                 self._send_error(404, "Not found")
                 return
-            content_type = mimetypes.guess_type(str(requested))[0] or "application/octet-stream"
-            self._send_bytes(requested.read_bytes(), content_type)
+            content_type = mimetypes.guess_type(requested)[0] or "application/octet-stream"
+            with open(requested, "rb") as f:
+                self._send_bytes(f.read(), content_type)
         else:
             self._send_error(404, "Not found")
 
