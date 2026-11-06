@@ -826,10 +826,68 @@
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
     },
     {
+      "id": 30,
+      "title": "Namespace Pods by Phase (kube-state-metrics)",
+      "description": "Pending and Running pods, plus the total across all phases, in the selected namespace. Includes router and harness pods, not just model servers. Running does not imply Ready. Counts pods before they expose inference metrics and deduplicates kube-state-metrics scrape targets. Missing metrics remain missing rather than becoming zero.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 83
+      },
+      "datasource": {
+        "type": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "short",
+          "min": 0,
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(max by (namespace, pod, uid) (kube_pod_status_phase{namespace=~\"$namespace\",phase=\"Pending\"}))",
+          "legendFormat": "Pending",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(max by (namespace, pod, uid) (kube_pod_status_phase{namespace=~\"$namespace\",phase=\"Running\"}))",
+          "legendFormat": "Running",
+          "refId": "B"
+        },
+        {
+          "expr": "count(max by (namespace, pod, uid) (kube_pod_status_phase{namespace=~\"$namespace\"}))",
+          "legendFormat": "Total (all phases)",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
       "id": 103,
       "title": "EPP (router / endpoint picker)",
       "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 83 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 91 },
       "collapsed": false,
       "panels": []
     },
@@ -838,7 +896,7 @@
       "title": "EPP Pool KV Cache Utilization",
       "description": "The router's pool-wide KV view (average across endpoints, plus its spread). A large std dev means load is unevenly distributed, so the pool average understates how close individual replicas are to saturation.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 84 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 92 },
       "datasource": { "type": "prometheus" },
       "fieldConfig": {
         "defaults": {
@@ -875,7 +933,7 @@
       "title": "EPP Pool Queue & Running Requests",
       "description": "Router-side averages per endpoint. Compare against the vLLM fleet panels above: a divergence means the router's view of the pool is stale or its endpoint set is wrong.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 84 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 92 },
       "datasource": { "type": "prometheus" },
       "fieldConfig": {
         "defaults": {
@@ -917,7 +975,7 @@
       "title": "EPP Per-Endpoint Queue Size",
       "description": "Pending depth per backend endpoint, rebuilt from the live endpoint set on every scrape -- so a scaled-down pod's series disappears instead of going stale. token-aware.yaml uses exactly this property as a liveness gate for its prefill trigger.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 92 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 100 },
       "datasource": { "type": "prometheus" },
       "fieldConfig": {
         "defaults": {
@@ -949,7 +1007,7 @@
       "title": "EPP Request & Error Rate",
       "description": "Requests the router accepted, and the errors it returned, by model. Errors rising with replica count is the classic sign of scale-out outrunning model load time.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 92 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 100 },
       "datasource": { "type": "prometheus" },
       "fieldConfig": {
         "defaults": {
@@ -986,7 +1044,7 @@
       "title": "EPP In-Flight Requests",
       "description": "Requests the router currently has outstanding, by model. The router-side counterpart to the vLLM fleet running/waiting panel.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 100 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 108 },
       "datasource": { "type": "prometheus" },
       "fieldConfig": {
         "defaults": {
@@ -1018,7 +1076,7 @@
       "title": "EPP Request Latency (router-observed)",
       "description": "What the client actually experiences: engine time plus routing, queueing and flow control. Compare with the vLLM TTFT/E2E panels -- the delta is the router's own contribution.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 100 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 108 },
       "datasource": { "type": "prometheus" },
       "fieldConfig": {
         "defaults": {
@@ -1065,7 +1123,7 @@
       "title": "EPP Scheduling Latency",
       "description": "End-to-end endpoint-picking time (sub-millisecond when healthy). A spike here means the scheduler itself became the bottleneck -- usually a plugin, not the pool.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 108 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 116 },
       "datasource": { "type": "prometheus" },
       "fieldConfig": {
         "defaults": {
@@ -1107,7 +1165,7 @@
       "title": "EPP Flow Control Pool Saturation",
       "description": "The router's own saturation signal, gating dispatch: 1.0 is the set point, and 'effective' is max(prefill, decode). An empty pool also reads 1.0, and stale endpoint metrics score as saturated -- so treat 1.0 during a cold start as 'no data', not 'overloaded'.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 108 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 116 },
       "datasource": { "type": "prometheus" },
       "fieldConfig": {
         "defaults": {
@@ -1146,7 +1204,7 @@
       "title": "EPP Flow Control Queue",
       "description": "Requests held in the router's flow-control queue, by priority. Non-zero means the router is absorbing backlog that the engine queue metrics never see -- scaling triggers reading only vllm:num_requests_waiting will under-react.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 116 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 124 },
       "datasource": { "type": "prometheus" },
       "fieldConfig": {
         "defaults": {
@@ -1191,7 +1249,7 @@
       "title": "EPP In-Flight Tokens per Endpoint",
       "description": "Tokens the router has outstanding on each endpoint -- the numerator of token-aware.yaml's prefill trigger (divided by peakPrefillThroughput to get seconds of backlog). Only published when the EPP runs the `inflight-load-producer` plugin, so it is empty for baseline scenarios. Note the series are never deleted when an endpoint goes away; the scenario intersects them with per-endpoint queue size for liveness.",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 116 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 124 },
       "datasource": { "type": "prometheus" },
       "fieldConfig": {
         "defaults": {
