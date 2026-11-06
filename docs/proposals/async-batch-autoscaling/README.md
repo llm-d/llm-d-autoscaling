@@ -1,19 +1,20 @@
 # async-batch-autoscaling — prototype manifests and validation runbook
 
 Companion manifests for [the proposal](../async-batch-autoscaling.md).
-Validated against a GKE Autopilot cluster running llm-d-async v0.10.0
-(Redis sorted-set transport), llm-d-router EPP, a single `Deployment/vllm`
-(Qwen3-8B, 1×L4 via a DWS flex-start/spot ComputeClass), and
-kube-prometheus-stack. Adjust names/namespaces for other environments.
+Validated against a GKE Autopilot cluster running llm-d-async (Redis
+sorted-set transport, v0.10.0 for M1 and v0.11.0 for M2), llm-d-router EPP
+(`optimized-baseline`), a single `Deployment/vllm`, and kube-prometheus-stack.
+Adjust names/namespaces for other environments.
 
-Only the validated M1 manifests are included so far. M2 and M3 manifests, and
-their runbook steps, land in follow-up changes once each is validated on a
-cluster.
+Validated M1 and M2 manifests are included below. M3 manifests and runbook
+steps land in a follow-up change once M3 is validated on a cluster.
 
 | File | Purpose | Status |
 | --- | --- | --- |
 | `worker-pools-readiness-gate.json` | **Validated hold-back config**: fail-closed `prometheus-query` inner gate on `llm_d_epp_ready_endpoints`. Replaces `worker-pools.json` in the llm-d-async ConfigMap. | committed |
 | `m1-cron-scaledobject.yaml` | M1: cron-windowed 0↔N scaling (fixed N for the window). | committed |
+| `m2-backlog-scaledobject.yaml` | M2: backlog-driven 0↔N scaling (`activationThreshold: "500"`, `threshold: "2000"`, 4-layer `llm-d-async` v0.11.0 PromQL query). | committed |
+| `backlog-source-alert-prometheusrule.yaml` | M2/M3 guardrail alert (`AsyncBrokerBacklogSourceUnavailable`) when `llm_d_async_async_broker_backlog_source_available == 0` for >5m. | committed |
 
 Apply exactly one ScaledObject per scale target at a time (M1 *or* M2 *or*
 M3) — multiple ScaledObjects fighting over one Deployment is undefined
@@ -51,12 +52,9 @@ Verify hold-back with the pool at zero:
 kubectl -n llm-d-async scale deploy/vllm --replicas=0
 # enqueue requests (see §2), then check:
 #   llm_d_async_async_gate_decisions_total{reason="gate_closed"} -> climbing
+#   llm_d_async_async_gate_waiting_requests -> equals min(enqueued, workers) (on >= v0.11.0)
 #   llm_d_async_async_gate_wait_requeues_total -> climbs every gate-wait-timeout
 # and confirm nothing reaches the router (EPP logs quiet).
-# NOTE: broker_backlog reads 0 for bursts smaller than the pool's worker
-# count — claimed requests gate-waiting in workers are invisible to it (see
-# the proposal's gate-wait blind spot). Enqueue more than `workers` items if
-# you want to see the backlog gauge itself move.
 ```
 
 ## 2. Enqueueing test requests
@@ -142,3 +140,23 @@ while held produces a `DEADLINE_EXCEEDED` result there.
    window end + cooldown.
 6. Negative test: enqueue one request whose deadline expires before the
    window; expect a `DEADLINE_EXCEEDED` result and a counter increment.
+
+### M2 — backlog-driven 0↔N
+
+1. Remove any M1 ScaledObject (`kubectl -n llm-d-async delete scaledobject vllm-batch-window --ignore-not-found`), then apply the guardrail alert and M2 ScaledObject:
+   ```sh
+   kubectl apply -f backlog-source-alert-prometheusrule.yaml
+   kubectl apply -f m2-backlog-scaledobject.yaml
+   ```
+2. **Idle scale-to-zero (`1 → 0`)**: With an empty queue (`broker_backlog + queue_depth + gate_waiting_requests + inflight_requests == 0`), confirm KEDA marks `vllm-backlog` inactive (`READY=True`, `ACTIVE=False`) and scales `Deployment/vllm` to `0` replicas once `cooldownPeriod` elapses.
+3. **Batch accumulation below `activationThreshold` (`<= 500`)**: Enqueue `200` requests (`< 500`). Verify that the 4-layer PromQL sum reports `200`, the dispatch gate holds all requests back (`gate_waiting_requests` + `broker_backlog` = 200), and `Deployment/vllm` remains at `0` replicas because `200 <= activationThreshold (500)`.
+4. **Wake from zero (`0 → 1` at `> 500`)**: Enqueue `400` additional requests (total `600 > 500`). Verify `vllm-backlog` becomes active (`ACTIVE=True`), HPA computes `ceil(600 / 2000) = 1`, and `Deployment/vllm` scales `0 → 1`.
+5. **Proportional scale-out (`1 → 2` at `> 2000`)**: Enqueue `2000` additional requests (or `2500` from zero) so total pending work exceeds `2000`. Verify HPA computes `ceil(total / 2000) = 2` and scales `Deployment/vllm` to `2` replicas (`maxReplicaCount`).
+6. **Drain-rate calibration (`R`) and scale-to-zero (`2 → 0`)**:
+   - Record the time from when the replicas become Ready and the gate opens until all requests drain (`LLEN` on the result list reaches the total enqueued count). Compute per-replica throughput:
+     ```
+     R = completed_requests / (drain_wall_seconds * ready_replicas)
+     ```
+   - To size `threshold` (`X`) for a target drain time `T_target` (in seconds), set `threshold = T_target * R`, and ensure `cooldownPeriod >= activationThreshold / R` so the tail below `activationThreshold` finishes draining before KEDA scales `1 → 0`.
+   - Confirm `llm_d_async_async_exceeded_deadline_requests_total` does not increase and `Deployment/vllm` scales back `2 → 0` after the queue drains and `cooldownPeriod` / HPA stabilization elapse.
+

@@ -208,9 +208,10 @@ durable contract every consumer may depend on. M1 and M2 use only these.
 | `llm_d_async_async_broker_backlog_source_available` | gauge | 1 when the last backlog read succeeded. A zero backlog is trustworthy **only** when this is 1; every query below joins on it. |
 | `llm_d_async_async_deadline_proximity_millis` | snapshot histogram | Per-poll distribution of milliseconds remaining until deadline for items still queued. Bucket boundaries (ms): 0, 1s, 5s, 15s, 30s, 1m, 2m, 5m, 10m, 30m, 1h, 2h, 6h, 24h. `le="0"` counts items already past deadline; cumulative buckets therefore include expired items in every horizon. Counts are exact (`ZCOUNT`), not sampled. **Not monotonic — never apply `rate()`/`increase()`.** Redis sorted-set transport only. Consumed by the producer itself to compute the derived metric below; also exposed raw for inspection. |
 | `llm_d_async_async_queue_depth` | gauge | Requests pulled from the broker and buffered in-process awaiting a free worker. Summed alongside backlog and inflight so the metric stays above zero while work is buffered. |
+| `llm_d_async_async_gate_waiting_requests` | gauge | Requests claimed by a worker and currently parked waiting for a closed dispatch gate to open (added in `llm-d-async` v0.11.0 via [#476](https://github.com/llm-d/llm-d-async/pull/476)). |
 | `llm_d_async_async_inflight_requests` | gauge | Requests dispatched and awaiting completion. Used to hold off scale-to-zero while work is in flight. |
 | `llm_d_async_async_gate_decisions_total{reason}` | counter | Observability for hold-back (`reason="gate_closed"` climbing while the pool is at zero is the expected signature). |
-| `llm_d_async_async_gate_wait_requeues_total` | counter | Increments each time a gate-waiting request is requeued after `--gate-wait-timeout`. The only signal for the otherwise-invisible gate-wait layer (see the blind spot below). |
+| `llm_d_async_async_gate_wait_requeues_total` | counter | Increments each time a gate-waiting request is requeued after `--gate-wait-timeout`. |
 | `llm_d_async_async_exceeded_deadline_requests_total` | counter | The failure metric every milestone's acceptance criteria reference. |
 
 **Derived metric (producer-side policy, M3 only).** Composed by llm-d-async
@@ -229,51 +230,43 @@ pool/queue config keys, alongside the existing gate params):
 the point of the refactor: the tuning constants live with the component that
 computes the signal, not scattered across Prometheus recording rules.
 
-Operational guardrail shipped with the blueprints: alert when
-`llm_d_async_async_broker_backlog_source_available == 0` for more than 5
-minutes — while the source is untrusted, backlog-driven scale-*down* decisions
-are blind.
+Operational guardrail shipped with the blueprints
+([`async-batch-autoscaling/backlog-source-alert-prometheusrule.yaml`](async-batch-autoscaling/backlog-source-alert-prometheusrule.yaml)):
+alert when `llm_d_async_async_broker_backlog_source_available == 0` for more
+than 5 minutes — while the source is untrusted, backlog-driven scale-*down*
+decisions are blind.
 
-> **Prototype finding — the gate-wait blind spot**: a held request passes
-> through four in-system layers, and exactly one of them is invisible:
+> **Prototype finding — the gate-wait layer (resolved in `llm-d-async` v0.11.0)**:
+> a held request passes through four in-system layers:
 >
 > | Layer | Metric |
 > | --- | --- |
 > | In the broker sorted set (unclaimed) | `broker_backlog` (and the deadline histogram) |
 > | Claimed, buffered awaiting a free worker | `queue_depth` |
-> | Held by a worker blocked in gate-wait | **none** |
+> | Held by a worker blocked in gate-wait | `gate_waiting_requests` (`llm-d-async` ≥ v0.11.0; **none** on ≤ v0.10.0) |
 > | Dispatched to the gateway | `inflight_requests` |
 >
 > The worker decrements `queue_depth` the moment it takes a message off the
-> merged channel (`pkg/asyncworker/worker.go:95`) — *before* entering the
-> pool-gate wait — and `inflight_requests` starts only at dispatch. So
-> requests blocked in gate-wait (up to `--gate-wait-timeout`, default 5m,
-> per cycle before requeue and near-instant re-claim) are counted nowhere.
-> That layer holds up to the pool's `workers` count, so a burst smaller than
-> that can produce **zero** KEDA signal while being held: in the M1 prototype
-> test, 3 gate-waiting requests read as `broker_backlog = 0`,
-> `queue_depth = 0`, and no inflight series. Under M2/M3 alone, that job
-> never wakes the model server and dies at its deadline. Mitigations, in
-> order of preference:
->
-> 1. **Upstream metrics fix** (tracked in
->    [llm-d-async#464](https://github.com/llm-d/llm-d-async/issues/464);
->    proposed as an M2 deliverable): llm-d-async keeps counting gate-waiting
->    requests — either leave them in `queue_depth` until the gate opens, or
->    expose a `gate_waiting_requests` gauge.
-> 2. **Query workaround**: sum all three visible layers
->    (`broker_backlog + queue_depth + inflight_requests`, as the M2 blueprint
->    does) and estimate the hidden layer as
->    `rate(llm_d_async_async_gate_wait_requeues_total[10m]) × gate-wait-timeout-seconds`.
-> 3. Accept the deadband and size thresholds/job floors above `workers`.
+> merged channel (`pkg/asyncworker/worker.go`) — *before* entering the
+> pool-gate wait — and `inflight_requests` starts only at dispatch. On
+> `llm-d-async` ≤ v0.10.0, requests blocked in gate-wait (up to `--gate-wait-timeout`,
+> default 5m, per cycle before requeue and near-instant re-claim) were counted
+> nowhere. In `llm-d-async` v0.11.0
+> ([llm-d-async#464](https://github.com/llm-d/llm-d-async/issues/464) /
+> [#476](https://github.com/llm-d/llm-d-async/pull/476)), `llm-d-async` exports
+> `llm_d_async_async_gate_waiting_requests`, which the M2 `ScaledObject` query
+> sums alongside `broker_backlog`, `queue_depth`, and `inflight_requests` so all
+> four holding layers are visible to KEDA.
 
 ### Gate configuration: holding back when the pool is empty
 
 llm-d-async has no single "hold when no backends" flag; hold-back is a
 property of the configured **dispatch gate** and its `fallback` behavior. The
-blueprints standardize on the `prometheus-budget` gate as the inner
-saturation gate (composable under `tier-priority-admission` where tiering is
-in use):
+validated reference configuration is committed in
+[`worker-pools-readiness-gate.json`](async-batch-autoscaling/worker-pools-readiness-gate.json)
+(`prometheus-query` on `llm_d_epp_ready_endpoints`). For pools that also need
+continuous concurrency pacing alongside hold-back, `prometheus-budget` (fixed in
+`llm-d-async` v0.11.0) can be used as the inner `saturation_gate`:
 
 ```json
 {
@@ -286,7 +279,7 @@ in use):
     "saturation_gate_params": {
       "pool": "llm-d-router",
       "namespace": "llm-d-async",
-      "max_concurrency": "12",
+      "max_concurrency": "64",
       "baseline": "0.05",
       "fallback": "0.0"
     }
@@ -306,6 +299,18 @@ Why `prometheus-budget`:
   must be sized to what one replica actually serves (not the default 100), or
   the gate never closes under load.
 
+> **Note — `tier-priority-admission` queue classification**: when using
+> `tier-priority-admission` on worker pools without an upstream classifying
+> `redis-quota` gate on the queues, include `"classification": "reserved"` in
+> each queue's `labels` in `queues.json` (e.g.,
+> `"labels": {"tier": "batch", "classification": "reserved"}`). Without it,
+> `tier-priority-admission` treats untagged messages as `overflow` and returns
+> `ActionRefuse` (re-enqueueing via `retry-sortedset`) instead of `ActionWait`
+> (parking workers in `llm_d_async_async_gate_waiting_requests` while the inner
+> gate is closed). Alternatively, configure `gate_type: "prometheus-budget"` or
+> `gate_type: "prometheus-query"` directly on the worker pool when multi-tier
+> priority admission is not required.
+
 > **Caution — audit existing configs**: a `prometheus-saturation` inner gate
 > whose metric source is unavailable uses its `fallback` as a **saturation**
 > value, and the default `0.0` means *unsaturated* — fail **open**. A pool
@@ -314,27 +319,21 @@ Why `prometheus-budget`:
 > saturation gate's `fallback: "1.0"`. (The prototype cluster had exactly this
 > misconfiguration.)
 
-> **Prototype finding — EPP metric-name skew**: llm-d-async's `prometheus-saturation`
-> gate was updated to the new `llm_d_epp_flow_control_pool_saturation` metric
-> in [llm-d-async#445](https://github.com/llm-d/llm-d-async/pull/445)
-> (in v0.10.0), but the `prometheus-budget` cascade still builds its queries
-> from the *deprecated* EPP names — see the three source builders in
-> `pkg/async/inference/flowcontrol/promql_metric_source_factory.go`:
-> `inference_extension_flow_control_queue_size` + `inference_pool_ready_pods`
-> (flow-control queue-size source), `inference_pool_per_pod_queue_size`
-> (per-pod queue source), and `vllm:num_requests_running` ×
-> `inference_pool_ready_pods` (vLLM running source). On the prototype
-> cluster's EPP only the `llm_d_epp_*` names (and raw `vllm:*`) are present,
-> so the cascade never resolves and the gate stays closed **even with
-> backends ready** — a total dispatch stall, not just a missing hold-back.
-> (The fixed saturation gate is also not a hold-back option here: its metric
-> exists only when EPP runs the flowControl plugin, and its fallback default
-> reads as *zero saturation* — fail open.) Migrating the budget cascade the
-> same way as #445 is tracked in
-> [llm-d-async#460](https://github.com/llm-d/llm-d-async/issues/460); until
-> then, use a `prometheus-query` inner gate with an explicit readiness
-> budget, which is what the prototype validated
-> (`worker-pools-readiness-gate.json`):
+> **Prototype finding — EPP metric-name skew (resolved in `llm-d-async` v0.11.0)**:
+> in `llm-d-async` v0.10.0, `prometheus-budget` built its cascade from
+> deprecated EPP metric names (`inference_extension_flow_control_queue_size`,
+> `inference_pool_per_pod_queue_size`, `inference_pool_ready_pods`), causing
+> the cascade to fail closed even with backends ready. This was fixed in
+> `llm-d-async` v0.11.0
+> ([llm-d-async#460](https://github.com/llm-d/llm-d-async/issues/460) /
+> [#477](https://github.com/llm-d/llm-d-async/pull/477)), which migrated all
+> three cascade sources in
+> `pkg/async/inference/flowcontrol/promql_metric_source_factory.go` to
+> `llm_d_epp_flow_control_queue_size`, `llm_d_epp_per_endpoint_queue_size`, and
+> `llm_d_epp_ready_endpoints`. For `llm-d-async` ≤ v0.10.0 (or when operators
+> want a purely binary readiness gate without concurrency pacing), use the
+> `prometheus-query` inner gate in
+> [`worker-pools-readiness-gate.json`](async-batch-autoscaling/worker-pools-readiness-gate.json):
 >
 > ```
 > clamp_max(sum(llm_d_epp_ready_endpoints{name="llm-d-router",namespace="llm-d-async"}) or vector(0), 1)
@@ -429,10 +428,13 @@ spec:
 
 ### Milestone 2 — Backlog-driven autoscaling, 0↔N
 
-Replace the schedule with the work itself: scale up when broker backlog
-crosses a threshold, scale to zero when the queue drains.
+Replace the schedule with the work itself: accumulate batch requests at zero
+replicas until total pending work crosses `activationThreshold`, scale out
+proportionally with `threshold` (`AverageValue`), and return to zero when the
+queue drains.
 
-**ScaledObject** (the standalone manifest lands once M2 is validated):
+**ScaledObject** (see
+[`async-batch-autoscaling/m2-backlog-scaledobject.yaml`](async-batch-autoscaling/m2-backlog-scaledobject.yaml)):
 
 ```yaml
 apiVersion: keda.sh/v1alpha1
@@ -445,14 +447,19 @@ spec:
     name: vllm
   minReplicaCount: 0
   maxReplicaCount: 2
-  cooldownPeriod: 300
+  pollingInterval: 15
+  cooldownPeriod: 15
+  fallback:
+    failureThreshold: 3
+    replicas: 1
+    behavior: currentReplicasIfHigher
   advanced:
     horizontalPodAutoscalerConfig:
       behavior:
         scaleUp:
           stabilizationWindowSeconds: 0
         scaleDown:
-          stabilizationWindowSeconds: 300
+          stabilizationWindowSeconds: 15
           policies:
           - type: Pods
             value: 1
@@ -462,8 +469,8 @@ spec:
     metricType: AverageValue
     metadata:
       serverAddress: http://llmd-kube-prometheus-stack-prometheus.llm-d-monitoring.svc.cluster.local:9090
-      threshold: "50"           # X: backlog items one replica should own
-      activationThreshold: "0"
+      threshold: "2000"          # X: pending requests one replica should own
+      activationThreshold: "500" # batch accumulation floor before waking 0 -> 1
       query: >-
         (
           sum(llm_d_async_async_broker_backlog{namespace="llm-d-async"}
@@ -477,36 +484,49 @@ spec:
         )
         +
         (
+          sum(llm_d_async_async_gate_waiting_requests{namespace="llm-d-async"})
+          or vector(0)
+        )
+        +
+        (
           sum(llm_d_async_async_inflight_requests{namespace="llm-d-async"})
           or vector(0)
         )
 ```
 
-The query sums the three *visible* holding layers — broker backlog, in-process
-buffer (`queue_depth`), and dispatched (`inflight_requests`) — leaving only the
-gate-wait layer uncounted (see the gate-wait blind spot above).
+The query sums all four holding layers in `llm-d-async` ≥ v0.11.0 — broker
+backlog (`broker_backlog`), in-process buffer (`queue_depth`), workers parked at
+a closed dispatch gate (`gate_waiting_requests`), and dispatched requests
+(`inflight_requests`).
 
 **Design notes**
-- *`AverageValue` semantics*: the threshold is a per-replica work quota, so
-  desired replicas = `ceil((backlog + queue_depth + inflight) / X)` — natural
-  0→N scaling.
-  `Value` would compare the raw total and pin the pool at one step. This
-  matches the blueprint convention in this repository.
+- *`AverageValue` and `activationThreshold` semantics*: `activationThreshold`
+  (`500`) sets a batch accumulation floor so the pool stays at `0` replicas
+  until at least `501` requests have accumulated (`0 → 1`), amortizing cold
+  starts across meaningful batches. Once active, `threshold` (`2000`) acts as a
+  per-replica work quota, so desired replicas =
+  `ceil((backlog + queue_depth + gate_waiting + inflight) / 2000)` — natural
+  `0 → N` scaling (`>500` runs 1 replica, `>2000` runs 2 replicas).
 - *Trust guard*: the `and (… == 1)` join drops backlog series whose last
   broker read failed (identical label sets make plain vector matching work).
   Dropping is conservative for scale-up; for scale-down protection, the
-  shipped alert on `source_available == 0` covers the blind spot. The
-  `or vector(0)` wrappers guarantee KEDA always receives a sample.
-- *Scale-to-zero vs. draining*: adding `queue_depth` and `inflight_requests`
-  to the query keeps the metric above `activationThreshold: 0` while any work
-  is buffered or dispatched, so KEDA cannot deactivate the pool mid-drain —
-  the clean fix for the 1→0 edge. For N→N−1 scale-down, the HPA picks victims
-  arbitrarily:
+  shipped alert on `source_available == 0`
+  ([`async-batch-autoscaling/backlog-source-alert-prometheusrule.yaml`](async-batch-autoscaling/backlog-source-alert-prometheusrule.yaml))
+  covers the blind spot. The `or vector(0)` wrappers guarantee KEDA always
+  receives a sample.
+- *Scale-to-zero vs. draining*: summing `queue_depth`, `gate_waiting_requests`,
+  and `inflight_requests` alongside `broker_backlog` ensures all in-system work
+  contributes to the scaling signal. When `activationThreshold > 0` (e.g.,
+  `500`), KEDA marks the trigger inactive once total remaining work drops to
+  `≤ activationThreshold` and begins counting down `cooldownPeriod` (`300s`);
+  size `cooldownPeriod ≥ activationThreshold / R` so the single remaining
+  replica finishes draining the tail (< 500 items) before `cooldownPeriod`
+  expires. For `N → N−1` scale-down, the HPA picks victims arbitrarily:
   set `terminationGracePeriodSeconds` on the model server ≥ llm-d-async's
   `--request-timeout` (default 5m) so vLLM finishes in-flight work on
   SIGTERM; dispatch failures that do occur surface to llm-d-async's retry
   path, so they degrade to retries, not loss.
-- *Flapping*: the backlog signal is stepwise (15s broker poll × 30s KEDA
+- *Flapping*: the backlog signal is stepwise (15s broker poll × 15s KEDA
   poll). Scale-down stabilization of 300s plus a 1-pod-per-120s policy
   prevents sawtoothing while a burst is mid-drain.
 - *Single-model-server assumption*: the query `sum()`s over every queue and
@@ -517,11 +537,15 @@ gate-wait layer uncounted (see the gate-wait blind spot above).
   Future work.
 
 **Acceptance criteria**
-1. Enqueue B items with the pool at 0 → replicas reach
-   `min(ceil(B/X), maxReplicaCount)`.
-2. Backlog drains; the pool scales to 0 only after backlog = 0 **and**
+1. Enqueue `B ≤ activationThreshold` (`500`) items with the pool at `0` → pool
+   remains at `0` replicas while requests are held in the broker/gate.
+2. Enqueue `B > activationThreshold` items → replicas reach
+   `min(ceil(B/X), maxReplicaCount)` (`1` replica for `500 < B ≤ 2000`, `2`
+   replicas for `B > 2000`).
+3. Backlog drains; the pool scales to 0 only after backlog = 0 **and**
    inflight = 0, plus cooldown.
-3. No `DEADLINE_EXCEEDED` results, no requests lost to pod termination.
+4. No `DEADLINE_EXCEEDED` results, no requests lost to pod termination.
+
 
 ### Milestone 3 — Deadline-proximity-driven autoscaling
 
@@ -622,13 +646,13 @@ add a companion alert on `absent(llm_d_async_async_deadline_required_replicas)`.
 ## Prototype environment and validation
 
 Primary validation runs on a live GKE Autopilot dev cluster: llm-d-async
-v0.10.0 (Redis sorted-set transport, six queues
-across two worker pools), llm-d-router EPP + Envoy, single `Deployment/vllm`
-(Qwen3-8B, 1×L4) selected by InferencePool `llm-d-router`, kube-prometheus-
-stack already scraping all components, GPU capacity via a DWS
-flex-start/spot ComputeClass. KEDA is installed from the official release
-manifests. The step-by-step runbook, including how to enqueue test requests
-with the `producer` module and how to measure `C` and `R`, lives in
+v0.10.0 for M1 and v0.11.0 for M2 (Redis sorted-set transport, two worker pools),
+llm-d-router EPP (`optimized-baseline`), single `Deployment/vllm`
+selected by InferencePool `llm-d-router`, kube-prometheus-stack
+scraping all components, and GKE Autopilot Spot capacity. KEDA (`v2.20.2`) is
+installed from the official release manifests. The step-by-step runbook,
+including how to enqueue test requests with the `producer` module and how to
+measure `C` and `R`, lives in
 [`async-batch-autoscaling/README.md`](async-batch-autoscaling/README.md).
 
 **M1 validation results (2026-09-21).** All four acceptance criteria passed:
@@ -644,6 +668,12 @@ image pull, model load, and torch.compile (→20:53:54 Ready) + ≈18s gate
 reopen and first inference — one sample; collect ≥3 across windows for a p90
 before calibrating M3. The negative test (deadline shorter than the sleep)
 produced an explicit `DEADLINE_EXCEEDED` result, not a silent drop.
+
+**M2 validation results (2026-10-13, `ap-135-vllm` on GKE Autopilot Spot with `llm-d-async` v0.11.0, `optimized-baseline` `llm-d-router`, and `llm-d-inference-sim` v0.9.0).** All four acceptance criteria passed with `activationThreshold: "500"` and `threshold: "2000"`:
+1. *Batch accumulation at 0 replicas (`B = 200 ≤ 500`)*: Enqueued 200 requests at `0` replicas; all four holding layers accounted for the work (`broker_backlog = 189`, `queue_depth = 2`, `gate_waiting_requests = 8`, `inflight_requests = 0`), `ScaledObject/vllm-backlog` remained `READY=True, ACTIVE=False`, `Deployment/vllm` stayed at `0/0`, and 0 requests were dispatched or lost.
+2. *Wake from zero (`0 → 1` at `B = 600 > 500`)*: Enqueued 400 additional requests (`B = 600 > 500`); KEDA activated `ScaledObject/vllm-backlog` (`ACTIVE=True`) and woke `Deployment/vllm` from `0 → 1`.
+3. *Proportional scale-out (`0 → 1 → 2` at `B = 3000 > 2000`)*: Enqueued 3,000 requests (1,500 across each of two queues/pools); `ScaledObject/vllm-backlog` woke `Deployment/vllm` `0 → 1` and `keda-hpa-vllm-backlog` scaled `1 → 2` (`TARGETS: 1499/2k (avg), REPLICAS: 2`, `ceil(2998 / 2000) = 2`) on Autopilot Spot.
+4. *Full drain and scale-to-zero (`2 → 1 → 0`)*: All 3,000 requests drained through `llm-d-router-epp` (`optimized-baseline`) with HTTP 200 (`1500` in `results-a-list`, `1500` in `results-b-list`, `0` errors, `0` `DEADLINE_EXCEEDED`). As pending work dropped below `2000`, HPA scaled `2 → 1`; once all 3,000 requests completed and `cooldownPeriod` elapsed at `0/2k (avg)`, KEDA deactivated `vllm-backlog` (`ACTIVE=False`) and scaled `Deployment/vllm` to `0/0`.
 
 Graduation path: once validated, each milestone's blueprint is added as a
 scenario under `benchmark/config/scenarios/staging/async-batch/` for

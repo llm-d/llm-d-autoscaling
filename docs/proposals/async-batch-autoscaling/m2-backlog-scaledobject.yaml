@@ -1,0 +1,71 @@
+# M2 — Backlog-driven 0<->N scaling.
+#
+# Replaces the M1 schedule with the work itself:
+#   - Accumulates batch work at 0 replicas until total pending work exceeds
+#     activationThreshold (500 requests), then wakes the pool 0 -> 1.
+#   - Scales out proportionally as pending work grows:
+#       desiredReplicas = ceil((backlog + queue_depth + gate_waiting + inflight) / threshold)
+#     With threshold: "2000", >500 requests runs 1 replica and >2000 scales to 2.
+#   - Scales back to 0 once all four holding layers drain and cooldownPeriod elapses.
+#
+# Requires llm-d-async >= v0.11.0 for llm_d_async_async_gate_waiting_requests
+# (llm-d-async#464 / #476), so requests parked at a closed dispatch gate are
+# counted alongside broker_backlog, queue_depth, and inflight_requests.
+#
+# Prerequisite: hold-back gate configured on llm-d-async
+# (see worker-pools-readiness-gate.json).
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vllm-backlog
+  namespace: llm-d-async
+spec:
+  scaleTargetRef:
+    name: vllm
+  minReplicaCount: 0
+  maxReplicaCount: 2
+  pollingInterval: 15
+  cooldownPeriod: 15
+  fallback:
+    failureThreshold: 3
+    replicas: 1
+    behavior: currentReplicasIfHigher
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+        scaleDown:
+          stabilizationWindowSeconds: 15
+          policies:
+          - type: Pods
+            value: 1
+            periodSeconds: 120
+  triggers:
+  - type: prometheus
+    metricType: AverageValue
+    metadata:
+      serverAddress: http://llmd-kube-prometheus-stack-prometheus.llm-d-monitoring.svc.cluster.local:9090
+      threshold: "2000"          # X = T_target * R: pending requests one replica owns
+      activationThreshold: "500" # batch accumulation floor before waking 0 -> 1
+      query: >-
+        (
+          sum(llm_d_async_async_broker_backlog{namespace="llm-d-async"}
+              and (llm_d_async_async_broker_backlog_source_available == 1))
+          or vector(0)
+        )
+        +
+        (
+          sum(llm_d_async_async_queue_depth{namespace="llm-d-async"})
+          or vector(0)
+        )
+        +
+        (
+          sum(llm_d_async_async_gate_waiting_requests{namespace="llm-d-async"})
+          or vector(0)
+        )
+        +
+        (
+          sum(llm_d_async_async_inflight_requests{namespace="llm-d-async"})
+          or vector(0)
+        )
