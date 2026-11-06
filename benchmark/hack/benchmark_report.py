@@ -367,9 +367,8 @@ def _query_range(grafana_url, ds_uid, user, password, expr, namespace, start_s, 
         password=password,
         params={"query": expr, "start": start_s, "end": stop_s, "step": step},
     )
-    if status != 200 or result.get("status") != "success":
-        print(f"WARNING: query_range failed for {expr!r}: {result}", file=sys.stderr)
-        return []
+    if status != 200 or not isinstance(result, dict) or result.get("status") != "success":
+        raise RuntimeError(f"query_range failed for {expr!r} (HTTP {status}): {result}")
     return result["data"]["result"]
 
 
