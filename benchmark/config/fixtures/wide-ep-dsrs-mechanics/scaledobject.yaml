@@ -1,0 +1,25 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: wide-ep-dsrs-decode
+  labels:
+    llm-d.ai/test: "1525-dsrs-mechanics"
+    llm-d.ai/fixture: wide-ep-dsrs-mechanics
+spec:
+  scaleTargetRef:
+    apiVersion: disaggregatedset.x-k8s.io/v1
+    kind: DisaggregatedSetRoleScaler
+    name: wide-ep-dsrs-decode
+  minReplicaCount: 1
+  maxReplicaCount: 2
+  pollingInterval: 5
+  cooldownPeriod: 30
+  triggers:
+    - type: prometheus
+      name: dsrs-mechanics-marker
+      metricType: AverageValue
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc.cluster.local:9090
+        query: max(kube_configmap_info{namespace="llmd-1525-dsrs",configmap="wide-ep-dsrs-trigger"}) or vector(0)
+        threshold: "0.5"
+        activationThreshold: "0"
