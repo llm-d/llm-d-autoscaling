@@ -1672,15 +1672,25 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             return
 
         rel = body.get("dir") or ""
-        root = Path(self.workspace).resolve()
-        target = (root / rel).resolve()
-        if root not in target.parents or not (target / "run_metadata.yaml").is_file():
+        if not rel or '..' in rel.split('/'):
+            self._send_json(400, {"error": f"Unknown experiment dir: {rel!r}"})
+            return
+        rel_match = re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._/-]*', rel)
+        if not rel_match:
+            self._send_json(400, {"error": f"Unknown experiment dir: {rel!r}"})
+            return
+        root = os.path.realpath(self.workspace)
+        target = os.path.realpath(os.path.join(root, rel_match.group(0)))
+        if not target.startswith(root + os.sep):
+            self._send_json(400, {"error": f"Unknown experiment dir: {rel!r}"})
+            return
+        if not os.path.isfile(os.path.join(target, "run_metadata.yaml")):
             self._send_json(400, {"error": f"Unknown experiment dir: {rel!r}"})
             return
 
         try:
             out = _capture_snapshot(
-                str(target), self.grafana_url, self.grafana_user, self.grafana_password, self.dashboard_uid
+                target, self.grafana_url, self.grafana_user, self.grafana_password, self.dashboard_uid
             )
         except (ConnectionError, RuntimeError, ValueError) as e:
             self._send_json(502, {
