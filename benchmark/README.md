@@ -230,10 +230,33 @@ be unchanged.
 | `staging/pd-disaggregation/queue-aggressive` | experiment | not yet run |
 | `staging/pd-disaggregation/kv-early` | experiment | not yet run |
 | `staging/lws-pd-disaggregation` | WIP / test bed | dry-run render only |
+| `staging/async-batch/baseline` | experiment (Always-On control) | validated (Kind + GKE H100) |
+| `staging/async-batch/cron-window` | experiment (M1 scheduled cron `0↔2`) | validated (Kind + GKE H100) |
+| `staging/async-batch/backlog` | experiment (M2 4-layer backlog `0↔2`) | validated (Kind + GKE H100) |
 
-Dry-run composition is confirmed for the three backend overlays. A live
-end-to-end run on a cluster (standup → workload → teardown) has not yet been
-exercised for these specs.
+Dry-run composition is confirmed for the three backend overlays.
+
+### Async/Batch Autoscaling Goodput Suite (`staging/async-batch/`)
+
+The `staging/async-batch/` suite evaluates **Allocated GPU-Hour Goodput**
+($\text{Goodput}_{\text{req}} = N_{\text{good}} / H_{\text{alloc}}$ subject to
+deadline attainment $A \ge 0.99$, where $H_{\text{alloc}} = \frac{1}{3600}\int G_{\text{alloc}}(t)\,dt$
+integrates scheduled GPU pods across cold-start, active serving, and cooldown/termination):
+
+```bash
+# Dry-run render M2 backlog-driven 0<->2 scaling + async-batch harness:
+llmdbenchmark standup \
+  --spec benchmark/config/specification/staging/async-batch/backlog.yaml.j2 \
+  --cluster-config benchmark/config/cluster-configs/k8s/inference-sim.yaml \
+  --workspace benchmark/results \
+  -p bench --dry-run
+
+llmdbenchmark run \
+  --spec benchmark/config/specification/staging/async-batch/backlog.yaml.j2 \
+  --cluster-config benchmark/config/cluster-configs/k8s/inference-sim.yaml \
+  --workspace benchmark/results \
+  -p bench -l async-batch -w backlog_scaleout.yaml --dry-run
+```
 
 ## Observability
 

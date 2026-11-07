@@ -1,0 +1,200 @@
+# ASYNC-BATCH — KEDA experiment: BASELINE (ALWAYS-ON CONTROL, BACKEND-AGNOSTIC)
+# Control arm for async/batch autoscaling Goodput evaluation:
+#   - Fixed Always-On capacity (decode.replicas: 2, keda.scaledObjects: [])
+#   - Deploys llm-d-async + in-namespace Redis SortedSet queue
+#   - Fail-closed prometheus-query readiness gate on asyncProcessor.queues[0] so
+#     requests safely park at gate_waiting_requests if 0 backends are serving
+#
+# Compare sibling scale-to-zero strategies against this control on Allocated
+# GPU-Hour Goodput (good_requests / H_alloc subject to >= 99% deadline attainment):
+#   - cron-window.yaml        (Milestone 1: scheduled cron window 0<->2)
+#   - backlog.yaml            (Milestone 2: 4-layer llm-d-async backlog 0<->2)
+#
+# Select a backend at run time with:
+#   --cluster-config benchmark/config/cluster-configs/{ocp/vllm,ocp/model-sim-qwen3-32b,k8s/inference-sim}.yaml
+
+scenario:
+  - name: "async-batch"
+
+    kustomize:
+      enabled: false
+      guideName: "async-batch"
+      repoPath: ""
+      repoRef: "main"
+      gaieVersion: ""
+      acceleratorBackend: "gpu/vllm"
+      monitoring: false
+      overlayPath: ""
+      extraHelmValues: []
+      extraHelmSets: {}
+      guideVariableOverrides: {}
+      patches: []
+
+    model:
+      name: Qwen/Qwen3-32B
+      shortName: qwen3-32b
+      path: models/Qwen/Qwen3-32B
+      huggingfaceId: Qwen/Qwen3-32B
+      maxModelLen: 16384
+      size: 2Gi
+
+    modelservice:
+      enabled: true
+      uriProtocol: hf
+
+      gateway:
+        className: epponly
+
+      routing:
+        connector: nixlv2
+
+      router:
+        epp:
+          replicas: 1
+          resources:
+            requests:
+              cpu: "100m"
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+        proxy:
+          resources:
+            requests:
+              cpu: "50m"
+              memory: 128Mi
+            limits:
+              cpu: "500m"
+              memory: 512Mi
+        monitoring:
+          prometheus:
+            enabled: true
+            auth:
+              enabled: false
+
+      httpRoute:
+        requestTimeout: "300s"
+        backendRequestTimeout: "0s"
+
+    decode:
+      enabled: true
+      replicas: 2
+      accelerator:
+        count: 1
+      parallelism:
+        tensor: 1
+        data: 1
+        dataLocal: 1
+        workers: 1
+      extraContainerConfig:
+        ports:
+          - containerPort: 8200
+            name: metrics
+            protocol: TCP
+      monitoring:
+        podmonitor:
+          enabled: true
+          portName: metrics
+          path: /metrics
+          interval: 15s
+
+    prefill:
+      enabled: false
+      replicas: 0
+
+    standalone:
+      enabled: false
+
+    # =========================================================================
+    # ASYNC PROCESSOR (llm-d-async + Redis SortedSet queue)
+    # =========================================================================
+    asyncProcessor:
+      enabled: true
+      concurrency: 64
+      gateWaitTimeout: "10m"
+      drainTimeout: "2m"
+      prometheusCacheTTL: "5s"
+      podMonitor:
+        enabled: true
+        interval: "15s"
+      workerPools:
+        - id: "default"
+          workers: 32
+      transport: "redis-sortedset"
+      resultQueueName: "result-list"
+      pollIntervalMs: 1000
+      batchSize: 10
+      queues:
+        - queue_name: "request-sortedset"
+          worker_pool_id: "default"
+          request_path_url: "/v1/completions"
+          gate_type: "prometheus-query"
+          gate_params:
+            query: 'clamp_max(sum(llm_d_epp_ready_endpoints{namespace="${namespace.name}"}) or vector(0), 1)'
+            fallback: "0.0"
+
+    # =========================================================================
+    # SCALING STRATEGY — Always-On baseline control (no KEDA ScaledObject)
+    # =========================================================================
+    keda:
+      enabled: false
+      namespace: ""
+      prometheus:
+        baseUrl: http://prometheus-operated.monitoring.svc.cluster.local
+        port: 9090
+      scaledObjects: []
+
+    monitoring:
+      metricsScrapeEnabled: true
+      scrapeInterval: "10s"
+      timeSeriesMetrics:
+        - vllm:kv_cache_usage_perc
+        - vllm:num_requests_running
+        - vllm:num_requests_waiting
+        - DCGM_FI_DEV_GPU_UTIL
+        - DCGM_FI_DEV_POWER_USAGE
+        - llm_d_async_async_broker_backlog
+        - llm_d_async_async_broker_backlog_source_available
+        - llm_d_async_async_queue_depth
+        - llm_d_async_async_gate_waiting_requests
+        - llm_d_async_async_inflight_requests
+        - llm_d_async_async_exceeded_deadline_requests_total
+        - llm_d_async_async_successful_requests_total
+
+    vllmCommon:
+      shmMemory: 500Mi
+      volumes:
+        - name: dshm
+          type: emptyDir
+          emptyDir:
+            medium: Memory
+            sizeLimit: 500Mi
+      volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+
+    storage:
+      workloadPvc:
+        accessModes:
+          - ReadWriteMany
+        storageClassName: auto
+      modelPvc:
+        size: 2Gi
+        accessModes:
+          - ReadWriteMany
+        storageClassName: auto
+
+    timeouts:
+      controlWait: 300
+      harnessWait: 900000
+
+    workDir: "~/data/async-batch"
+
+    harness:
+      name: async-batch
+      experimentProfile: backlog_scaleout.yaml
+      virtualGpusPerPod: 1
+      pvcSize: 3Gi
+      resources:
+        cpu: "1"
+        memory: 2Gi
