@@ -76,6 +76,8 @@ metrics, so the scenario's scaling strategy applies unchanged across backends.
 To try alternative KEDA scaling strategies for a guide, add scenarios under a
 per-guide directory in `staging/`. The topology stays fixed; only the `keda:`
 block varies between siblings, so results isolate the scaling strategy.
+Before running a variant, assess its triggers with the
+[evaluation protocol](protocol/README.md).
 
 ```
 scenarios/staging/<guide>/<strategy>.yaml
