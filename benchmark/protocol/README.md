@@ -49,7 +49,7 @@ must have all of the following. Symbols: `λ` load, `R` replicas, `s` the signal
 |---|---|---|---|
 | P1 | **Proportional to load** | elasticity `ε` of `s` with respect to `λ`, over `[0.2, 1.0]·μ_SLO` | `ε ≈ 1`: double the load, double the signal. No dead band (`ε ≈ 0`) and no explosion (`ε ≫ 1`) |
 | P2 | **Coupled to actuation** | elasticity `η` of the per-pod signal with respect to `R`, at fixed `λ` | `η = −1`: adding a pod spreads the same total over more pods. The total `U` does not change with `R` |
-| P3 | **Target means a fixed busyness** | mix sensitivity `V = max_M s*(M) / min_M s*(M)`, where `s*(M)` is the signal at `λ = μ_SLO(M)` | `V ≈ 1`: one threshold is the same fraction of capacity for every mix, and it leaves spare room for bursts and cold starts |
+| P3 | **Target means a fixed busyness** | mix sensitivity `V`: for each traffic mix `M`, read the signal when one replica is exactly at capacity for that mix; `V` is the largest reading divided by the smallest | `V ≈ 1`: one threshold is the same fraction of capacity for every mix, and it leaves spare room for bursts and cold starts |
 | P4 | **Metric type matches aggregation** | extensive (`sum`, grows with `R` at fixed per-pod load) or intensive (`max`, `avg`, ratio, quantile) | extensive → `AverageValue`; intensive → `Value`; an absolute replica count from `scalingModifiers` → `AverageValue`, target `1` |
 | P5 | **Unbounded across the needed range** | saturation point `λ_sat`: the lowest load at which `ε` drops below 0.1 (the signal stops responding) | `λ_sat > μ_SLO`, or else the cap is the binding resource and the trigger is a guard, not a driver |
 | P6 | **Defined at zero replicas** | value when `R = 0`, `λ > 0` | informative (`s > 0`), if `minReplicaCount` is 0 |
