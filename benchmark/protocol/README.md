@@ -12,17 +12,6 @@ list of questions to settle.
 Later steps (calibration, benchmark runs, efficiency against an oracle) will be
 added here.
 
-The properties below come from the
-[llm-d-autoscaling-research](https://github.com/llm-d-extensions/llm-d-autoscaling-research)
-repository. The main sources are:
-
-- `explainers/autoscaler-proportional-signals/README.md`: why the signal must be
-  proportional to load, worked through with numbers;
-- `findings/demand-supply-model.md` §6: formal definitions of each property;
-- `findings/signal-catalog.md` §1.5–1.6 and §2.1: per-signal scores, traps, and
-  the KEDA/HPA mapping rules;
-- `plugins/autoscaling/skills/scaling-signals/`: the same review as a checklist.
-
 ## Step 1: Mathematical assessment
 
 Judge the configuration from its text alone: the PromQL queries, `metricType`,
@@ -67,7 +56,7 @@ must have all of the following. Symbols: `λ` load, `R` replicas, `s` the signal
 | P7 | **Fails visibly** | value when the source is down (scrape failure, EPP restart, wrong label) | the scaler errors and `fallback` applies; it does not read 0 |
 | P8 | **Bounded lag and noise** | lag ≈ scrape interval + ½ `rate` window + `pollingInterval`; noise = sample-to-sample swing at steady load against `T` | lag well below cold start; noise well below the 10 % tolerance |
 
-P1–P3 are the explainer's three tests. A queue or prefill backlog fails all
+P1–P3 are the core of the assessment. A queue or prefill backlog fails all
 three: by Little's law, per pod it equals utilization × time to first token, and
 time to first token rises without limit near saturation.
 
@@ -120,9 +109,17 @@ Work through these for each trigger, citing the line of the scenario file.
    work per request is noisy: estimate one request's step against `T` (for
    example 8,192 tokens ÷ 35,594 tokens/s ≈ 0.23 s against `T = 1.5 s`, 15 %).
    Noise restarts the scale-down stabilization window.
-10. **Known traps.** Check `plugins/autoscaling/skills/scaling-signals/references/traps.md`
-    in the research repository (frozen EPP gauges, negative `inflight_tokens`
-    residue after scale-in, catch-all gateway routes, and others).
+10. **Known traps.**
+    - vLLM exports no arrival counter: a vLLM-side "demand" query reads
+      admitted or completed work.
+    - `llm_d_epp_average_*` gauges freeze at their last value when no endpoint
+      has fresh metrics, so a trigger on them never scales in.
+    - `llm_d_epp_inflight_tokens` can keep a negative residue after a scale-in;
+      clamp each series at 0 before summing.
+    - A catch-all gateway route counts every proxied path, `/metrics` scrapes
+      included, as demand.
+    - `vllm:num_requests_waiting` with EPP flow control on is a bounded
+      sawtooth, not the true backlog.
 
 ### 1.5 Checks on the combination
 
@@ -199,7 +196,6 @@ and set the KV guard to `metricType: Value` with a threshold below 0.909 for
 long-output traffic. **Needs measurement:** per-replica capacity of each role for
 the benchmark's mix.
 
-The same steps on `token-aware.yaml` reproduce the explainer's analysis: its
-prefill trigger (`inflight_tokens` ÷ peak prefill throughput, `AverageValue`
-1.5 s) is a backlog, so it fails P1–P3, and its `or vector(0)` fails P7. The
-explainer predicts, and a GPU run confirmed, oscillation at constant load.
+The same steps on `token-aware.yaml`: its prefill trigger (`inflight_tokens` ÷
+peak prefill throughput, `AverageValue` 1.5 s) is a backlog, so it fails P1–P3,
+and its `or vector(0)` fails P7. Predicted: oscillation even at constant load.
