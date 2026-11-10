@@ -260,7 +260,13 @@ Each role must pass these properties:
 | Capped saturation | KV-cache usage, slot use, pool saturation | only below the cap | **guard** for the resource it measures |
 | Latency outcome | `histogram_quantile(...)` of TTFT, ITL | fail: lags, flat until steep | **scale-in veto** |
 
-To place a gauge in this table, find when a request stops being counted (P9).
+**Placing a gauge.** A gauge of requests or tokens adds each request at one
+event and removes it at a later one, so by Little's law it reads arrival rate ×
+time counted. The removal event decides the row. Removed at admission or at the
+first token, the time is mostly queue wait: a backlog. Removed at the last
+token, the time is mostly decode: requests in progress. The metric's name
+rarely says which; read its source (P9). For example,
+`llm_d_epp_inflight_tokens` stops at the first token, so it is a backlog.
 
 ## 1.4 Procedure per trigger
 
