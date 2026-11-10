@@ -73,6 +73,113 @@ P1–P3 are the core of the assessment. A queue or prefill backlog fails all
 three: by Little's law, per pod it equals utilization × time to first token, and
 time to first token rises without limit near saturation.
 
+The notes below explain each property with an example. The examples use a
+prefill pool whose replica reads 15,928 prompt tokens per second, serving
+8,192-token prompts.
+
+**P1, proportional to load.** `desired = ceil(U / T)` is a pod count only if
+`U` counts pods' worth of work. Compare two prefill signals as one pod's
+utilization rises from 50 % to 95 %, a factor of 1.9:
+
+| Signal | At 50 % | At 95 % | Factor | `ε` |
+|---|---:|---:|---:|---:|
+| Prompt tokens dispatched per second ÷ 15,928 | 0.50 | 0.95 | 1.9 | 1.0 |
+| In-flight prompt tokens ÷ 15,928 (a backlog) | 0.386 | 5.130 | 13.3 | 4.0 |
+
+The backlog equals utilization × time to first token, and time to first token
+grows as the queue builds. With a 1.5 s target it reads 26 % of target at half
+load (dead band) and 342 % at 95 % (explosion).
+
+**P2, coupled to actuation.** The HPA predicts the effect of its own action by
+assuming the total stays put when it adds pods. Take 40,000 prompt tokens per
+second, 2.511 pods' worth, and go from 3 pods to 4:
+
+| Signal | Per pod at 3 | Per pod at 4 | Total at 3 | Total at 4 | Desired at 4 |
+|---|---:|---:|---:|---:|---:|
+| Dispatched rate ÷ 15,928, target 0.7 | 0.837 | 0.628 | 2.511 | 2.511 | 4 |
+| Backlog, target 1.5 s | 1.537 | 0.595 | 4.610 | 2.381 | 2 |
+
+The rate's per-pod value falls by 3/4 (`η = −1`), so the ask stays at 4. The
+backlog's falls to 39 % (`η = −3.3`) because the queue drains too, so the ask
+drops to 2 pods, which cannot carry 2.511 pods' worth. The pool shrinks,
+congests, and scales up again: oscillation at constant load.
+
+**P3, a target that means a fixed busyness.** A threshold is only right if it
+names the same fraction of capacity for every traffic mix the pool sees. Take a
+request-rate trigger on a replica that serves 20 req/s with short answers and
+4 req/s with long ones, so `V = 20 / 4 = 5`. A threshold of 14 req/s per pod is
+70 % of capacity for short answers and 350 % for long ones: when the mix turns
+long, the pool runs at 3.5× overload while the trigger reads on target.
+Weighting by tokens narrows `V`; dividing by capacity measured for the current
+mix removes it. The target must also leave room: 70 % leaves
+`1 / 0.7 − 1 = 43 %` spare to absorb a burst during a cold start.
+
+**P4, metric type matches aggregation.** The two types do different arithmetic,
+and each is right for one kind of query. Ask: if the pods double and each
+carries the same load, does the query's value double?
+
+- Yes, it is a total (extensive): use `AverageValue`. `sum(rate(requests[1m]))`
+  = 20 req/s with target 5 gives `ceil(20 / 5) = 4`, whatever the pod count.
+- No, it is a per-pod level (intensive): use `Value`. 4 pods at
+  `avg(kv_cache_usage)` = 0.9 with target 0.7 give `ceil(4 × 0.9 / 0.7) = 6`.
+
+The mismatches:
+
+- A level under `AverageValue` ignores the pod count. `max(kv_cache_usage)` =
+  0.9, target 0.7, 40 pods: `ceil(0.9 / 0.7) = 2`. It can never ask for more
+  than `ceil(1 / 0.7) = 2`, and it scales a busy pool *in* toward 2.
+- A total under `Value` multiplies by the pod count twice.
+  `sum(rate(requests[1m]))` = 30 req/s, target 10, 2 pods:
+  `ceil(2 × 30 / 10) = 6`, then 18, then 54, until `maxReplicaCount`. The answer
+  was 3.
+- A `scalingModifiers` formula that computes the replica count itself uses
+  `AverageValue` with target `1`, so the HPA passes `ceil(formula)` through.
+
+A correct type does not make a signal proportional:
+`sum(vllm:num_requests_waiting)` under `AverageValue` passes P4 and still fails
+P1–P3.
+
+**P5, unbounded across the needed range.** A signal with a ceiling cannot say
+how much capacity is missing once it hits it.
+
+- KV-cache usage stops at 1.0. With threshold 0.95, one full pod gives
+  `1.0 / 0.95 = 1.05`, inside the 10 % tolerance: it never scales up. The
+  threshold must be below `1 / 1.1 = 0.909`.
+- vLLM's `running` stops at `max_num_seqs`. With 256 slots and
+  `sum(vllm:num_requests_running)` at target 200 per pod, a saturated pool asks
+  for at most 1.28× its size per step: 2 → 3 → 4 → 6 → 8 → 11 pods takes five
+  cold starts, about 15 minutes at 3 minutes each.
+
+Such signals are guards for the resource they measure, not drivers.
+
+**P6, defined at zero replicas.** A pool that scales to zero needs a signal
+that reads above 0 when requests arrive and no pod runs.
+`sum(rate(vllm:request_success_total[1m]))` comes from the vLLM pods, so it
+disappears with the last pod; `ignoreNullValues: true` (the default) turns the
+missing series into 0, and the pool never wakes while requests wait at the
+gateway. A counter at the gateway or router, such as
+`envoy_cluster_upstream_rq_total`, exists with no pods.
+
+**P7, fails visibly.** An outage must not look like zero load. A driver written
+`sum(rate(...)) or vector(0)` reads 0 while the EPP restarts or a label changes;
+the HPA holds the pool for the 300 s scale-down window, then removes pods while
+traffic continues. `fallback` never fires, because the scaler did not fail.
+Without `or vector(0)` and with `ignoreNullValues: false`, an empty result is a
+scaler error, and after `fallback.failureThreshold` errors KEDA sets
+`fallback.replicas`.
+
+**P8, bounded lag and noise.**
+
+- Lag: with a 30 s scrape, a `rate(...[2m])` window and `pollingInterval: 30`,
+  the HPA sees a load step about `30 + 60 + 30 = 120 s` late. Add a 3-minute
+  cold start, and the pool runs short for 5 minutes after every step.
+- Noise: `inflight_tokens` jumps by a whole prompt each time a request enters
+  or leaves. One 8,192-token prompt moves the signal by
+  `8,192 / 15,928 = 0.51 s`, 34 % of a 1.5 s target and more than three times
+  the 10 % tolerance. One high sample restarts the scale-down window, so
+  scale-in stalls. A `rate()` over a window averages many requests and is
+  smoother, at the cost of lag.
+
 ### 1.3 Classify each trigger
 
 The kind of signal predicts which properties it can have, and therefore which
@@ -119,9 +226,8 @@ Work through these for each trigger, citing the line of the scenario file.
    outage into a reading of 0. The HPA then scales toward `minReplicaCount` and
    `fallback` never fires. Acceptable on guards and alarms, not on the driver.
 9. **Lag and noise (P8).** An instant gauge that moves by a whole request's
-   work per request is noisy: estimate one request's step against `T` (for
-   example 8,192 tokens ÷ 35,594 tokens/s ≈ 0.23 s against `T = 1.5 s`, 15 %).
-   Noise restarts the scale-down stabilization window.
+   work per request is noisy: estimate one request's step against `T` (see the
+   P8 note). Noise restarts the scale-down stabilization window.
 10. **Known traps.**
     - vLLM exports no arrival counter: a vLLM-side "demand" query reads
       admitted or completed work.
