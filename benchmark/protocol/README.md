@@ -47,14 +47,27 @@ must have all of the following. Symbols: `λ` load, `R` replicas, `s` the signal
 
 | # | Property | Definition | Passes when |
 |---|---|---|---|
-| P1 | **Proportional to load** | elasticity `ε = d ln s / d ln λ` over `[0.2, 1.0]·μ_SLO` | `ε ≈ 1`: double the load, double the signal. No dead band (`ε ≈ 0`) and no explosion (`ε ≫ 1`) |
-| P2 | **Coupled to actuation** | `η = d ln s_per_pod / d ln R` at fixed `λ` | `η = −1`: adding a pod spreads the same total over more pods. The total `U` does not change with `R` |
+| P1 | **Proportional to load** | elasticity `ε` of `s` with respect to `λ`, over `[0.2, 1.0]·μ_SLO` | `ε ≈ 1`: double the load, double the signal. No dead band (`ε ≈ 0`) and no explosion (`ε ≫ 1`) |
+| P2 | **Coupled to actuation** | elasticity `η` of the per-pod signal with respect to `R`, at fixed `λ` | `η = −1`: adding a pod spreads the same total over more pods. The total `U` does not change with `R` |
 | P3 | **Target means a fixed busyness** | mix sensitivity `V = max_M s*(M) / min_M s*(M)`, where `s*(M)` is the signal at `λ = μ_SLO(M)` | `V ≈ 1`: one threshold is the same fraction of capacity for every mix, and it leaves spare room for bursts and cold starts |
 | P4 | **Metric type matches aggregation** | extensive (`sum`, grows with `R` at fixed per-pod load) or intensive (`max`, `avg`, ratio, quantile) | extensive → `AverageValue`; intensive → `Value`; an absolute replica count from `scalingModifiers` → `AverageValue`, target `1` |
-| P5 | **Unbounded across the needed range** | saturation point `λ_sat = inf{λ : ε < 0.1}` | `λ_sat > μ_SLO`, or else the cap is the binding resource and the trigger is a guard, not a driver |
+| P5 | **Unbounded across the needed range** | saturation point `λ_sat`: the lowest load at which `ε` drops below 0.1 (the signal stops responding) | `λ_sat > μ_SLO`, or else the cap is the binding resource and the trigger is a guard, not a driver |
 | P6 | **Defined at zero replicas** | value when `R = 0`, `λ > 0` | informative (`s > 0`), if `minReplicaCount` is 0 |
 | P7 | **Fails visibly** | value when the source is down (scrape failure, EPP restart, wrong label) | the scaler errors and `fallback` applies; it does not read 0 |
 | P8 | **Bounded lag and noise** | lag ≈ scrape interval + ½ `rate` window + `pollingInterval`; noise = sample-to-sample swing at steady load against `T` | lag well below cold start; noise well below the 10 % tolerance |
+
+**Elasticity.** The elasticity of `y` with respect to `x` is the percentage
+change in `y` per 1 % change in `x`. Between two measurements `(x₁, y₁)` and
+`(x₂, y₂)`:
+
+```
+elasticity = ln(y₂ / y₁) / ln(x₂ / x₁)
+```
+
+For example, if the signal reads 0.30 at 3 req/s and 0.71 at 6 req/s,
+`ε = ln(0.71 / 0.30) / ln(6 / 3) = 0.86 / 0.69 = 1.24`: the signal grows 24 %
+faster than load. Elasticity 1 means proportional, 0 means flat, and −1 (for
+`η`) means the per-pod value falls in inverse proportion to the pod count.
 
 P1–P3 are the core of the assessment. A queue or prefill backlog fails all
 three: by Little's law, per pod it equals utilization × time to first token, and
