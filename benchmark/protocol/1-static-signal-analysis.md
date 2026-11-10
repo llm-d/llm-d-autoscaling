@@ -275,71 +275,22 @@ is overloaded. For example, vLLM's `http_requests_total` is incremented at
 completion, so it is completed work, not demand (trap T1 in
 [traps.md](traps.md)).
 
-## 1.4 Procedure per trigger
+## 1.4 Running the analysis
 
-For each trigger in the scenario file:
+The procedure that applies §1.2 and §1.3 is in two places:
 
-1. Read its query, `metricType`, threshold, `activationThreshold`, and the
-   ScaledObject's `minReplicaCount`, `maxReplicaCount`, `pollingInterval`,
-   `fallback` and `behavior`. Note the line numbers.
-2. Find what the metric counts and when, from its source, and record the
-   deployed version of each component it reads (P9).
-3. Classify its kind with the table in §1.3, and from the kind, the role it can
-   play.
-4. Check every property that role must pass (§1.3), using the definitions and
-   notes in §1.2. For each property, record pass or fail, the scenario line it
-   rests on, the load range where it fails, and an evidence tag: *from the
-   config*, *from the metric's source*, or *needs measurement*.
-5. If the trigger's role in the configuration differs from the role its kind
-   allows (for example a backlog used as the driver), record that as a failure.
-
-## 1.5 Checks on the combination
-
-- **Who decides where.** For each trigger, decide under which conditions it
-  sets the replica count: when it wins the maximum, or when the formula's
-  branch or weight gives it control. Sound: one proportional driver, with
-  guards and alarms that stay out of the result in normal operation. Unsound:
-  a guard or alarm that decides in steady state, or a configuration with no
-  proportional trigger at all. The maximum of non-proportional signals is
-  still non-proportional.
-- **Scale-in.** A backlog that collapses after a scale-up can drive the pool
-  below what the driver asks. A trigger that stays high after load drops (a
-  frozen gauge, a long window) blocks scale-in.
-- **`scalingModifiers.formula`.** The formula replaces the maximum, so the
-  HPA sees one metric and the per-trigger thresholds and `metricType` no
-  longer apply. Apply P1–P4 to the formula's result, check its own `target` and
-  `metricType`, and check each operator across the load range:
-  - a `min` lets the smallest trigger win, so a backlog that collapses after a
-    scale-up drags the pool down;
-  - a weighted sum is proportional only if every term is;
-  - a conditional switches between laws, and each branch must pass on the
-    range where it is taken.
-- **Disaggregated pools.** Each pool's trigger must measure that pool's work. On
-  prefill/decode, `inflight_tokens` on the prefill pool counts until the first
-  token, which comes from the decode pool, so it carries the KV transfer and
-  decode delays.
-- **`behavior`.** Slow scale-up policies bound the swing of a non-proportional
-  signal but do not stop it oscillating. An exploding signal pins at
-  `maxReplicaCount`; that is harmless only if the true need is already at the
-  cap.
-
-## 1.6 Verdict
-
-Record, in the variant's header comment or the run report:
-
-1. per trigger: kind, role, each required property with its result, scenario
-   line and evidence tag, and the estimated lag;
-2. the combination: which trigger drives in normal operation, which win when,
-   and whether that is sound;
-3. predicted behavior in one or two sentences;
-4. what needs measurement (per-replica capacity, mix range, cold start) — the
-   questions for the next step;
-5. fixes, each tied to a failed check.
+- [How to analyze one trigger](1-per-trigger-how-to.md): where to find the
+  rendered ScaledObject, the deployed versions and the metric's source, and how
+  to establish each property with an evidence tag.
+- The [`static-signal-analysis` skill](../../.claude/skills/static-signal-analysis/SKILL.md):
+  runs the per-trigger analysis on every trigger of a scenario, checks the
+  combination, and writes the verdict. Invoke it with
+  `/static-signal-analysis <scenario.yaml> [backend overlay]`.
 
 A configuration with no trigger that passes P1–P4 in its intended load range is
 **rejected** at this step; running it measures a known failure.
 
-## 1.7 Worked example: `staging/pd-disaggregation/baseline.yaml`
+## 1.5 Worked example: `staging/pd-disaggregation/baseline.yaml`
 
 Both pools use the same two triggers, `minReplicas: 1`, `maxReplicas: 4`, at
 most one pod added per 180 s and removed per 300 s.
