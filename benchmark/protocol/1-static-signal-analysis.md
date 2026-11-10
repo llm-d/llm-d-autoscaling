@@ -268,6 +268,13 @@ token, the time is mostly decode: requests in progress. The metric's name
 rarely says which; read its source (P9). For example,
 `llm_d_epp_inflight_tokens` stops at the first token, so it is a backlog.
 
+**Placing a counter.** A counter is incremented at one event, so its `rate()`
+reads how often that event happens. Incremented at arrival, before any queue,
+it is offered work; at admission or completion, it equals supply once the pool
+is overloaded. For example, vLLM's `http_requests_total` is incremented at
+completion, so it is completed work, not demand (trap T1 in
+[traps.md](traps.md)).
+
 ## 1.4 Procedure per trigger
 
 For each trigger in the scenario file:
