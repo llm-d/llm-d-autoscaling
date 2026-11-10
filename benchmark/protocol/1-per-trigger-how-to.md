@@ -134,22 +134,258 @@ failure in itself.
 
 ## 5. Check the properties the role requires
 
-§1.3 lists which properties each role must pass. For each one:
+§1.3 lists which properties each role must pass. Check only those, plus any
+other property that obviously fails. Each check below gives the question to
+answer, how to answer it from what steps 1–3 produced, when it passes, and an
+example.
 
-| Property | How to establish it | Usual tag |
+All the examples use one trigger: the prefill trigger of
+`staging/pd-disaggregation/token-aware.yaml`, which plays the driver.
+
+```
+( sum(inflight_tokens, restricted to live prefill endpoints) / 2696 ) or vector(0)
+```
+
+(abridged; the full query is at `token-aware.yaml:307-322`)
+
+`metricType: AverageValue`, `threshold: 1.5`, `minReplicas: 1`,
+`maxReplicas: 10`, `pollingInterval: 15`, scale-up one pod per 180 s
+(`token-aware.yaml:299-331`). Step 3 found that the gauge counts each request's
+uncached prompt tokens from dispatch to first token. The divisor 2696 is the
+scenario's `tokenAware.peakPrefillThroughput`, in prompt tokens per second.
+
+### Putting numbers on a trigger
+
+Several checks need the trigger's value at a given load. When step 3 shows that
+the time counted includes queue wait, estimate that wait with the simplest
+queue that has one, M/D/1, using the scenario's own constants:
+
+```
+service time   S = prompt tokens ÷ capacity           (8,192 ÷ 2,696 = 3.04 s)
+utilization    ρ = load per pod ÷ capacity
+time counted   W = S + ρ × S ÷ (2 × (1 − ρ))          (prefill + queue wait)
+per-pod value  s = ρ × W                               (Little's law, in seconds of work)
+```
+
+The model gets the shape right and the numbers only roughly: real servers batch,
+and prompt lengths vary. Present the numbers as an illustration of the shape,
+and put the real curve under *needs measurement*.
+
+### P1, proportional to load
+
+**Question.** Does the value double when the load doubles, at a fixed traffic
+mix?
+
+**How.**
+
+1. Write the value as Little's law gives it: rate × time counted, for a gauge;
+   just the rate, for a counter under `rate()`.
+2. Decide whether the time counted depends on load. Queue wait does: it is
+   near 0 at low load and grows without limit near capacity. Prefill time and
+   decode time depend on load only mildly.
+3. If it depends on load, compute the value at 20 %, 50 % and 80 % of capacity
+   and the elasticity between each pair (§1.2, P1).
+
+**Passes when** the time counted does not include queue wait, or `ε` stays
+within about 0.8–1.25 over 20–80 % of capacity.
+
+**Example.** The gauge counts until first token, so the time counted includes
+queue wait. With `S = 3.04 s`:
+
+| Utilization | 20 % | 50 % | 80 % |
+|---|---:|---:|---:|
+| `s` (seconds of work per pod) | 0.684 | 2.279 | 7.293 |
+
+`ε = ln(2.279 / 0.684) / ln(2.5) = 1.31` from 20 % to 50 %, and
+`ln(7.293 / 2.279) / ln(1.6) = 2.47` from 50 % to 80 %. **Fail**, from 50 % of
+capacity upward. *From the metric's source*; the real curve *needs
+measurement*.
+
+### P2, coupled to actuation
+
+**Question.** If the HPA adds a pod and the load does not change, does it still
+ask for the same count?
+
+**How.** Fix a load. Compute the query's total `U` and the desired count at
+the pod count `R` and at `R + 1`, with the §1.1 rule for the trigger's
+`metricType`.
+
+**Passes when** `U`, and so the desired count, is the same at `R` and `R + 1`.
+For a per-pod value this is `η = −1` (§1.2, P2).
+
+**Example.** Load of 2.5 pods' worth (6,740 prompt tokens per second):
+
+| Pods `R` | 3 | 4 | 5 | 6 |
+|---|---:|---:|---:|---:|
+| Total `U` | 26.6 | 13.9 | 11.4 | 10.3 |
+| Desired `ceil(U / 1.5)` | 18 | 10 | 8 | 7 |
+
+The ask falls as pods are added, from 18 to 7, while the right answer stays
+`ceil(2.5 / 0.7) = 4`. **Fail**: adding pods drains the queue, which lowers `U`
+(`η = ln(2.279 / 3.482) / ln(5 / 4) = −1.9` from 4 to 5 pods). *From the
+metric's source.*
+
+### P3, a target that means a fixed busyness
+
+**Question.** What fraction of one replica's capacity does the threshold stand
+for, and is it the same for every traffic mix the pool will see?
+
+**How.**
+
+1. Find the utilization at which one pod reads exactly the threshold. For a
+   rate divided by a capacity, that is the threshold itself. Otherwise solve
+   `s(ρ) = threshold` with the model above.
+2. Repeat for the shortest and longest prompts or answers the benchmark sends.
+   For a signal that weights tokens, repeat for the extremes of the mix.
+3. If the query or the threshold divides by a capacity constant, find where the
+   constant came from: the scenario's comments, a calibration script, a
+   finding. A capacity measured on an idle replica, or a rate the pool once
+   served, overstates what a replica sustains at the SLO.
+
+**Passes when** the utilization is the same across the mix and leaves room for
+bursts (70 % leaves 43 %), and the constant is a capacity measured at the SLO
+on the deployed stack. The constant's value always *needs measurement*.
+
+**Example.** `s(ρ) = 1.5` at 37.8 % utilization for 8,192-token prompts and at
+76.1 % for 2,048-token prompts: the same threshold buys twice the busyness on
+short prompts. The constant 2696 is, per the scenario's own comment, "the
+reference P/D stack's calibrated figure"; upstream lists 15,928 for the same
+model on the aggregated path. **Fail** on mix; the constant *needs
+measurement*.
+
+### P4, metric type matches aggregation
+
+**Question.** Does the HPA's rule for this `metricType` match what the query
+returns?
+
+**How.** Find the outermost aggregation of the query. Ignore the
+`or vector(0)` and any division by a constant. Then apply the test: if the pods
+double at the same per-pod load, does the value double?
+
+| Outermost operator | Kind | Needs |
 |---|---|---|
-| P1 proportional | A gauge: by Little's law it reads arrival rate × time counted. If the time counted includes queue wait, `ε > 1` near saturation and `≈ 0` below it. A counter at arrival: `ε = 1` at a fixed mix. | from the metric's source |
-| P2 coupled to actuation | Ask whether the query's total changes when pods are added at fixed load. A rate counted before any queue does not; a backlog does, because adding pods drains it. | from the metric's source |
-| P3 fixed busyness | Write what the threshold means as a fraction of one replica's capacity. If the query divides by a capacity constant, find where the constant came from. Its value is never established statically. | needs measurement |
-| P4 metric type | Read the outermost aggregation of the query: `sum` is extensive, `max`/`avg`/ratio/quantile intensive. Compare with the rendered `metricType`. | from the config |
-| P5 bounds | Name the ceiling, if any: KV-cache usage ≤ 1, `running` ≤ `max_num_seqs` (from the vLLM command in the overlay). Check `threshold < ceiling / 1.1`. For a global queue, estimate growth × cold start ÷ `threshold` against `maxReplicaCount`. | from the config; the growth rate needs measurement |
-| P6 zero replicas | Only if `minReplicaCount` is 0. Find where the series is exported: a vLLM pod's series disappear with it; a gateway's or router's do not. Check `activationThreshold`. | from the metric's source |
-| P7 fails visibly | Look for `or vector(0)` in the query. With this repo's template, `ignoreNullValues` is always true and there is no fallback (step 1), so a driver always reads 0 on an outage. | from the config |
-| P8 lag and noise | Lag: scrape interval of the exporter (`monitoring.scrapeInterval`, default 30 s for vLLM pods; the router's `monitoring.interval`, default 10 s, in llm-d-benchmark's defaults) + half the `rate`/`avg_over_time` window + `pollingInterval`. Noise: for a gauge, one request's step divided by `threshold`. | from the config; the step size may need measurement |
-| P9 measures what it claims | Step 3's answer, plus every trap in [traps.md](traps.md) on a component the query reads, judged against step 2's versions. | from the metric's source |
+| `sum`, `count`, a `rate` of a pool-wide counter | extensive | `AverageValue` |
+| `max`, `min`, `avg`, a ratio of sums, `histogram_quantile` | intensive | `Value` |
 
-For each property record: pass or fail, the rendered line it rests on, the load
-range where it fails, and the tag.
+**Passes when** the rendered `metricType` matches the table.
+
+**Example.** The outermost operator is `sum(...)`, extensive, and the rendered
+type is `AverageValue` (`token-aware.yaml:306`). **Pass.** *From the config.*
+
+### P5, bounded the right way
+
+**Question.** Does the signal stop responding before the load it must measure
+(capped), or keep growing while new pods start (integrating)?
+
+**How.**
+
+- **Capped.** Name the ceiling: KV-cache usage ≤ 1; `running` ≤
+  `--max-num-seqs`, from the vLLM command in the backend overlay (vLLM's
+  default if absent); a saturation ratio ≤ 1. Compute `ceiling / threshold`.
+- **Integrating.** A gauge that counts queued work grows by the excess
+  arrivals every second. Estimate the ask after one cold start at a given
+  overload, `(queued work after the cold start) ÷ threshold`, and compare it
+  with `maxReplicaCount` and the scale-up policy.
+
+**Passes when**, for a capped signal, `ceiling / threshold > 1.1` (the HPA's
+tolerance), and the ceiling is the resource the trigger guards. For an
+integrating signal, when `maxReplicaCount` and `behavior` keep the overshoot at
+a cost the configuration accepts.
+
+**Example.** No ceiling: the gauge integrates. One pod at 1.5× its capacity
+gains 0.5 s of work per second, so after a 180 s cold start the ask is
+`0.5 × 180 / 1.5 = 60` pods. `maxReplicas: 10` and one pod per 180 s cap it.
+**Pass** as bounded, with the overshoot noted. *From the config*; the cold start
+*needs measurement*.
+
+### P6, defined at zero replicas
+
+**Question.** If the pool is at zero and requests arrive, does the trigger read
+above `activationThreshold`?
+
+**How.** Skip if `minReplicaCount` is above 0, and record "n/a, min 1". Else,
+from step 3, find the process that exports the series. A vLLM pod's series
+disappear with the pod; the router's and the gateway's exist with no pods,
+unless step 3 found that the series is deleted when no endpoint exists (trap
+T5).
+
+**Passes when** the series exists at zero replicas and reads above
+`activationThreshold` for the smallest load that should wake the pool.
+
+**Example.** `minReplicas: 1` (`token-aware.yaml:299`). **n/a.**
+
+### P7, fails visibly
+
+**Question.** When the metric's source is down, does the trigger produce an
+error, or a reading that looks like low load?
+
+**How.** Look for `or vector(0)`, `or on() vector(0)` or a default in the
+query. Then check `ignoreNullValues` and `fallback` in the rendered
+ScaledObject; with this repo's template they are always `true` and absent
+(§1). Follow an outage through: the reading, the HPA's response, and what stops
+it.
+
+**Passes when** an outage makes the scaler fail and `fallback.replicas`
+applies. Never with this repo's template, so a driver always fails P7 here;
+record it, and the fix belongs to the template.
+
+**Example.** `) or vector(0)` (`token-aware.yaml:322`). If the EPP restarts,
+the trigger reads 0; after the 300 s scale-down window the pool loses one pod
+per 300 s down to `minReplicas`, while traffic continues. **Fail.** *From the
+config.*
+
+### P8, bounded lag and noise
+
+**Question.** How late does the HPA see a change in load, and does the value
+jump between samples at steady load?
+
+**How.**
+
+- **Lag** = scrape interval of the exporter + half of any `[window]` in the
+  query + `pollingInterval`. The scrape intervals come from llm-d-benchmark's
+  `defaults.yaml`: `monitoring.scrapeInterval` (30 s) for the model servers,
+  `router.monitoring.interval` (10 s) for the EPP. A scenario may override
+  them. `pollingInterval` is KEDA's 30 s if not rendered.
+- **Noise.** For a gauge, compute one request's step: what one request adds
+  when it enters, divided by the threshold. For a `rate()` over a window `w`,
+  the relative noise is about `1 / √(events per second × w)`.
+
+**Passes when** lag is well below the cold start, and one sample's noise is
+well below the 10 % tolerance.
+
+**Example.** Lag `10 + 0 + 15 = 25 s`: instant gauge, EPP scrape 10 s,
+`pollingInterval: 15`. One 8,192-token prompt adds `8,192 / 2,696 = 3.04 s`,
+203 % of the 1.5 s threshold: a single request crosses the tolerance on its own.
+**Pass** on lag, **fail** on noise. *From the config.*
+
+### P9, measures what it claims
+
+**Question.** Does the query read the quantity its role needs, on the deployed
+versions?
+
+**How.** Compare step 3's answer with what the role needs: a driver needs
+offered work, a guard the resource it guards, an alarm a backlog. Then take
+every trap in [traps.md](traps.md) on a component the query reads, and judge
+it against step 2's versions as `traps.md` says.
+
+**Passes when** the quantity matches the role, and every trap in range is
+absent or worked around in the query.
+
+**Example.** The driver needs offered work; the gauge is a prefill backlog.
+**Fail.** EPP `v0.11.0` is in the range of trap T3b. The query's liveness gate
+(`and on (target_pod)` with `per_endpoint_queue_size`, `token-aware.yaml:315`)
+drops the series of deleted endpoints, which is half of T3b's workaround; it
+does not `clamp_min` each series at 0. *From the metric's source.*
+
+### Recording the result
+
+For each property, record a row:
+
+| Property | Result | Evidence | Tag |
+|---|---|---|---|
+| P2 coupled to actuation | fail | at 2.5 pods' worth, `U` = 13.9 at 4 pods and 11.4 at 5; desired 10, then 8; right answer 4 | from the metric's source |
+
+The skill's report template has the full layout.
 
 ## 6. Hand over
 
