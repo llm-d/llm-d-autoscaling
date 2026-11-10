@@ -30,8 +30,19 @@ Value:         desired = ceil(N_ready × U / T)       (N_ready = Running and Rea
 ```
 
 The HPA does nothing while the ratio of current to target lies within 10 %
-(tolerance `τ = 0.1`). With several triggers it takes the **maximum** of their
-desired counts. External metrics get none of the per-pod corrections resource
+(tolerance `τ = 0.1`).
+
+Several triggers are combined in one of two ways:
+
+- **By default, the maximum.** KEDA exposes one external metric per trigger,
+  and the HPA takes the maximum of their desired counts.
+- **With `advanced.scalingModifiers`, a formula.** KEDA evaluates
+  `scalingModifiers.formula` over the triggers' raw values and exposes only the
+  result, as one composite metric with its own `target` and `metricType`. The
+  formula can take a weighted sum, a minimum, or a conditional such as
+  `queue > 0 ? max(rate, queue) : rate`.
+
+External metrics get none of the per-pod corrections resource
 metrics get: pods that are still starting are not set aside. The signal itself
 has to behave.
 
@@ -182,15 +193,15 @@ scaler error, and after `fallback.failureThreshold` errors KEDA sets
 ### 1.3 Classify each trigger
 
 The kind of signal predicts which properties it can have, and therefore which
-role it can play. Because the HPA takes the maximum over triggers, a role is
-defined by when the trigger should win that maximum:
+role it can play. A role says when a trigger should decide the replica count.
+With the default maximum (§1.1), that means when it should win the maximum;
+with a `scalingModifiers` formula, the formula must give it that say.
 
-- **Driver.** Sets the replica count in normal operation: it wins the maximum
-  most of the time, so it alone decides how many pods run at steady load. It
-  must pass P1–P4. Example: dispatched prompt tokens per second ÷ per-replica
-  capacity, target 0.7.
+- **Driver.** Sets the replica count in normal operation, so it alone decides
+  how many pods run at steady load. It must pass P1–P4. Example: dispatched
+  prompt tokens per second ÷ per-replica capacity, target 0.7.
 - **Guard.** Protects one resource the driver does not see. It stays below the
-  driver until that resource runs out, then wins and adds pods. Example:
+  driver until that resource runs out, then takes over and adds pods. Example:
   `avg(vllm:kv_cache_usage_perc)` under `Value`, target 0.85, which fires only
   when long answers fill the KV cache before the driver's rate says the pool is
   busy.
@@ -199,9 +210,12 @@ defined by when the trigger should win that maximum:
   fast scale-up or an alert, never for sizing the pool. Example:
   `sum(llm_d_epp_flow_control_queue_size)`, which is 0 while the pool keeps up.
 - **Scale-in veto.** Stops the pool from shrinking while users are already
-  suffering. It asks for at least the current replica count while a latency
-  quantile is over the SLO, so the maximum holds the pool at its size, and it
-  asks for little otherwise. It must not add pods: latency lags and is flat
+  suffering. Under the default maximum it asks for the current replica count
+  while a latency quantile is over the SLO, which holds the pool at its size,
+  and for little otherwise. In a formula, the same hold needs a trigger that
+  reads the current replica count (for example
+  `kube_deployment_status_replicas`), since the formula sees only trigger
+  values. It must not add pods: latency lags and is flat
   until it is steep. Example: P90 time to first token above its SLO.
 
 | Kind | Looks like | P1–P3 | Role |
@@ -261,16 +275,25 @@ Work through these for each trigger, citing the line of the scenario file.
 
 ### 1.5 Checks on the combination
 
-- **Who wins where.** For each trigger, decide under which conditions it
-  produces the maximum. Sound: one proportional driver, with guards and alarms
-  that stay below it in normal operation. Unsound: a guard or alarm that wins in
-  steady state, or a configuration with no proportional trigger at all. The
-  maximum of non-proportional signals is still non-proportional.
+- **Who decides where.** For each trigger, decide under which conditions it
+  sets the replica count: when it wins the maximum, or when the formula's
+  branch or weight gives it control. Sound: one proportional driver, with
+  guards and alarms that stay out of the result in normal operation. Unsound:
+  a guard or alarm that decides in steady state, or a configuration with no
+  proportional trigger at all. The maximum of non-proportional signals is
+  still non-proportional.
 - **Scale-in.** A backlog that collapses after a scale-up can drive the pool
   below what the driver asks. A trigger that stays high after load drops (a
   frozen gauge, a long window) blocks scale-in.
-- **`scalingModifiers.formula`.** Apply P1–P4 to the formula's result and check
-  each operator across the load range.
+- **`scalingModifiers.formula`.** The formula replaces the maximum, so the
+  HPA sees one metric and the per-trigger thresholds and `metricType` no
+  longer apply. Apply P1–P4 to the formula's result, check its own `target` and
+  `metricType`, and check each operator across the load range:
+  - a `min` lets the smallest trigger win, so a backlog that collapses after a
+    scale-up drags the pool down;
+  - a weighted sum is proportional only if every term is;
+  - a conditional switches between laws, and each branch must pass on the
+    range where it is taken.
 - **Disaggregated pools.** Each pool's trigger must measure that pool's work. On
   prefill/decode, `inflight_tokens` on the prefill pool counts until the first
   token, which comes from the decode pool, so it carries the KV transfer and
