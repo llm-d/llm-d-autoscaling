@@ -1,4 +1,4 @@
-# Step 1: Mathematical assessment
+# Step 1: Static signal analysis
 
 Part of the [evaluation protocol](README.md).
 

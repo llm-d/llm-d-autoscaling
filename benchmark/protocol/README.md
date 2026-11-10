@@ -7,7 +7,7 @@ list of questions to settle.
 
 | Step | What it decides | Needs a cluster? |
 |---|---|---|
-| [1. Mathematical assessment](1-mathematical-assessment.md) | whether each trigger, and their combination, can compute the right replica count at all | no |
+| [1. Static signal analysis](1-static-signal-analysis.md) | whether each trigger, and their combination, can compute the right replica count at all | no |
 
 Later steps (calibration, benchmark runs, efficiency against an oracle) will be
 added here.
