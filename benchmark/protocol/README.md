@@ -9,5 +9,8 @@ list of questions to settle.
 |---|---|---|
 | [1. Static signal analysis](1-static-signal-analysis.md) | whether each trigger, and their combination, can compute the right replica count at all | no |
 
+Step 1 uses the [metric traps](traps.md), a list of version-specific metric
+pitfalls that is maintained separately.
+
 Later steps (calibration, benchmark runs, efficiency against an oracle) will be
 added here.

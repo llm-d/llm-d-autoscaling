@@ -205,19 +205,14 @@ scaler error, and after `fallback.failureThreshold` errors KEDA sets
 **P9, measures what it claims.** A metric's name does not say what it counts;
 its source does. For a gauge, find when a request stops being counted:
 `inflight_tokens` stops at the first token, so it is a backlog, while a running
-count stops at the last token, so it is a count in progress (§1.3). Known cases
-where a query does not measure what its name suggests:
+count stops at the last token, so it is a count in progress (§1.3).
 
-- vLLM exports no arrival counter: a vLLM-side "demand" query reads admitted or
-  completed work.
-- `llm_d_epp_average_*` gauges freeze at their last value when no endpoint has
-  fresh metrics, so a trigger on them never scales in.
-- `llm_d_epp_inflight_tokens` can keep a negative residue after a scale-in;
-  clamp each series at 0 before summing.
-- A catch-all gateway route counts every proxied path, `/metrics` scrapes
-  included, as demand.
-- `vllm:num_requests_waiting` with EPP flow control on is a bounded sawtooth,
-  not the true backlog.
+Then check the trigger against the [metric traps](traps.md): known cases where
+a query does not measure what its name suggests, such as EPP average gauges
+that freeze when the pool empties. Each trap holds only for the component
+versions it was verified on, so first record the deployed version of every
+component the trigger reads; `traps.md` says how to treat a version outside a
+trap's range.
 
 ## 1.3 Classify each trigger
 
@@ -274,7 +269,8 @@ For each trigger in the scenario file:
 1. Read its query, `metricType`, threshold, `activationThreshold`, and the
    ScaledObject's `minReplicaCount`, `maxReplicaCount`, `pollingInterval`,
    `fallback` and `behavior`. Note the line numbers.
-2. Find what the metric counts and when, from its source (P9).
+2. Find what the metric counts and when, from its source, and record the
+   deployed version of each component it reads (P9).
 3. Classify its kind with the table in §1.3, and from the kind, the role it can
    play.
 4. Check every property that role must pass (§1.3), using the definitions and
