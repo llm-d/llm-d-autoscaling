@@ -38,10 +38,12 @@ has to behave.
 by the capacity of one replica for the current traffic mix (prompt length,
 output length, prefix sharing). It is not a token rate or a request rate.
 
-## 1.2 Properties of a driver signal
+## 1.2 Properties of a signal
 
-The trigger that sets the replica count in normal operation (the **driver**)
-must have all of the following. Symbols: `λ` load, `R` replicas, `s` the signal,
+A trigger is judged against the properties below. Which ones it must pass
+depends on its role (§1.3): the driver, which sets the replica count in normal
+operation, must pass all of them; guards, alarms and vetoes must pass a subset.
+Symbols: `λ` load, `R` replicas, `s` the signal,
 `M` the traffic mix, `μ_SLO` the capacity of one replica at the SLO.
 
 | # | Property | Definition | Passes when |
@@ -50,10 +52,11 @@ must have all of the following. Symbols: `λ` load, `R` replicas, `s` the signal
 | P2 | **Coupled to actuation** | elasticity `η` of the per-pod signal with respect to `R`, at fixed `λ` | `η = −1`: adding a pod spreads the same total over more pods. The total `U` does not change with `R` |
 | P3 | **Target means a fixed busyness** | mix sensitivity `V`: for each traffic mix `M`, read the signal when one replica is exactly at capacity for that mix; `V` is the largest reading divided by the smallest | `V ≈ 1`: one threshold is the same fraction of capacity for every mix, and it leaves spare room for bursts and cold starts |
 | P4 | **Metric type matches aggregation** | extensive (`sum`, grows with `R` at fixed per-pod load) or intensive (`max`, `avg`, ratio, quantile) | extensive → `AverageValue`; intensive → `Value`; an absolute replica count from `scalingModifiers` → `AverageValue`, target `1` |
-| P5 | **Unbounded across the needed range** | saturation point `λ_sat`: the lowest load at which `ε` drops below 0.1 (the signal stops responding) | `λ_sat > μ_SLO`, or else the cap is the binding resource and the trigger is a guard, not a driver |
-| P6 | **Defined at zero replicas** | value when `R = 0`, `λ > 0` | informative (`s > 0`), if `minReplicaCount` is 0 |
+| P5 | **Bounded the right way** | *capped*: saturation point `λ_sat`, the lowest load at which `ε` drops below 0.1 (the signal stops responding). *Integrating*: the signal keeps growing while load exceeds supply | capped: `λ_sat > μ_SLO`, or the cap is the binding resource and `T < s_max / 1.1`. Integrating: the overshoot during a cold start is bounded |
+| P6 | **Defined at zero replicas** | value when `R = 0`, `λ > 0` | informative (`s > 0`) and above `activationThreshold`, if `minReplicaCount` is 0 |
 | P7 | **Fails visibly** | value when the source is down (scrape failure, EPP restart, wrong label) | the scaler errors and `fallback` applies; it does not read 0 |
 | P8 | **Bounded lag and noise** | lag ≈ scrape interval + ½ `rate` window + `pollingInterval`; noise = sample-to-sample swing at steady load against `T` | lag well below cold start; noise well below the 10 % tolerance |
+| P9 | **Measures what it claims** | what the metric's source counts, and when: arrival, admission, first token, last token, completion | the query reads the quantity its role needs, and no known trap applies |
 
 P1–P3 are the core of the assessment. A queue or prefill backlog fails all
 three: by Little's law, per pod it equals utilization × time to first token, and
@@ -112,6 +115,12 @@ Weighting by tokens narrows `V`; dividing by capacity measured for the current
 mix removes it. The target must also leave room: 70 % leaves
 `1 / 0.7 − 1 = 43 %` spare to absorb a burst during a cold start.
 
+When the query or threshold divides by a per-replica capacity, the target is
+only as right as that constant. Check where it came from. An idle-replica peak,
+or a rate the pool once served, overstates the capacity a replica sustains at
+the SLO, by 1.2–6× in measurements; the pool then runs that much too small at
+"70 %". The constant's value *needs measurement*.
+
 **P4, metric type matches aggregation.** The two types do different arithmetic,
 and each is right for one kind of query. Ask: if the pods double and each
 carries the same load, does the query's value double?
@@ -137,8 +146,11 @@ A correct type does not make a signal proportional:
 `sum(vllm:num_requests_waiting)` under `AverageValue` passes P4 and still fails
 P1–P3.
 
-**P5, unbounded across the needed range.** A signal with a ceiling cannot say
-how much capacity is missing once it hits it.
+**P5, bounded the right way.** A signal can fail in two opposite ways once
+load exceeds supply.
+
+A *capped* signal has a ceiling, and cannot say how much capacity is missing
+once it hits it.
 
 - KV-cache usage stops at 1.0. With threshold 0.95, one full pod gives
   `1.0 / 0.95 = 1.05`, inside the 10 % tolerance: it never scales up. The
@@ -148,7 +160,17 @@ how much capacity is missing once it hits it.
   for at most 1.28× its size per step: 2 → 3 → 4 → 6 → 8 → 11 pods takes five
   cold starts, about 15 minutes at 3 minutes each.
 
-Such signals are guards for the resource they measure, not drivers.
+Capped signals are guards for the resource they measure, not drivers. A guard
+still needs `T < s_max / 1.1`, or it never fires.
+
+An *integrating* signal has no ceiling: a global queue (router queue, total
+waiting) grows by the excess arrivals every second, including while the pods
+it asked for are still starting. Pending pods do not lower it, so the ask
+overshoots by about growth rate × cold start ÷ `T`. A router queue growing by
+100 requests per second, a 180 s cold start and `T = 20` overshoot by
+`100 × 180 / 20 = 900` replicas; only `maxReplicaCount` and the scale-up policy
+stop it. A per-pod signal summed over Ready pods cannot run away this way,
+because pending pods export nothing.
 
 **P6, defined at zero replicas.** A pool that scales to zero needs a signal
 that reads above 0 when requests arrive and no pod runs.
@@ -156,7 +178,9 @@ that reads above 0 when requests arrive and no pod runs.
 disappears with the last pod; `ignoreNullValues: true` (the default) turns the
 missing series into 0, and the pool never wakes while requests wait at the
 gateway. A counter at the gateway or router, such as
-`envoy_cluster_upstream_rq_total`, exists with no pods.
+`envoy_cluster_upstream_rq_total`, exists with no pods. It must also clear
+`activationThreshold`: KEDA wakes the pool only when the value is above it, so
+a threshold of 5 on a rate of 2 req/s leaves those requests waiting.
 
 **P7, fails visibly.** An outage must not look like zero load. A driver written
 `sum(rate(...)) or vector(0)` reads 0 while the EPP restarts or a label changes;
@@ -177,6 +201,23 @@ scaler error, and after `fallback.failureThreshold` errors KEDA sets
   the 10 % tolerance. One high sample restarts the scale-down window, so
   scale-in stalls. A `rate()` over a window averages many requests and is
   smoother, at the cost of lag.
+
+**P9, measures what it claims.** A metric's name does not say what it counts;
+its source does. For a gauge, find when a request stops being counted:
+`inflight_tokens` stops at the first token, so it is a backlog, while a running
+count stops at the last token, so it is a count in progress (§1.3). Known cases
+where a query does not measure what its name suggests:
+
+- vLLM exports no arrival counter: a vLLM-side "demand" query reads admitted or
+  completed work.
+- `llm_d_epp_average_*` gauges freeze at their last value when no endpoint has
+  fresh metrics, so a trigger on them never scales in.
+- `llm_d_epp_inflight_tokens` can keep a negative residue after a scale-in;
+  clamp each series at 0 before summing.
+- A catch-all gateway route counts every proxied path, `/metrics` scrapes
+  included, as demand.
+- `vllm:num_requests_waiting` with EPP flow control on is a bounded sawtooth,
+  not the true backlog.
 
 ## 1.3 Classify each trigger
 
@@ -206,6 +247,15 @@ with a `scalingModifiers` formula, the formula must give it that say.
   values. It must not add pods: latency lags and is flat
   until it is steep. Example: P90 time to first token above its SLO.
 
+Each role must pass these properties:
+
+| Role | Must pass | Why the others do not apply |
+|---|---|---|
+| Driver | P1–P9 (P6 only if `minReplicaCount` is 0) | — |
+| Guard | P4, P5 (capped, `T < s_max / 1.1`), P8, P9 | it is not proportional by design; reading 0 on an outage is safe while the driver runs |
+| Alarm | P4, P5 (integrating, overshoot bounded by `maxReplicaCount` and `behavior`), P8, P9 | it reads 0 in normal operation by design |
+| Scale-in veto | P4 (`Value`, since a quantile is intensive), P8, P9, and it never asks for more than the current count | it holds the pool and does not size it |
+
 | Kind | Looks like | P1–P3 | Role |
 |---|---|---|---|
 | Offered work rate, counted before any queue | `rate()` of a gateway or router counter at arrival, optionally token-weighted, ÷ per-replica capacity | pass at a fixed mix; token weighting narrows `V` (2.6 against 7.6 for request rate) but does not reach 1 | **driver** |
@@ -215,51 +265,24 @@ with a `scalingModifiers` formula, the formula must give it that say.
 | Capped saturation | KV-cache usage, slot use, pool saturation | only below the cap | **guard** for the resource it measures |
 | Latency outcome | `histogram_quantile(...)` of TTFT, ITL | fail: lags, flat until steep | **scale-in veto** |
 
-For a gauge, find when a request stops being counted (admission, first token,
-last token): that decides whether it is a backlog or a count in progress. The
-metric name often does not say; read its source.
+To place a gauge in this table, find when a request stops being counted (P9).
 
-## 1.4 Checks per trigger
+## 1.4 Procedure per trigger
 
-Work through these for each trigger, citing the line of the scenario file.
+For each trigger in the scenario file:
 
-1. **Kind and role** (§1.3). A driver must be a proportional kind.
-2. **P1–P3**, and over which load range each fails.
-3. **P4, metric type.** A mismatch is off by a factor of the pod count.
-   `Value` on a sum is positive feedback (more pods, larger sum, more pods).
-   `AverageValue` on a `max` caps the ask at `ceil(s_max / T)` whatever the pool
-   size, and can scale in while the pool sits at target.
-4. **Capacity constant.** If the query or threshold divides by a per-replica
-   capacity, where did it come from? An idle-replica peak or a rate the pool
-   once served overstated real capacity by 1.2–6× in measurements. *Needs
-   measurement.*
-5. **Capped signals (P5).** A per-pod signal bounded by `s_max` can scale up
-   only if `T < s_max / (1 + τ) = s_max / 1.1`. Then it ramps geometrically, by
-   at most `s_max / T` per cold start. A KV-cache threshold of 0.95 never scales
-   up.
-6. **Global integrating signals** (router queue, total waiting) keep growing
-   while new pods start: overshoot ≈ growth rate × cold start ÷ `T`, bounded only
-   by `maxReplicaCount` and the scale-up policy.
-7. **Zero replicas (P6).** Pod-exported `vllm:*` series vanish with their pods,
-   and KEDA's `ignoreNullValues: true` (default) turns that into 0: the pool
-   never wakes. Check `activationThreshold` too.
-8. **Missing data (P7).** `or vector(0)` and `ignoreNullValues: true` turn an
-   outage into a reading of 0. The HPA then scales toward `minReplicaCount` and
-   `fallback` never fires. Acceptable on guards and alarms, not on the driver.
-9. **Lag and noise (P8).** An instant gauge that moves by a whole request's
-   work per request is noisy: estimate one request's step against `T` (see the
-   P8 note). Noise restarts the scale-down stabilization window.
-10. **Known traps.**
-    - vLLM exports no arrival counter: a vLLM-side "demand" query reads
-      admitted or completed work.
-    - `llm_d_epp_average_*` gauges freeze at their last value when no endpoint
-      has fresh metrics, so a trigger on them never scales in.
-    - `llm_d_epp_inflight_tokens` can keep a negative residue after a scale-in;
-      clamp each series at 0 before summing.
-    - A catch-all gateway route counts every proxied path, `/metrics` scrapes
-      included, as demand.
-    - `vllm:num_requests_waiting` with EPP flow control on is a bounded
-      sawtooth, not the true backlog.
+1. Read its query, `metricType`, threshold, `activationThreshold`, and the
+   ScaledObject's `minReplicaCount`, `maxReplicaCount`, `pollingInterval`,
+   `fallback` and `behavior`. Note the line numbers.
+2. Find what the metric counts and when, from its source (P9).
+3. Classify its kind with the table in §1.3, and from the kind, the role it can
+   play.
+4. Check every property that role must pass (§1.3), using the definitions and
+   notes in §1.2. For each property, record pass or fail, the scenario line it
+   rests on, the load range where it fails, and an evidence tag: *from the
+   config*, *from the metric's source*, or *needs measurement*.
+5. If the trigger's role in the configuration differs from the role its kind
+   allows (for example a backlog used as the driver), record that as a failure.
 
 ## 1.5 Checks on the combination
 
@@ -295,7 +318,8 @@ Work through these for each trigger, citing the line of the scenario file.
 
 Record, in the variant's header comment or the run report:
 
-1. per trigger: kind, role, P1–P8 with their evidence tag, estimated lag;
+1. per trigger: kind, role, each required property with its result, scenario
+   line and evidence tag, and the estimated lag;
 2. the combination: which trigger drives in normal operation, which win when,
    and whether that is sound;
 3. predicted behavior in one or two sentences;
