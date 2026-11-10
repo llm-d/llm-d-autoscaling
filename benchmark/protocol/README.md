@@ -182,7 +182,27 @@ scaler error, and after `fallback.failureThreshold` errors KEDA sets
 ### 1.3 Classify each trigger
 
 The kind of signal predicts which properties it can have, and therefore which
-role it can play.
+role it can play. Because the HPA takes the maximum over triggers, a role is
+defined by when the trigger should win that maximum:
+
+- **Driver.** Sets the replica count in normal operation: it wins the maximum
+  most of the time, so it alone decides how many pods run at steady load. It
+  must pass P1–P4. Example: dispatched prompt tokens per second ÷ per-replica
+  capacity, target 0.7.
+- **Guard.** Protects one resource the driver does not see. It stays below the
+  driver until that resource runs out, then wins and adds pods. Example:
+  `avg(vllm:kv_cache_usage_perc)` under `Value`, target 0.85, which fires only
+  when long answers fill the KV cache before the driver's rate says the pool is
+  busy.
+- **Alarm.** Reports overload after it has happened. It reads near 0 in normal
+  operation and becomes large only when work piles up, so it is useful for a
+  fast scale-up or an alert, never for sizing the pool. Example:
+  `sum(llm_d_epp_flow_control_queue_size)`, which is 0 while the pool keeps up.
+- **Scale-in veto.** Stops the pool from shrinking while users are already
+  suffering. It asks for at least the current replica count while a latency
+  quantile is over the SLO, so the maximum holds the pool at its size, and it
+  asks for little otherwise. It must not add pods: latency lags and is flat
+  until it is steep. Example: P90 time to first token above its SLO.
 
 | Kind | Looks like | P1–P3 | Role |
 |---|---|---|---|
