@@ -56,19 +56,6 @@ must have all of the following. Symbols: `λ` load, `R` replicas, `s` the signal
 | P7 | **Fails visibly** | value when the source is down (scrape failure, EPP restart, wrong label) | the scaler errors and `fallback` applies; it does not read 0 |
 | P8 | **Bounded lag and noise** | lag ≈ scrape interval + ½ `rate` window + `pollingInterval`; noise = sample-to-sample swing at steady load against `T` | lag well below cold start; noise well below the 10 % tolerance |
 
-**Elasticity.** The elasticity of `y` with respect to `x` is the percentage
-change in `y` per 1 % change in `x`. Between two measurements `(x₁, y₁)` and
-`(x₂, y₂)`:
-
-```
-elasticity = ln(y₂ / y₁) / ln(x₂ / x₁)
-```
-
-For example, if the signal reads 0.30 at 3 req/s and 0.71 at 6 req/s,
-`ε = ln(0.71 / 0.30) / ln(6 / 3) = 0.86 / 0.69 = 1.24`: the signal grows 24 %
-faster than load. Elasticity 1 means proportional, 0 means flat, and −1 (for
-`η`) means the per-pod value falls in inverse proportion to the pod count.
-
 P1–P3 are the core of the assessment. A queue or prefill backlog fails all
 three: by Little's law, per pod it equals utilization × time to first token, and
 time to first token rises without limit near saturation.
@@ -78,8 +65,20 @@ prefill pool whose replica reads 15,928 prompt tokens per second, serving
 8,192-token prompts.
 
 **P1, proportional to load.** `desired = ceil(U / T)` is a pod count only if
-`U` counts pods' worth of work. Compare two prefill signals as one pod's
-utilization rises from 50 % to 95 %, a factor of 1.9:
+`U` counts pods' worth of work. The test is the **elasticity** `ε` of the
+signal with respect to load: the percentage change in the signal per 1 % change
+in load. Between two measurements `(λ₁, s₁)` and `(λ₂, s₂)`:
+
+```
+ε = ln(s₂ / s₁) / ln(λ₂ / λ₁)
+```
+
+`ε = 1` means proportional, `ε ≈ 0` flat (a dead band), `ε ≫ 1` an explosion.
+P2 and P5 use the same measure.
+
+Compare two prefill signals as one pod's utilization rises from 50 % to 95 %, a
+factor of 1.9. For the backlog,
+`ε = ln(5.130 / 0.386) / ln(1.9) = 2.59 / 0.64 = 4.0`:
 
 | Signal | At 50 % | At 95 % | Factor | `ε` |
 |---|---:|---:|---:|---:|
@@ -100,7 +99,7 @@ second, 2.511 pods' worth, and go from 3 pods to 4:
 | Backlog, target 1.5 s | 1.537 | 0.595 | 4.610 | 2.381 | 2 |
 
 The rate's per-pod value falls by 3/4 (`η = −1`), so the ask stays at 4. The
-backlog's falls to 39 % (`η = −3.3`) because the queue drains too, so the ask
+backlog's falls to 39 % (`η = ln(0.595 / 1.537) / ln(4 / 3) = −3.3`) because the queue drains too, so the ask
 drops to 2 pods, which cannot carry 2.511 pods' worth. The pool shrinks,
 congests, and scales up again: oscillation at constant load.
 
