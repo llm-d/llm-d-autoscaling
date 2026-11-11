@@ -114,8 +114,12 @@ prefill backlog (§1.3, "Placing a gauge"). With `addEstimatedOutputTokens: true
 it counts, on decode endpoints, until the last token. The plugin's config
 belongs in the record, not just its version. *From the metric's source.*
 
-The package moved since the version `traps.md` cites (`requestcontrol/` then,
-`requesthandling/` now): a path is only valid at its commit.
+`6ab5c74` is a `main` commit. On the `v0.11.0` and `v1.0.0` releases the same
+package is at `…/plugins/requestcontrol/dataproducer/inflightload/`; it moved to
+`requesthandling/` on `main` (#3830). The release points above are the same on
+`v1.0.0` (`b9393d1a`, `producer.go` lines 77–78 and 592–612). The two differ in
+what happens after a scale-in (trap T3b). A path, and a behavior, is only valid
+at its commit: read the source at the deployed version.
 
 ## 4. Classify the kind and the role it can play
 
@@ -372,10 +376,14 @@ it against step 2's versions as `traps.md` says.
 absent or worked around in the query.
 
 **Example.** The driver needs offered work; the gauge is a prefill backlog.
-**Fail.** EPP `v0.11.0` is in the range of trap T3b. The query's liveness gate
+**Fail.** EPP `v0.11.0` is in the range of trap T3b, which needs three things
+on that release: the liveness intersection, `clamp_min(…, 0)` on each series,
+and `namespace` pinned on both sides. The query has the intersection
 (`and on (target_pod)` with `per_endpoint_queue_size`, `token-aware.yaml:315`)
-drops the series of deleted endpoints, which is half of T3b's workaround; it
-does not `clamp_min` each series at 0. *From the metric's source.*
+and pins `namespace` on the `inflight_tokens` side only (`:311`); the
+`per_endpoint_queue_size` side selects by `name` (`:317`), and nothing is
+clamped. On a router built from `main` after #3439, plain `sum()` would be
+correct and the intersection harmless. *From the metric's source.*
 
 ### Recording the result
 
