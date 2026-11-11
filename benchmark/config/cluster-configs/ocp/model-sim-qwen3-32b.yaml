@@ -70,8 +70,10 @@ model:
 
 images:
   vllm:
-    repository: vllm/vllm-openai-cpu
-    tag: v0.27.0-x86_64
+    # llm-d's CPU build of vLLM v0.30.0 (VLLM_COMMIT_SHA ced6857, docker/Dockerfile.cpu),
+    # the version llm-d ships; has NIXL preinstalled, as the plugin image expects.
+    repository: ghcr.io/llm-d/llm-d-cpu
+    tag: v1.0.0
 
 decode:
   mountModelVolume: false

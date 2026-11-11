@@ -76,8 +76,10 @@ model:
 
 images:
   vllm:
-    repository: ghcr.io/llm-d/llm-d-cuda
-    tag: auto
+    # Upstream vLLM v0.30.0, the version and image llm-d v1.0.0 ships. llm-d no
+    # longer builds a CUDA image: ghcr.io/llm-d/llm-d-cuda stops at v0.9.0 (vLLM v0.26.0).
+    repository: docker.io/vllm/vllm-openai
+    tag: v0.30.0
 
 # shared-config carries llmdbench_env.sh written by the preprocess initContainer;
 # dshm is vLLM's shared-memory scratch. Replaces the scenario's dshm-only list.
