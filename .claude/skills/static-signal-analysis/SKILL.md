@@ -178,38 +178,8 @@ load, near capacity, past capacity, and at constant load>.
 
 ### Example
 
-An extract of a verdict for `staging/pd-disaggregation/baseline.yaml`, prefill
-pool, showing the expected depth. Line numbers are from the scenario, since it
-was rendered by hand.
-
-~~~markdown
-### Trigger `vllm-kv-utilization`
-
-```promql
-max(vllm:kv_cache_usage_perc{model_name="Qwen/Qwen3-32B",role="prefill"})
-```
-
-`metricType: AverageValue`, `threshold: "0.95"`, `activationThreshold: "0"`
-(`baseline.yaml:206-211`).
-
-- **What it counts:** a gauge, the fraction of the KV-cache blocks in use on
-  one vLLM engine; 1 means full. `source`:
-  `vllm-project/vllm@3facf82:vllm/v1/metrics/loggers.py#L619-L624`.
-- **Kind:** capped saturation, ceiling 1. **Role it can play:** guard. **Role
-  it plays here:** guard, next to the queue trigger.
-
-| Property | Result | Evidence | Tag |
-|---|---|---|---|
-| P4 metric type | fail | `max(...)` is intensive, but `metricType: AverageValue` (`baseline.yaml:210`) gives `ceil(max / 0.95)`, whatever the pod count: at most `ceil(1 / 0.95) = 2` | config |
-| P5 bounds | fail | ceiling 1, threshold 0.95: one full pod gives `1.0 / 0.95 = 1.05`, inside the HPA's 10 % tolerance. The threshold must be below `1 / 1.1 = 0.909` | config |
-| P8 lag | pass | instant gauge; lag = vLLM scrape 30 s (llm-d-benchmark `defaults.yaml`, `monitoring.scrapeInterval`) + KEDA polling 30 s (not rendered, KEDA default) = 60 s, against a cold start of minutes | config |
-| P9 measures what it claims | pass | no trap on `vllm:kv_cache_usage_perc` in `traps.md` | source |
-
-**Failure case:** one prefill pod with its KV cache full. The HPA computes
-`ratio = 1.0 / 0.95 = 1.05`, within `[0.9, 1.1]`, so it does nothing. With 3
-pods all full it computes `ceil(1.0 / 0.95) = 2`: a scale-in to 2, unless
-another trigger asks for more.
-~~~
+[`benchmark/protocol/verdicts/pd-disaggregation/kv-early.md`](../../../benchmark/protocol/verdicts/pd-disaggregation/kv-early.md)
+is a complete verdict at the expected depth.
 
 Before finishing, check the report against the template: every trigger has
 its table, every `fail` has a failure case, every `measure` appears under
