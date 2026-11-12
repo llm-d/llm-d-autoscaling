@@ -70,8 +70,11 @@ model:
 
 images:
   vllm:
-    repository: vllm/vllm-openai-cpu
-    tag: v0.27.0-x86_64
+    # Upstream vLLM v0.31.0 CPU image. llm-d's ghcr.io/llm-d/llm-d-cpu is built at
+    # v0.30.0 (v1.0.0), so it is the newest ghcr option; llm-d's own CPU recipe
+    # also uses this docker.io image at v0.31.0.
+    repository: docker.io/vllm/vllm-openai-cpu
+    tag: v0.31.0
 
 decode:
   mountModelVolume: false
