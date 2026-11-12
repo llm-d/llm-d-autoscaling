@@ -28,7 +28,7 @@ says nothing about versions outside its range.
 
 | # | Component | Trap | Verified on | Source |
 |---|---|---|---|---|
-| T1 | vLLM | No arrival counter. The earliest counter is `prefix_cache_queries`, recorded at admission; `http_requests_total` counts completions. A vLLM-side "demand" query reads admitted or completed work. Demand must come from the router or gateway. | `vllm-project/vllm@e1a5086` (2026-10-12) | `vllm/v1/metrics/loggers.py` |
+| T1 | vLLM | No arrival counter. The earliest counter is `prefix_cache_queries`, recorded at engine admission; `http_requests_total` (from the HTTP instrumentator) counts completed requests. A vLLM-side "demand" query reads admitted or completed work. Demand must come from the router or gateway. On vLLM `main` only, `vllm:request_render_duration_seconds_count` counts requests rendered by the frontend, before the engine queue (#60213); it still sees only what reached that pod, and vanishes with it. | tags `v0.27.0` (`4bdc8a7`) and `v0.30.0` (`ced6857`); the `main` counter is absent from both | `vllm/v1/metrics/loggers.py` (`vllm:prefix_cache_queries`: line 585 at `v0.27.0`, 590 at `v0.30.0`); `vllm/entrypoints/serve/instrumentator/metrics.py:65` |
 | T2 | llm-d-router (EPP) | `llm_d_epp_average_*` gauges freeze. When no endpoint has fresh metrics, `ready_endpoints` goes to 0 but the averages keep their last value, so a trigger on them never scales in after the pool empties. | `llm-d/llm-d-router@333f331e` (`main`, 2026-11-11); no difference found for `v1.0.0` (`b9393d1a`) or `v0.11.0` (`a5cbe600`) | `pkg/epp/datalayer/logger/logger.go`, `refreshPrometheusMetrics` returns before the `average_*` writes when the pod count is 0 |
 | T3a | llm-d-router (EPP) | `llm_d_epp_inflight_tokens` after a scale-in: a deleted pod's series keeps a positive residue that falls to 0 within seconds. Scale-in is delayed briefly. | tag `v0.10.0` (`71f4f09`) and earlier. Not re-verified: older than the releases audited on 2026-11-11 | `pkg/epp/framework/plugins/requestcontrol/dataproducer/inflightload/producer.go` |
 | T3b | llm-d-router (EPP) | `llm_d_epp_inflight_tokens` and `llm_d_epp_inflight_requests` after a scale-in: a request still waiting for its first token when its pod is deleted re-creates the pruned series at minus its tokens (requests at −1) for the life of the EPP process, and a pod that returns with the same name inherits it. Under prefill load every scale-in lowers `sum()` for good. Workaround: intersect with `llm_d_epp_per_endpoint_queue_size` (`model_server_endpoint` = `endpoint_name`) with `and on (target_pod)` after `label_replace`, `clamp_min(…, 0)` each series, then `sum`, and pin `namespace` on both sides. | from #2577 (`75d6c85`, 2026-08-27): tags `v0.11.0` (`a5cbe600`) and `v1.0.0` (`b9393d1a`). **Fixed on `main`** by #3439 (`79c85447`, 2026-10-30), in no release yet: there the series stays pruned and plain `sum()` is correct | releases: `pkg/epp/framework/plugins/requestcontrol/dataproducer/inflightload/producer.go`; `main`: `…/requesthandling/…` (moved by #3830, `7f05d9ca`) |
@@ -41,6 +41,7 @@ says nothing about versions outside its range.
 | T10 | vLLM, with the EPP's flow control | vLLM's time to first token excludes the router queue when flow control is on, so it misses where the latency went. Use `llm_d_epp_request_ttft_seconds`, measured from when the EPP received the request. | `llm-d/llm-d-router@333f331e` (`main`, 2026-11-11) | `pkg/epp/metrics/llm_d_router_metrics.go` |
 | T11 | llm-d-router (EPP) | `llm_d_epp_request_input_tokens` / `_output_tokens` lag by a whole request and count only admitted work. On `main` and `v1.0.0` they are recorded once at end of stream (#3252, `1768eb5b`); on `v0.11.0`, from every chunk that carries usage. A streaming request counts only if the client sets `stream_options.include_usage`; otherwise it reads 0. | `llm-d/llm-d-router@333f331e` (`main`, 2026-11-11), `v1.0.0`, `v0.11.0` | `pkg/epp/metrics/llm_d_router_metrics.go` |
 | T12 | llm-d-router (EPP) | Shed requests by reason: `llm_d_epp_request_outcome_total{outcome="rejected"}`, by `reason`, exists on `main` only (#3517, `5b3f0be6`). `v1.0.0` and `v0.11.0` have only `llm_d_epp_request_error_total` by `error_code`. Neither is offered demand; use them for availability and alerts. | `llm-d/llm-d-router@333f331e` (`main`, 2026-11-11); absent from `v1.0.0` and `v0.11.0` | `pkg/epp/metrics/llm_d_router_metrics.go` |
+| T13 | vLLM | `--max-num-queued-reqs` / `--max-num-queued-tokens` (off by default) cap, per API server, the requests in flight (waiting or running) or the prompt tokens of requests still in prefill; beyond the cap vLLM rejects with HTTP 503. With either set, `vllm:num_requests_waiting` is capped and the excess never appears in it, and there is no counter of the rejections. | tag `v0.30.0` (`ced6857`); absent from `v0.27.0` | `vllm/config/scheduler.py:74-79` and `:87-90`; enforced in `vllm/v1/engine/async_llm.py:323` |
 
 ## Deployed versions in this repository
 
@@ -52,12 +53,13 @@ backend overlays in `benchmark/config/cluster-configs/`:
 | Component | Version | Where set | Traps in range |
 |---|---|---|---|
 | EPP | `v0.11.0` | llm-d-benchmark defaults | T2, T3b, T4, T5, T9, T11 (per-chunk form). T8 and T10 *unverified*: verified on `main` only. T12 does not apply: no outcome counter. No arrival counter without the `flowControl` gate: `fairness_id_resolved_total` is on `main` only. T3b means `sum()` over `inflight_tokens` needs the full workaround |
-| vLLM | `v0.30.0` (`vllm-openai`), `v0.27.0-x86_64` (`ocp/model-sim-qwen3-32b.yaml`) | defaults; overlay | T1 *unverified*: verified on a commit, not on these tags |
+| vLLM | `v0.30.0` (`vllm-openai`, and llm-d's pin), `v0.27.0-x86_64` (`ocp/model-sim-qwen3-32b.yaml`) | defaults; overlay | T1 on both tags. T13 only on `v0.30.0`, and only if a cap is set; no overlay here sets one |
 | vLLM (CUDA) | `auto` (`ocp/vllm.yaml`) | overlay | floating: resolve first |
 | inference-sim | `latest` (`k8s/inference-sim.yaml`) | overlay | floating: resolve first; T1 is about vLLM, so it does not carry over to the simulator |
 | KEDA | 2.20 or later (`benchmark/README.md`) | cluster | T7 *unverified*: verified on a commit, not on a release |
 
 The router entries were last audited on 2026-11-11 against `main` at
-`333f331e` and the `v1.0.0` and `v0.11.0` releases. vLLM and KEDA entries are
-still verified on commits, not on the tags deployed here: mapping them to
-release tags is the next maintenance task for this list.
+`333f331e` and the `v1.0.0` and `v0.11.0` releases. The vLLM entries were
+verified on 2026-11-12 at the two tags deployed here, `v0.27.0` and `v0.30.0`.
+The KEDA entry is still verified on a commit, not on a release: mapping it to
+the deployed KEDA release is the next maintenance task for this list.
