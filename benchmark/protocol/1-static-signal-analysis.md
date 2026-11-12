@@ -273,7 +273,10 @@ reads how often that event happens. Incremented at arrival, before any queue,
 it is offered work; at admission or completion, it equals supply once the pool
 is overloaded. For example, vLLM's `http_requests_total` is incremented at
 completion, so it is completed work, not demand (trap T1 in
-[traps.md](traps.md)).
+[traps.md](traps.md)). By contrast, the router's
+`llm_d_epp_fairness_id_resolved_total` (on `main` only) is incremented as each
+request arrives, before admission, so its `rate()` is offered work: a request
+rate, and so as mix-sensitive as one (trap T8).
 
 ## 1.4 Running the analysis
 
