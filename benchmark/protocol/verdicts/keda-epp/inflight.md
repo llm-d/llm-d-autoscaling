@@ -13,18 +13,20 @@ router paths at `llm-d/llm-d-router@647ca7ca`.
 | Backend overlay | none: the guide deploys on llm-d `optimized-baseline` (GPU vLLM, Qwen3-32B) with its router unchanged, flow control off |
 | Rendered with | by hand: the file is a plain manifest, `${NAMESPACE}` / `${TARGET_DEPLOYMENT}` substituted by `envsubst` |
 | Date | 2026-11-12 |
-| Verdict | **Accepted with conditions** |
+| Verdict | **Rejected** |
 
-Accepted with conditions: the one trigger counts requests from dispatch to last
-token, which is close to proportional below saturation and correctly aggregated,
-so it can drive the pool for a stable output-length mix; but its threshold of 16
-has no measured basis, an empty query reads 0 with no fallback, and the 300 s
-scale-up stabilization delays every scale-up by 5 minutes. With
-`minReplicaCount: 0` it could never wake the pool, since the EPP does not count
-requests it rejects for lack of endpoints. Predicted: tracks load at a fixed mix
-with a ~325 s reaction lag plus cold start, mis-sizes the pool when the
-output-length mix moves, and drops to 1 replica if the EPP is down for more than
-300 s while the gateway keeps serving.
+Rejected: no trigger passes P1-P4. The one trigger counts requests from dispatch
+to last token, which grows faster than load as the pool nears capacity (P1) and
+falls when a pod is added past saturation (P2), and its threshold of 16 means a
+different busyness for each output-length mix (P3). It is correctly aggregated
+(P4) and fits the alarm role. Also: an empty query reads 0 with no fallback
+(P7), the 300 s scale-up stabilization delays every scale-up by 5 minutes (P8),
+and with `minReplicaCount: 0` it could never wake the pool, since the EPP does
+not count requests it rejects for lack of endpoints (P6). Predicted: tracks load
+at a fixed mix with a ~325 s reaction lag plus cold start, over-provisions near
+capacity and overshoots past it, mis-sizes the pool when the output-length mix
+moves, and drops to 1 replica if the EPP is down for more than 300 s while the
+gateway keeps serving.
 
 ## Deployed versions
 
@@ -89,14 +91,14 @@ sum(llm_d_epp_inflight_requests{namespace="<NAMESPACE>",producer_name="inflight-
     started exports no `llm_d_epp_inflight_requests` series, so the query is
     empty, not 0 (matters for P7).
 - **Kind:** requests in progress (send to last token). **Role it can play:**
-  driver, only for a stable output-length mix
-  ([step 1](../../1-static-signal-analysis.md) §1.3). **Role it plays here:**
-  driver, the only trigger.
+  alarm. [Step 1](../../1-static-signal-analysis.md) §1.3 allows this kind as a
+  driver only for a stable output-length mix; here it fails P1 and P2 as well as
+  P3. **Role it plays here:** driver, the only trigger.
 
 | Property | Result | Evidence | Tag |
 |---|---|---|---|
-| P1 proportional | pass below saturation | By Little's law the total is arrival rate × time from dispatch to last token. Below saturation that time is mostly decode and changes little with load; [step 1](../../1-static-signal-analysis.md) §1.3 gives `ε` 1.0-1.24 for this kind | source |
-| P2 coupled to actuation | pass below saturation; fail above | Below saturation, adding a pod spreads the same requests over more pods (`η ≈ -1`). Above saturation the total includes requests waiting in vLLM, which drain when a pod is added, so the total falls (`η < -1`) | source |
+| P1 proportional | fail | By Little's law the total is arrival rate × time from dispatch to last token, and that time grows as the pool nears capacity (batching slows decode, then requests queue in vLLM), so the signal grows faster than load; [step 1](../../1-static-signal-analysis.md) §1.3 gives `ε` 1.0-1.24 for this kind over the P1 range, not `ε ≈ 1` | source |
+| P2 coupled to actuation | fail | Well below saturation, adding a pod spreads the same requests over more pods (`η ≈ -1`). Above saturation the total includes requests waiting in vLLM, which drain when a pod is added, so the total falls (`η < -1`) | source |
 | P3 fixed busyness | fail across output-length mixes | The threshold is a per-pod count, `16`, with no capacity in the query. A replica at capacity holds `μ × E2E` requests, and E2E scales with output length, so 16 is a different fraction of capacity per mix; [step 1](../../1-static-signal-analysis.md) §1.3 gives `V` up to 31 across output lengths. Where 16 came from is not recorded in the guide; its value for any mix *needs measurement* | config, measure |
 | P4 metric type | pass | `sum(...)` is extensive, under `AverageValue` (`:51`, `:55`): `desired = ceil(total / 16)` | config |
 | P5 bounds | pass, overshoot size unknown | Not capped at the EPP: under open-loop arrivals, requests queued in vLLM keep adding to it past saturation (integrating). Only `maxReplicaCount: 8` and the scale-up policy bound the overshoot; how far it overshoots during a cold start *needs measurement* | config, measure |
@@ -104,6 +106,11 @@ sum(llm_d_epp_inflight_requests{namespace="<NAMESPACE>",producer_name="inflight-
 | P7 fails visibly | fail | No `or vector(0)`, but `ignoreNullValues` is not set and defaults to `true` (the guide's `README.md:536` says so; trap [T7](../../traps.md), release not verified), and no `fallback` is set, so an empty result reads 0. The router fails open (`guides/recipes/router/base.values.yaml:18`, `failureMode: "FailOpen"`): with the EPP down the gateway keeps serving, so the pool carries load while its signal reads 0. The README's "No `fallback` is configured, so autoscaling fails visibly" (`README.md:221`) holds for scaler errors (auth), not for an empty result | config, source, measure |
 | P8 lag and noise | fail on lag; noise needs measurement | Lag: `≤ 10 (scrape) + 0 (no window) + ≤ 15 (HPA sync)`, then `scaleUp.stabilizationWindowSeconds: 300`: for scale-up the HPA uses the lowest recommendation of the last 300 s, so a rising signal is acted on ~300 s late, about `10 + 15 + 300 ≈ 325 s` after a step, before any cold start. Noise: at `R` pods one request moves the ratio by `1 / (16 R)`, but the sample-to-sample swing of an in-flight count at steady load can exceed the 10 % tolerance at small `R`; the 300 s windows then turn it into bias (scale-up takes the minimum, scale-down the maximum) | config, measure |
 | P9 measures what it claims | pass, with conditions | Counts dispatch to last token, as the role needs. T3b (negative residue after scale-in) does not apply on `main` after #3439; it applies if the EPP is pinned to `v1.0.0` or `v0.11.0`. Requests rejected before scheduling are not counted (`PreRequest` is never reached); with flow control off these are errors, not load the pool could serve. Requests that fail open around the EPP are not counted (P7). The query selects by `namespace` and `producer_name` only, so a second pool's EPP in the same namespace, or a second scrape of the same EPP, adds into the sum | source |
+
+**Failure case (P1):** using §1.3's upper bound `ε = 1.24`, load rising from 0.5
+to 0.95 of capacity (`× 1.9`) raises the signal `1.9^1.24 = 2.22×`, so near
+capacity the trigger asks for `2.22 / 1.9 = 1.17×` the pods a proportional
+signal would, before any queueing.
 
 **Failure case (P2):** load at 1.5 replicas' worth on 1 pod, open loop. vLLM's
 queue grows, so the total keeps rising and asks for more pods than 1.5 replicas'
@@ -139,7 +146,8 @@ that whole interval 2 replicas carry 6 replicas' worth of load.
 
 ## Combination
 
-- **Driver in normal operation:** `epp-inflight-requests`, the only trigger.
+- **Driver in normal operation:** `epp-inflight-requests`, the only trigger,
+  though it fails the driver checks P1-P3.
 - **Who decides where:** this trigger at every load level. There is no guard (KV
   cache) and no scale-in veto.
 - **Scale-in:** at fixed load below saturation the trigger reads `λ × E2E`,
@@ -184,7 +192,8 @@ while the trigger reads on target. An EPP outage of over 300 s takes the pool to
 
 | Fails | Fix | Effect |
 |---|---|---|
-| P2, P5 | No change to the trigger: the overshoot past saturation is what this kind does (§1.3). Bound it with the scale-up policy from the P8 fix, and keep `maxReplicaCount` at the largest pool the workload needs | the overshoot is limited by the policy rate and the cap, not by luck |
+| P1, P2 | Make an offered-work rate the driver, token-weighted and divided by measured per-replica capacity, target 0.7 ([step 1](../../1-static-signal-analysis.md) §1.3, driver row). Keep `epp-inflight-requests` as an alarm, with a threshold above the driver's operating point so it wins only past saturation | the replica count follows offered work; the in-flight trigger adds pods fast only under overload |
+| P5 | Bound the alarm's overshoot past saturation with the scale-up policy from the P8 fix, and keep `maxReplicaCount` at the largest pool the workload needs | the overshoot is limited by the policy rate and the cap |
 | P3 | Set the threshold from measurement 1, as `0.7 ×` the measured per-replica concurrency for the mix; if measurement 2 shows the mix moves, move the driver to a token-weighted offered rate divided by measured capacity | the target means the same busyness for the measured mix |
 | P6 (only with `minReplicaCount: 0`) | Add a second trigger that counts requests rejected for lack of endpoints, which the EPP records at zero replicas: on `main`, `sum(rate(llm_d_epp_request_outcome_total{namespace="<NAMESPACE>",outcome="rejected",reason="rejected-no-endpoints"}[1m]))`; on `v1.0.0` / `v0.11.0`, `sum(rate(llm_d_epp_request_error_total{namespace="<NAMESPACE>",error_code="ServiceUnavailable"}[1m]))`, which mixes every 503 cause. Keep `activationThreshold` at 0. With one or more pods it reads about 0, so the in-flight trigger still decides above zero | the first rejected request wakes the pool; requests sent during the cold start are still rejected |
 | P7 | Add `ignoreNullValues: "false"` to the trigger metadata and `fallback: {failureThreshold: 3, replicas: 1, behavior: currentReplicas}`. Not a fixed `replicas` sized for peak: an EPP that has not served yet has no series, so a static fallback would scale an idle pool to that size | an empty result becomes a scaler error, and KEDA holds the current replica count instead of reading 0 |
