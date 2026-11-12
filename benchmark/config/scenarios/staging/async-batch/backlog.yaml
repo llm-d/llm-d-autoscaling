@@ -1,0 +1,235 @@
+# ASYNC-BATCH — KEDA experiment: backlog (MILESTONE 2, BACKEND-AGNOSTIC)
+# Delta from baseline.yaml (this dir):
+#   - decode.replicas: 2 -> 0 (reactive scale-from-zero and scale-to-zero)
+#   - keda.enabled: true with 4-layer llm-d-async backlog Prometheus trigger:
+#       1. llm_d_async_async_broker_backlog (gated by broker_backlog_source_available == 1)
+#       2. llm_d_async_async_queue_depth
+#       3. llm_d_async_async_gate_waiting_requests
+#       4. llm_d_async_async_inflight_requests
+#   - minReplicas: 0, maxReplicas: 2, pollingInterval: 15, cooldownPeriod: 15,
+#     threshold: "2000", activationThreshold: "0.5",
+#     fallback: { failureThreshold: 3, replicas: 1, behavior: currentReplicasIfHigher }
+#     (prevents premature scale-to-zero if Prometheus is transiently unreachable).
+# Everything else is identical to baseline.yaml so Goodput deltas isolate the
+# Milestone 2 backlog-driven scaling strategy.
+
+scenario:
+  - name: "async-batch"
+
+    kustomize:
+      enabled: false
+      guideName: "async-batch"
+      repoPath: ""
+      repoRef: "main"
+      gaieVersion: ""
+      acceleratorBackend: "gpu/vllm"
+      monitoring: false
+      overlayPath: ""
+      extraHelmValues: []
+      extraHelmSets: {}
+      guideVariableOverrides: {}
+      patches: []
+
+    model:
+      name: Qwen/Qwen3-32B
+      shortName: qwen3-32b
+      path: models/Qwen/Qwen3-32B
+      huggingfaceId: Qwen/Qwen3-32B
+      maxModelLen: 16384
+      size: 2Gi
+
+    modelservice:
+      enabled: true
+      uriProtocol: hf
+
+      gateway:
+        className: epponly
+
+      routing:
+        connector: nixlv2
+
+      router:
+        epp:
+          replicas: 1
+          resources:
+            requests:
+              cpu: "100m"
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+        proxy:
+          resources:
+            requests:
+              cpu: "50m"
+              memory: 128Mi
+            limits:
+              cpu: "500m"
+              memory: 512Mi
+        monitoring:
+          prometheus:
+            enabled: true
+            auth:
+              enabled: false
+
+      httpRoute:
+        requestTimeout: "300s"
+        backendRequestTimeout: "0s"
+
+    decode:
+      enabled: true
+      replicas: 0
+      accelerator:
+        count: 1
+      parallelism:
+        tensor: 1
+        data: 1
+        dataLocal: 1
+        workers: 1
+      extraContainerConfig:
+        ports:
+          - containerPort: 8200
+            name: metrics
+            protocol: TCP
+      monitoring:
+        podmonitor:
+          enabled: true
+          portName: metrics
+          path: /metrics
+          interval: 15s
+
+    prefill:
+      enabled: false
+      replicas: 0
+
+    standalone:
+      enabled: false
+
+    asyncProcessor:
+      enabled: true
+      concurrency: 64
+      gateWaitTimeout: "10m"
+      drainTimeout: "2m"
+      prometheusCacheTTL: "5s"
+      podMonitor:
+        enabled: true
+        interval: "15s"
+      workerPools:
+        - id: "default"
+          workers: 32
+      transport: "redis-sortedset"
+      resultQueueName: "result-list"
+      pollIntervalMs: 1000
+      batchSize: 10
+      queues:
+        - queue_name: "request-sortedset"
+          worker_pool_id: "default"
+          request_path_url: "/v1/completions"
+          gate_type: "prometheus-query"
+          gate_params:
+            query: 'clamp_max(sum(llm_d_epp_ready_endpoints{namespace="${namespace.name}"}) or vector(0), 1)'
+            fallback: "0.0"
+
+    # =========================================================================
+    # SCALING STRATEGY (KEDA Milestone 2) — 4-Layer Async Backlog (0 <-> 2)
+    # =========================================================================
+    keda:
+      enabled: true
+      namespace: ""
+      prometheus:
+        baseUrl: http://prometheus-operated.monitoring.svc.cluster.local
+        port: 9090
+      scaledObjects:
+        - name: async-batch-decode
+          scaleTargetRef:
+            kind: Deployment
+            name: ${model.idLabel}-decode
+          minReplicas: 0
+          maxReplicas: 2
+          pollingInterval: 15
+          cooldownPeriod: 15
+          fallback:
+            failureThreshold: 3
+            replicas: 1
+            behavior: currentReplicasIfHigher
+          triggers:
+            - name: async-4layer-backlog
+              type: prometheus
+              metricType: AverageValue
+              threshold: "2000"          # X = T_target * R: pending requests one replica owns (#1604)
+              activationThreshold: "0.5" # Wakes 0 -> 1 on >= 1 item for smoke/benchmark runs (tune to "500" for batch floor)
+              query: |
+                (
+                  sum((llm_d_async_async_broker_backlog{namespace="${namespace.name}"} and on(namespace, queue_id) llm_d_async_async_broker_backlog_source_available{namespace="${namespace.name}"} == 1)) or vector(0)
+                )
+                + (sum(llm_d_async_async_queue_depth{namespace="${namespace.name}"}) or vector(0))
+                + (sum(llm_d_async_async_gate_waiting_requests{namespace="${namespace.name}"}) or vector(0))
+                + (sum(llm_d_async_async_inflight_requests{namespace="${namespace.name}"}) or vector(0))
+          behavior:
+            scaleUp:
+              stabilizationWindowSeconds: 0
+              policies:
+                - type: Pods
+                  value: 2
+                  periodSeconds: 15
+            scaleDown:
+              stabilizationWindowSeconds: 15
+              policies:
+                - type: Pods
+                  value: 1
+                  periodSeconds: 120
+
+    monitoring:
+      metricsScrapeEnabled: true
+      scrapeInterval: "10s"
+      timeSeriesMetrics:
+        - vllm:kv_cache_usage_perc
+        - vllm:num_requests_running
+        - vllm:num_requests_waiting
+        - DCGM_FI_DEV_GPU_UTIL
+        - DCGM_FI_DEV_POWER_USAGE
+        - llm_d_async_async_broker_backlog
+        - llm_d_async_async_broker_backlog_source_available
+        - llm_d_async_async_queue_depth
+        - llm_d_async_async_gate_waiting_requests
+        - llm_d_async_async_inflight_requests
+        - llm_d_async_async_exceeded_deadline_requests_total
+        - llm_d_async_async_successful_requests_total
+
+    vllmCommon:
+      shmMemory: 500Mi
+      volumes:
+        - name: dshm
+          type: emptyDir
+          emptyDir:
+            medium: Memory
+            sizeLimit: 500Mi
+      volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+
+    storage:
+      workloadPvc:
+        accessModes:
+          - ReadWriteMany
+        storageClassName: auto
+      modelPvc:
+        size: 2Gi
+        accessModes:
+          - ReadWriteMany
+        storageClassName: auto
+
+    timeouts:
+      controlWait: 300
+      harnessWait: 900000
+
+    workDir: "~/data/async-batch"
+
+    harness:
+      name: async-batch
+      experimentProfile: backlog_scaleout.yaml
+      virtualGpusPerPod: 1
+      pvcSize: 3Gi
+      resources:
+        cpu: "1"
+        memory: 2Gi
