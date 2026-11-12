@@ -19,10 +19,12 @@ Accepted with conditions: the one trigger counts requests from dispatch to last
 token, which is close to proportional below saturation and correctly aggregated,
 so it can drive the pool for a stable output-length mix; but its threshold of 16
 has no measured basis, an empty query reads 0 with no fallback, and the 300 s
-scale-up stabilization delays every scale-up by 5 minutes. Predicted: tracks
-load at a fixed mix with a ~325 s reaction lag plus cold start, mis-sizes the
-pool when the output-length mix moves, and drops to 1 replica if the EPP is down
-for more than 300 s while the gateway keeps serving.
+scale-up stabilization delays every scale-up by 5 minutes. With
+`minReplicaCount: 0` it could never wake the pool, since the EPP does not count
+requests it rejects for lack of endpoints. Predicted: tracks load at a fixed mix
+with a ~325 s reaction lag plus cold start, mis-sizes the pool when the
+output-length mix moves, and drops to 1 replica if the EPP is down for more than
+300 s while the gateway keeps serving.
 
 ## Deployed versions
 
@@ -98,7 +100,7 @@ sum(llm_d_epp_inflight_requests{namespace="<NAMESPACE>",producer_name="inflight-
 | P3 fixed busyness | fail across output-length mixes | The threshold is a per-pod count, `16`, with no capacity in the query. A replica at capacity holds `μ × E2E` requests, and E2E scales with output length, so 16 is a different fraction of capacity per mix; [step 1](../../1-static-signal-analysis.md) §1.3 gives `V` up to 31 across output lengths. Where 16 came from is not recorded in the guide; its value for any mix *needs measurement* | config, measure |
 | P4 metric type | pass | `sum(...)` is extensive, under `AverageValue` (`:51`, `:55`): `desired = ceil(total / 16)` | config |
 | P5 bounds | pass, overshoot size unknown | Not capped at the EPP: under open-loop arrivals, requests queued in vLLM keep adding to it past saturation (integrating). Only `maxReplicaCount: 8` and the scale-up policy bound the overshoot; how far it overshoots during a cold start *needs measurement* | config, measure |
-| P6 zero replicas | n/a | `minReplicaCount: 1` | config |
+| P6 zero replicas | n/a as shipped (`minReplicaCount: 1`); **fail** if set to 0 | With no model-server pod the EPP rejects each request with 503 "failed to find endpoint candidates" before scheduling (`llm-d/llm-d-router@647ca7ca:pkg/epp/requestcontrol/director.go#L362-L367`), so `PreRequest` never runs and the gauge never increments; each endpoint's series is also deleted when the endpoint goes (`producer.go#L362-L363`). The query is empty, reads 0, and the pool never wakes. `activationThreshold` is unset (0), which does not help: the value never exceeds it | config, source |
 | P7 fails visibly | fail | No `or vector(0)`, but `ignoreNullValues` is not set and defaults to `true` (the guide's `README.md:536` says so; trap [T7](../../traps.md), release not verified), and no `fallback` is set, so an empty result reads 0. The router fails open (`guides/recipes/router/base.values.yaml:18`, `failureMode: "FailOpen"`): with the EPP down the gateway keeps serving, so the pool carries load while its signal reads 0. The README's "No `fallback` is configured, so autoscaling fails visibly" (`README.md:221`) holds for scaler errors (auth), not for an empty result | config, source, measure |
 | P8 lag and noise | fail on lag; noise needs measurement | Lag: `≤ 10 (scrape) + 0 (no window) + ≤ 15 (HPA sync)`, then `scaleUp.stabilizationWindowSeconds: 300`: for scale-up the HPA uses the lowest recommendation of the last 300 s, so a rising signal is acted on ~300 s late, about `10 + 15 + 300 ≈ 325 s` after a step, before any cold start. Noise: at `R` pods one request moves the ratio by `1 / (16 R)`, but the sample-to-sample swing of an in-flight count at steady load can exceed the 10 % tolerance at small `R`; the 300 s windows then turn it into bias (scale-up takes the minimum, scale-down the maximum) | config, measure |
 | P9 measures what it claims | pass, with conditions | Counts dispatch to last token, as the role needs. T3b (negative residue after scale-in) does not apply on `main` after #3439; it applies if the EPP is pinned to `v1.0.0` or `v0.11.0`. Requests rejected before scheduling are not counted (`PreRequest` is never reached); with flow control off these are errors, not load the pool could serve. Requests that fail open around the EPP are not counted (P7). The query selects by `namespace` and `producer_name` only, so a second pool's EPP in the same namespace, or a second scrape of the same EPP, adds into the sum | source |
@@ -114,6 +116,12 @@ one replica at the SLO holds 40 concurrent long-output requests but only 8
 short-output ones, threshold 16 is `16 / 40 = 40 %` of capacity for the long mix
 (the pool runs 2.5× larger than needed) and `16 / 8 = 200 %` for the short mix
 (the pool runs at 2× its capacity while the trigger reads on target).
+
+**Failure case (P6):** a user sets `minReplicaCount: 0` to save GPUs overnight.
+After `cooldownPeriod: 300` with no traffic the pool goes to 0. The first
+morning request reaches the EPP, which answers 503 without counting it in
+`llm_d_epp_inflight_requests`; the trigger stays at 0, and every later request
+is rejected the same way. The pool stays at 0 until someone scales it by hand.
 
 **Failure case (P7):** 6 replicas serving; the EPP pod crashes or is evicted and
 stays down for more than 300 s. The gateway fails open and keeps sending traffic
@@ -178,5 +186,6 @@ while the trigger reads on target. An EPP outage of over 300 s takes the pool to
 |---|---|---|
 | P2, P5 | No change to the trigger: the overshoot past saturation is what this kind does (§1.3). Bound it with the scale-up policy from the P8 fix, and keep `maxReplicaCount` at the largest pool the workload needs | the overshoot is limited by the policy rate and the cap, not by luck |
 | P3 | Set the threshold from measurement 1, as `0.7 ×` the measured per-replica concurrency for the mix; if measurement 2 shows the mix moves, move the driver to a token-weighted offered rate divided by measured capacity | the target means the same busyness for the measured mix |
+| P6 (only with `minReplicaCount: 0`) | Add a second trigger that counts requests rejected for lack of endpoints, which the EPP records at zero replicas: on `main`, `sum(rate(llm_d_epp_request_outcome_total{namespace="<NAMESPACE>",outcome="rejected",reason="rejected-no-endpoints"}[1m]))`; on `v1.0.0` / `v0.11.0`, `sum(rate(llm_d_epp_request_error_total{namespace="<NAMESPACE>",error_code="ServiceUnavailable"}[1m]))`, which mixes every 503 cause. Keep `activationThreshold` at 0. With one or more pods it reads about 0, so the in-flight trigger still decides above zero | the first rejected request wakes the pool; requests sent during the cold start are still rejected |
 | P7 | Add `ignoreNullValues: "false"` to the trigger metadata and `fallback: {failureThreshold: 3, replicas: 1, behavior: currentReplicas}`. Not a fixed `replicas` sized for peak: an EPP that has not served yet has no series, so a static fallback would scale an idle pool to that size | an empty result becomes a scaler error, and KEDA holds the current replica count instead of reading 0 |
 | P8 | Set the scale-up window from measurements 3 and 4, well below cold start but long enough to filter the noise; if the window is shortened to damp less, bound the overshoot with a `Pods` policy sized to the largest step expected. Trade-off: the 300 s window is deliberate (the guide's comment says it damps the overshoot while new pods start), and a one-pod-per-cold-start limit alone would take 4 cold starts to go from 2 to 6 | the first pod starts well before a cold start has passed; the overshoot stays bounded by the policy |
