@@ -34,26 +34,56 @@ External metrics get none of the per-pod corrections resource
 metrics get: pods that are still starting are not set aside. The signal itself
 has to behave.
 
-**Load** below means replicas' worth of work at the SLO: arrival rate divided
-by the capacity of one replica for the current traffic mix (prompt length,
-output length, prefix sharing). It is not a token rate or a request rate.
+**Load** `λ = (λ_in, λ_out) = (q × ISL, q × OSL)` is the work clients send
+while the pool meets the SLO, in input and output tokens per second. `q` is the
+request rate at the SLO, and ISL and OSL are the mean prompt and output
+lengths. Input tokens are counted whether or not they hit the prefix cache. A
+prefill pool's load is `λ_in`, a decode pool's `λ_out`.
+
+`q` follows from the load generator's settings, not from the throughput it
+reports: that counts completed requests, so it stops at capacity under
+overload.
+
+- **Open loop**: requests arrive at a set rate, whatever the server does
+  (inference-perf `constant`, `poisson`). `q` is that rate, and the pool sees
+  it at any replica count.
+- **Closed loop**: `N` users each send their next request `Z` seconds after
+  the previous answer ends (inference-perf `concurrent`, with `Z = 0`). By
+  Little's law, `q = N / (W_SLO + Z)`, where `W_SLO = TTFT_SLO + OSL × TPOT_SLO`
+  is a request's duration at the SLO. The pool sees this rate only at the right
+  replica count: with fewer replicas answers are slower and users send less,
+  with more they send more. The measured rate is therefore not the load, and a
+  signal reading it moves with `R` even at fixed load (P2). Longer or slower
+  answers lower it too, so on prefill/decode a slow decode pool lowers what the
+  prefill pool receives.
+
+**Capacity** `μ_SLO` is the load one replica sustains at the SLO, in the same
+units. It depends on the traffic mix (prompt and output lengths, prefix
+sharing) and on what makes a replica faster without changing the load: prefix
+caching, KV-cache offloading, batching. The hit rate moves with load and with
+the replica count (KV pressure evicts prefixes, new pods start with an empty
+cache), so capacity can too. A capacity constant holds only for the mix and
+cache setup it was measured with.
+
+**Utilization** `ρ = λ / (R · μ_SLO)`, and the right replica count is
+`ceil(λ / (ρ_target · μ_SLO))`.
 
 ## 1.2 Properties of a signal
 
 A trigger is judged against the properties below. Which ones it must pass
 depends on its role (§1.3): the driver, which sets the replica count in normal
 operation, must pass all of them; guards, alarms and vetoes must pass a subset.
-Symbols: `λ` load, `R` replicas, `s` the signal,
-`M` the traffic mix, `μ_SLO` the capacity of one replica at the SLO.
+Symbols (§1.1): `λ` load, `q` request rate at the SLO, `μ_SLO` capacity,
+`ρ` utilization, `R` replicas, `s` the signal, `M` the traffic mix.
 
 | # | Property | Definition | Passes when |
 |---|---|---|---|
-| P1 | **Proportional to load** | elasticity `ε` of `s` with respect to `λ`, over `[0.2, 1.0]·μ_SLO` | `ε ≈ 1`: double the load, double the signal. No dead band (`ε ≈ 0`) and no explosion (`ε ≫ 1`) |
-| P2 | **Coupled to actuation** | elasticity `η` of the per-pod signal with respect to `R`, at fixed `λ` | `η = −1`: adding a pod spreads the same total over more pods. The total `U` does not change with `R` |
-| P3 | **Target means a fixed busyness** | mix sensitivity `V`: for each traffic mix `M`, read the signal when one replica is exactly at capacity for that mix; `V` is the largest reading divided by the smallest | `V ≈ 1`: one threshold is the same fraction of capacity for every mix, and it leaves spare room for bursts and cold starts |
+| P1 | **Proportional to load** | elasticity `ε` of `s` with respect to `λ`, at fixed capacity, over `ρ` from 0.2 to 0.95 | `ε` within 0.8–1.25 between every pair of points: double the load, double the signal. No dead band (`ε ≈ 0`) and no explosion (`ε ≫ 1`) |
+| P2 | **Coupled to actuation** | elasticity `η` of the per-pod signal with respect to `R`, at fixed `λ` and capacity | `η = −1`: adding a pod spreads the same total over more pods. The total `U` does not change with `R` |
+| P3 | **Target means a fixed busyness** | mix sensitivity `V`: for each traffic mix `M` and cache hit rate, read the signal when one replica is exactly at capacity; `V` is the largest reading divided by the smallest | `V ≈ 1`: one threshold is the same fraction of capacity for every mix, and it leaves spare room for bursts and cold starts |
 | P4 | **Metric type matches aggregation** | extensive (`sum`, grows with `R` at fixed per-pod load) or intensive (`max`, `avg`, ratio, quantile) | extensive → `AverageValue`; intensive → `Value`; an absolute replica count from `scalingModifiers` → `AverageValue`, target `1` |
-| P5 | **Bounded the right way** | *capped*: saturation point `λ_sat`, the lowest load at which `ε` drops below 0.1 (the signal stops responding). *Integrating*: the signal keeps growing while load exceeds supply | capped: `λ_sat > μ_SLO`, or the cap is the binding resource and `T < s_max / 1.1`. Integrating: the overshoot during a cold start is bounded |
-| P6 | **Defined at zero replicas** | value when `R = 0`, `λ > 0` | informative (`s > 0`) and above `activationThreshold`, if `minReplicaCount` is 0 |
+| P5 | **Bounded the right way** | *capped*: saturation point `ρ_sat`, the lowest utilization at which `ε` drops below 0.1 (the signal stops responding). *Integrating*: the signal keeps growing while load exceeds supply | capped: `ρ_sat > 1`, or the cap is the binding resource and `T < s_max / 1.1`. Integrating: the overshoot during a cold start is bounded |
+| P6 | **Defined at zero replicas** | value when no replica is Ready (`R = 0`) and `λ > 0` | if `minReplicaCount` is 0: informative (`s > 0`) and above `activationThreshold`. Otherwise it passes; record the value anyway |
 | P7 | **Fails visibly** | value when the source is down (scrape failure, EPP restart, wrong label) | the scaler errors and `fallback` applies; it does not read 0 |
 | P8 | **Bounded lag and noise** | lag ≈ scrape interval + ½ `rate` window + `pollingInterval`; noise = sample-to-sample swing at steady load against `T` | lag well below cold start; noise well below the 10 % tolerance |
 | P9 | **Measures what it claims** | what the metric's source counts, and when: arrival, admission, first token, last token, completion | the query reads the quantity its role needs, and no known trap applies |
@@ -67,7 +97,7 @@ prefill pool whose replica reads 15,928 prompt tokens per second, serving
 8,192-token prompts.
 
 **P1, proportional to load.** `desired = ceil(U / T)` is a pod count only if
-`U` counts pods' worth of work. The test is the **elasticity** `ε` of the
+`U` grows in step with the load. The test is the **elasticity** `ε` of the
 signal with respect to load: the percentage change in the signal per 1 % change
 in load. Between two measurements `(λ₁, s₁)` and `(λ₂, s₂)`:
 
@@ -77,6 +107,14 @@ in load. Between two measurements `(λ₁, s₁)` and `(λ₂, s₂)`:
 
 `ε = 1` means proportional, `ε ≈ 0` flat (a dead band), `ε ≫ 1` an explosion.
 P2 and P5 use the same measure.
+
+The two measurements must share a capacity: the same mix and the same cache
+hit rate. With prompts that share no prefix, every input token is computed and
+capacity is fixed. With shared prefixes, record the hit rate at each load point
+(for vLLM, `vllm:prompt_tokens_by_source` and
+`vllm:prompt_tokens_cached_by_source`, if the deployed version has them). If it
+moves with load, the change in `ε` is a capacity effect, judged under P3, not a
+P1 failure.
 
 Compare two prefill signals as one pod's utilization rises from 50 % to 95 %, a
 factor of 1.9. For the backlog,
@@ -92,8 +130,9 @@ grows as the queue builds. With a 1.5 s target it reads 26 % of target at half
 load (dead band) and 342 % at 95 % (explosion).
 
 **P2, coupled to actuation.** The HPA predicts the effect of its own action by
-assuming the total stays put when it adds pods. Take 40,000 prompt tokens per
-second, 2.511 pods' worth, and go from 3 pods to 4:
+assuming the total stays put when it adds pods. Take a load of 40,000 prompt
+tokens per second, `40,000 / 15,928 = 2.511` replicas' capacity, and go from 3
+pods to 4:
 
 | Signal | Per pod at 3 | Per pod at 4 | Total at 3 | Total at 4 | Desired at 4 |
 |---|---:|---:|---:|---:|---:|
@@ -102,7 +141,7 @@ second, 2.511 pods' worth, and go from 3 pods to 4:
 
 The rate's per-pod value falls by 3/4 (`η = −1`), so the ask stays at 4. The
 backlog's falls to 39 % (`η = ln(0.595 / 1.537) / ln(4 / 3) = −3.3`) because the queue drains too, so the ask
-drops to 2 pods, which cannot carry 2.511 pods' worth. The pool shrinks,
+drops to 2 pods, which cannot carry 2.511 replicas' capacity. The pool shrinks,
 congests, and scales up again: oscillation at constant load.
 
 **P3, a target that means a fixed busyness.** A threshold is only right if it
@@ -119,7 +158,15 @@ When the query or threshold divides by a per-replica capacity, the target is
 only as right as that constant. Check where it came from. An idle-replica peak,
 or a rate the pool once served, overstates the capacity a replica sustains at
 the SLO, by 1.2–6× in measurements; the pool then runs that much too small at
-"70 %". The constant's value *needs measurement*.
+"70 %". So does a constant measured with a different cache setup: with or
+without KV-cache offloading, or at another prefix hit rate. The constant's
+value *needs measurement*.
+
+A signal that counts only the prompt tokens the prefix cache misses reads
+`λ_in × (1 − hit rate)`. It follows the speed-up from caching the way dividing
+by capacity does, so its `V` across hit rates can be lower than that of a
+signal that counts every prompt token. Its divisor must then be a capacity in
+computed prompt tokens per second, not in prompt tokens sent.
 
 **P4, metric type matches aggregation.** The two types do different arithmetic,
 and each is right for one kind of query. Ask: if the pods double and each
@@ -173,12 +220,15 @@ stop it. A per-pod signal summed over Ready pods cannot run away this way,
 because pending pods export nothing.
 
 **P6, defined at zero replicas.** A pool that scales to zero needs a signal
-that reads above 0 when requests arrive and no pod runs.
+that reads above 0 when requests arrive and no pod runs. With
+`minReplicaCount` at 1 or more the pool never scales to zero, so P6 passes
+whatever the signal reads there. Record that reading anyway: it says whether
+the configuration could scale from zero if `minReplicaCount` were lowered.
 `sum(rate(vllm:request_success_total[1m]))` comes from the vLLM pods, so it
 disappears with the last pod; `ignoreNullValues: true` (the default) turns the
 missing series into 0, and the pool never wakes while requests wait at the
 gateway. A counter at the gateway or router, such as
-`envoy_cluster_upstream_rq_total`, exists with no pods. It must also clear
+`envoy_cluster_upstream_rq_total`, exists with no pods. If `minReplicaCount` is 0, it must also clear
 `activationThreshold`: KEDA wakes the pool only when the value is above it, so
 a threshold of 5 on a rate of 2 req/s leaves those requests waiting.
 
@@ -246,7 +296,7 @@ Each role must pass these properties:
 
 | Role | Must pass | Why the others do not apply |
 |---|---|---|
-| Driver | P1–P9 (P6 only if `minReplicaCount` is 0) | — |
+| Driver | P1–P9 | — |
 | Guard | P4, P5 (capped, `T < s_max / 1.1`), P8, P9 | it is not proportional by design; reading 0 on an outage is safe while the driver runs |
 | Alarm | P4, P5 (integrating, overshoot bounded by `maxReplicaCount` and `behavior`), P8, P9 | it reads 0 in normal operation by design |
 | Scale-in veto | P4 (`Value`, since a quantile is intensive), P8, P9, and it never asks for more than the current count | it holds the pool and does not size it |

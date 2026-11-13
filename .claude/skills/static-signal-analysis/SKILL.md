@@ -82,7 +82,7 @@ without its evidence is not finished.
 |---|---|---|
 | `config` | the rendered file and line, quoted | `27_keda-scaledobjects.yaml:42`: `metricType: AverageValue` |
 | `source` | `repo@commit:path#Lline`, at the deployed version, with the line quoted or paraphrased | `vllm-project/vllm@3facf82:vllm/v1/metrics/loggers.py#L537-L542`: `vllm:num_requests_waiting` is a gauge |
-| `measure` | the question to answer, phrased so step 2 can answer it | "sustained prefill tokens/s of one replica at the TTFT SLO, for the benchmark's mix" |
+| `measure` | the question to answer, phrased so step 2 can answer it | "sustained prefill tokens/s of one replica at the TTFT SLO, for the benchmark's mix and the deployed cache setup" |
 
 Also:
 
@@ -110,6 +110,7 @@ variants.
 | Scenario | `benchmark/config/scenarios/staging/<guide>/<strategy>.yaml` |
 | Backend overlay | `benchmark/config/cluster-configs/<platform>/<backend>.yaml` |
 | Rendered with | `llmdbenchmark standup --dry-run`, llm-d-benchmark@<commit>, or "by hand, defaults from 27_keda-scaledobjects.yaml.j2@<commit>" |
+| Load | <the scenario's workload profile@commit: open or closed loop, `q`, mean ISL and OSL, prefix reuse; `λ_in` and `λ_out` in tokens/s (step 1 §1.1)> |
 | Date | <YYYY-MM-DD> |
 | Verdict | **Accepted** / **Accepted with conditions** / **Rejected** |
 
