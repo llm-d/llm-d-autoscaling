@@ -98,25 +98,37 @@ For one scenario, with its step 1 verdict in hand:
    `kubectl config current-context` points to; the protocol does not switch
    contexts. Record the context name, the namespace and the cluster version in
    the verdict, and stop if the context is not one you may load.
-4. **Stand up** with the `run-benchmark` skill, keeping the scenario unchanged.
+4. **Create a new namespace** for the run, named for the scenario and the
+   date (for example `step2-kv-early-20261113`), and use it for everything
+   below (`-p <namespace>` on the benchmark CLI). Never reuse an existing
+   namespace. Cluster-scoped objects the overlay creates (such as the
+   `ClusterRoleBinding` for Thanos access) carry the namespace name, so they
+   are removed with it in step 10.
+5. **Stand up** with the `run-benchmark` skill, keeping the scenario unchanged.
    Resolve floating tags and record the image digests (a simulator image on
    `latest` has no version). Record the KEDA release.
-5. **Calibrate first** (only for `vllm-model-sim`). Drive one replica with
+6. **Calibrate first** (only for `vllm-model-sim`). Drive one replica with
    `scaledObjects` disabled or `minReplicaCount == maxReplicaCount`, step the
    load, and read the knee: the load where TTFT or the queue turns up. This is
    the simulator's `μ_SLO` for the traffic mix. Without it, the load axis of
    every later claim is undefined.
-6. **Run each claim as its own experiment.** Fixed workload shapes, one change
+7. **Run each claim as its own experiment.** Fixed workload shapes, one change
    at a time: a load sweep for P1/P2, a mix sweep for P3, a step up and a step
    down for P5/P8, a broken source for P7. Keep the load profile and seed with
    the result so it can be rerun.
-7. **Read the signals directly**, not only the replica count: the Prometheus
+8. **Read the signals directly**, not only the replica count: the Prometheus
    value of each trigger, the HPA's `kubectl describe` (current, target,
    desired per metric), and the pod count over time. A replica count alone
    cannot tell which trigger decided. Export these series as CSV into the
    verdict's data directory (§2.4) as you go; a plot is drawn only from
    captured data.
-8. **Compare to step 1** claim by claim and write the verdict (§2.4).
+9. **Compare to step 1** claim by claim and write the verdict (§2.4).
+10. **Tear down.** Once the data is exported, run the `teardown` lifecycle
+    step, delete the namespace (`kubectl delete namespace <namespace>`),
+    and delete the cluster-scoped leftovers named for it
+    (`kubectl get clusterrolebinding | grep <namespace>`). Do this also when
+    a run fails or is abandoned; confirm the namespace is gone and note it in
+    the verdict. Never delete a namespace the run did not create.
 
 Keep each run short. A claim about a static property (P4, P7, P9) needs a
 minute of steady load, not a full trace.
