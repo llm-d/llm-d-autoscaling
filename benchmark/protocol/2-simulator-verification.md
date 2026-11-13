@@ -94,25 +94,29 @@ For one scenario, with its step 1 verdict in hand:
    | P7: an empty result reads 0 | stop the source; the external metric reads 0 and `fallback` does not fire |
 
 2. **Pick the simulator** per §2.1, and check for gaps per §2.2.
-3. **Stand up** with the `run-benchmark` skill, keeping the scenario unchanged.
+3. **Use the current Kubernetes context.** The experiments run on the cluster
+   `kubectl config current-context` points to; the protocol does not switch
+   contexts. Record the context name, the namespace and the cluster version in
+   the verdict, and stop if the context is not one you may load.
+4. **Stand up** with the `run-benchmark` skill, keeping the scenario unchanged.
    Resolve floating tags and record the image digests (a simulator image on
    `latest` has no version). Record the KEDA release.
-4. **Calibrate first** (only for `vllm-model-sim`). Drive one replica with
+5. **Calibrate first** (only for `vllm-model-sim`). Drive one replica with
    `scaledObjects` disabled or `minReplicaCount == maxReplicaCount`, step the
    load, and read the knee: the load where TTFT or the queue turns up. This is
    the simulator's `μ_SLO` for the traffic mix. Without it, the load axis of
    every later claim is undefined.
-5. **Run each claim as its own experiment.** Fixed workload shapes, one change
+6. **Run each claim as its own experiment.** Fixed workload shapes, one change
    at a time: a load sweep for P1/P2, a mix sweep for P3, a step up and a step
    down for P5/P8, a broken source for P7. Keep the load profile and seed with
    the result so it can be rerun.
-6. **Read the signals directly**, not only the replica count: the Prometheus
+7. **Read the signals directly**, not only the replica count: the Prometheus
    value of each trigger, the HPA's `kubectl describe` (current, target,
    desired per metric), and the pod count over time. A replica count alone
    cannot tell which trigger decided. Export these series as CSV into the
    verdict's data directory (§2.4) as you go; a plot is drawn only from
    captured data.
-7. **Compare to step 1** claim by claim and write the verdict (§2.4).
+8. **Compare to step 1** claim by claim and write the verdict (§2.4).
 
 Keep each run short. A claim about a static property (P4, P7, P9) needs a
 minute of steady load, not a full trace.
@@ -122,6 +126,7 @@ minute of steady load, not a full trace.
 One file per scenario, next to the step 1 verdict, as
 `verdicts/<guide>/<scenario>-step2.md`. It states:
 
+- the Kubernetes context, namespace and cluster version the runs used;
 - the scenario, backend overlay, simulator and its image digest, the profile
   and whether it is tuned, KEDA release, date;
 - the calibrated knee, with the traffic mix it applies to;
