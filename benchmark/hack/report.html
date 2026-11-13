@@ -826,7 +826,8 @@ async function renderSpecDetail(specId) {
   if (!isSameSpec) {
     stageFilter = 'all';
     searchQuery = '';
-    app.innerHTML = `<a class="back-link" href="#/">← Back to specs</a><h2>${esc(specLabelOf(specId))}</h2><p class="panel-subtitle">Loading…</p>`;
+    app.innerHTML = '<a class="back-link" href="#/">← Back to specs</a><h2></h2><p class="panel-subtitle">Loading…</p>';
+    app.querySelector('h2').textContent = specLabelOf(specId);
     await ensureMeta();
     specDetailState = { id: specId, spec: META ? META.specs.find(s => s.id === specId) || null : null };
     paintSpecDetailShell(specId, specDetailState.spec);
@@ -837,25 +838,31 @@ async function renderSpecDetail(specId) {
 function paintSpecDetailShell(specId, spec) {
   const app = document.getElementById('app');
   const launchCard = spec
-    ? buildLaunchCard(specId)
+    ? buildLaunchCard()
     : META
       ? `<div class="note"><span aria-hidden="true">⚠</span><div>This spec was not found under <code>benchmark/config/specification/</code> (removed or renamed?) -- starting a new session for it is disabled. Existing sessions are still shown above.</div></div>`
       : `<div class="note"><span aria-hidden="true">⚠</span><div>Could not load <code>meta.json</code> -- starting a new session is unavailable.</div></div>`;
 
   app.innerHTML = `
     <a class="back-link" href="#/">← Back to specs</a>
-    <h2>${esc(specLabelOf(specId))} ${spec ? `<span class="badge">${esc(spec.kind)}</span>` : ''}</h2>
-    <p class="panel-subtitle">${spec ? esc(spec.path) : 'Spec file not found.'}</p>
+    <h2><span class="spec-name"></span> ${spec ? '<span class="badge"></span>' : ''}</h2>
+    <p class="panel-subtitle">${spec ? '' : 'Spec file not found.'}</p>
 
     <h3>Sessions</h3>
     <div id="spec-sessions-mount"></div>
 
     <div class="section-break">
       <h3>Start a session</h3>
-      ${launchCard}
+      <div id="launch-card-mount"></div>
     </div>
   `;
-  if (spec) wireSpecDetailLaunchHandlers(specId);
+  app.querySelector('.spec-name').textContent = specLabelOf(specId);
+  document.getElementById('launch-card-mount').innerHTML = launchCard;
+  if (spec) {
+    app.querySelector('.badge').textContent = spec.kind;
+    app.querySelector('.panel-subtitle').textContent = spec.path;
+    wireSpecDetailLaunchHandlers(specId);
+  }
 }
 
 function refreshSpecSessionsTable(specId) {
@@ -1092,7 +1099,8 @@ async function renderSessionDetail(id) {
   const session = MANIFEST.sessions.find(s => s.id === id);
   if (!session) {
     sessionDetailState = { id: null, stage: null };
-    app.innerHTML = `<a class="back-link" href="#/">← Back to specs</a><div class="empty-state">Session <code>${esc(id)}</code> not found. It may have been removed, or the dashboard hasn't refreshed yet.</div>`;
+    app.innerHTML = '<a class="back-link" href="#/">← Back to specs</a><div class="empty-state">Session <code></code> not found. It may have been removed, or the dashboard hasn\'t refreshed yet.</div>';
+    app.querySelector('code').textContent = id;
     return;
   }
 
@@ -1318,7 +1326,8 @@ function renderCompareDetail(key) {
   const [model, backend] = key.split('|');
   const sessions = (compareGroups().find(([k]) => k === key) || [null, []])[1];
   if (!sessions.length) {
-    app.innerHTML = `<a class="back-link" href="#/compare">← Back to compare</a><div class="empty-state">No comparable sessions for <code>${esc(key)}</code>.</div>`;
+    app.innerHTML = '<a class="back-link" href="#/compare">← Back to compare</a><div class="empty-state">No comparable sessions for <code></code>.</div>';
+    app.querySelector('code').textContent = key;
     return;
   }
 
@@ -1330,13 +1339,14 @@ function renderCompareDetail(key) {
 
   app.innerHTML = `
     <a class="back-link" href="#/compare">← Back to compare</a>
-    <h2>${esc(model)} on ${esc(backend)}</h2>
+    <h2></h2>
     <p class="panel-subtitle">Comparing ${strategies.length} session(s) that share this model + backend.</p>
     <div class="grid-4" id="compare-charts"></div>
     <div class="legend" id="compare-legend">${strategies.map(s => `<span class="item"><span class="swatch" style="background:${s.color}"></span>${esc(s.name)} <span style="color:var(--text-muted)">(${esc(s.session.id)})</span></span>`).join('')}</div>
     <h3>All metrics</h3>
     <div style="overflow-x:auto"><table class="data-table" id="compare-table"></table></div>
   `;
+  app.querySelector('h2').textContent = model + ' on ' + backend;
 
   const chartsDef = [
     { title: 'TTFT — P95', unit: 'ms', fmt: fmtMs, get: s => s.exp && s.exp.metrics.ttft_ms && s.exp.metrics.ttft_ms.p95 },
@@ -1427,7 +1437,7 @@ function wireHarnessWorkloadSelect(harnessSelectId, workloadSelectId) {
   populate();
 }
 
-function buildLaunchCard(specId) {
+function buildLaunchCard() {
   const ccHtml = META.cluster_configs.map(c => `<option value="${esc(c.id)}">${esc(c.id)}</option>`).join('');
   const harnessHtml = harnessSelectHtml();
 
