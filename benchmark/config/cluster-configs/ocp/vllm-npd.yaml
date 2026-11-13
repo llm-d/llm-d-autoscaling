@@ -1,0 +1,132 @@
+# BACKEND OVERLAY — real vLLM on GPU, single Deployment (no P/D), OpenShift
+# Apply with: --cluster-config benchmark/config/cluster-configs/ocp/vllm-npd.yaml
+#
+# The npd-fcoff GPU plant of llm-d-autoscaling-research task 0426 (namespace
+# eppirg on pokprod001): Qwen/Qwen3-8B bf16, ONE H100 80GB per replica, vLLM
+# v0.31.0, --max-model-len 32768 (the agentic workload needs > 8k contexts),
+# --max-num-seqs 128. Pair it with
+# scenarios/staging/optimized-baseline/{baseline,npd-fcoff}.yaml, whose
+# npdFcoff.thresholdWork (14,619) was knee-measured on exactly this plant.
+#
+# Unlike ocp/vllm.yaml (P/D, NixlConnector), this overlay serves the aggregated
+# path: no KV-transfer config, no routing sidecar, one Deployment.
+#
+# Image: pinned to the research plant's engine, upstream vLLM v0.31.0 by
+# digest. `ghcr.io/llm-d/llm-d-cuda` with `tag: auto` resolves to an older
+# llm-d build (0.3.0 at the time of writing), whose knee is not comparable to
+# the research one. The knee is a property of the engine: re-measure it
+# (knee.yaml.in) whenever this image changes.
+#
+# Merge note: dicts deep-merge, lists replace wholesale. This overlay sets
+# `keda.prometheus` (connection/auth only); `keda.scaledObjects` (the law)
+# stays in the scenario.
+#
+# KEDA PROMETHEUS AUTH (OpenShift): triggers go through the Thanos Querier
+# with bearer-token auth. llm-d-benchmark's standup creates the
+# `keda-prometheus-auth` ServiceAccount and fills the `prometheus-auth` Secret
+# with a token for it (keda.prometheus.saName, default keda-prometheus-auth);
+# the ClusterRoleBinding below grants THAT account Thanos read access. Binding
+# any other account leaves the token unauthorized: Thanos answers 403 and the
+# ScaledObject reports TriggerError.
+# User-workload monitoring must keep the `namespace` label on the vLLM and EPP
+# series (it does by default); every trigger term filters on it.
+keda:
+  prometheus:
+    baseUrl: https://thanos-querier.openshift-monitoring.svc.cluster.local
+    port: 9091
+    authMode: bearer-secret
+    secretName: prometheus-auth
+
+extraObjects:
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: allow-thanos-querier-api-access-${namespace.name}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: allow-thanos-querier-api-access
+    subjects:
+      - kind: ServiceAccount
+        name: keda-prometheus-auth
+        namespace: ${namespace.name}
+
+# GPU scheduling. Uncomment nodeSelector to pin to the research plant's GPU.
+affinity:
+  enabled: false
+  # enabled: true
+  # nodeSelector:
+  #   nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3
+
+accelerator:
+  count: 1
+  profile: auto
+  resource: auto
+
+model:
+  gpuMemoryUtilization: 0.90
+
+images:
+  # Harness image with inference-perf v0.7.0 (the npd-fcoff workloads use its
+  # per_request_fields and stage_teardown_grace_seconds).
+  benchmark:
+    repository: ghcr.io/llm-d/llm-d-benchmark
+    tag: v0.8.9
+  vllm:
+    repository: docker.io/vllm/vllm-openai
+    tag: v0.31.0@sha256:a4a4c0437bf7240089da5f08aa370c4aee17ae5290f7a3b468825ee26c4c3a6b
+
+vllmCommon:
+  volumes:
+    - name: shared-config
+      type: emptyDir
+      emptyDir: {}
+    - name: dshm
+      type: emptyDir
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
+  volumeMounts:
+    - name: shared-config
+      mountPath: /shared-config
+    - name: dshm
+      mountPath: /dev/shm
+
+decode:
+  accelerator:
+    count: 1
+  parallelism:
+    tensor: 1
+    data: 1
+    dataLocal: 1
+    workers: 1
+  resources:
+    limits:
+      memory: 64Gi
+      cpu: "8"
+    requests:
+      memory: 64Gi
+      cpu: "8"
+  initContainers:
+    - name: preprocess
+      imageKey: benchmark
+      imagePullPolicy: Always
+      command: ["set_llmdbench_environment.py", "-e", "/shared-config/llmdbench_env.sh", "-i"]
+      volumeMounts:
+        - name: shared-config
+          mountPath: /shared-config
+  vllm:
+    customCommand: |
+      ${accelerator.runtimePreamble}
+      . /shared-config/llmdbench_env.sh
+      vllm serve $MODEL_SERVE_REF \
+      --host 0.0.0.0 \
+      --served-model-name $MODEL_NAME \
+      --port $VLLM_INFERENCE_PORT \
+      --max-model-len $VLLM_MAX_MODEL_LEN \
+      --max-num-seqs 128 \
+      --gpu-memory-utilization $VLLM_ACCELERATOR_MEM_UTIL \
+      --disable-uvicorn-access-log \
+      --disable-access-log-for-endpoints=/health,/metrics,/v1/models \
+      ${accelerator.dtypeArgs} \
+      ${accelerator.executionArgs}

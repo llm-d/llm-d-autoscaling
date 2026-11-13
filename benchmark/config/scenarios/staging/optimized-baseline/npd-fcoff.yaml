@@ -1,0 +1,297 @@
+# OPTIMIZED BASELINE (single Deployment, no P/D) — KEDA experiment: npd-fcoff
+# (BACKEND-AGNOSTIC)
+#
+# Port of the `npd-fcoff` work-rate law evaluated on GPUs in
+#   llm-d-extensions/llm-d-autoscaling-research, task 0426
+#   law:      experiments/epp-input-rate/manifests/laws/npd-fcoff.yaml
+#   constants experiments/epp-input-rate/manifests/laws/constants-gpu.env
+#   findings: findings/epp-work-rate-gpu.md § npd-fcoff
+# The research plant is one vLLM Deployment behind an llm-d-router EPP + Envoy
+# with default plugins and the flow-control gate OFF — the shape of the upstream
+# `optimized-baseline` guide, so this lands as a variant of that guide's
+# staging directory. Mapping, deltas and the run protocol:
+# benchmark/config/workloads/npd-fcoff/README.md.
+#
+# WHAT IT CHANGES vs baseline.yaml (this dir)
+#   keda: baseline pins the Deployment at npdFcoff.staticReplicas (min = max)
+#         with the same trigger, so the trigger is still recorded. This variant
+#         lets the trigger drive the Deployment between npdFcoff.minReplicas and
+#         npdFcoff.maxReplicas. Nothing outside `keda:` differs.
+#
+# THE TRIGGER (carried over verbatim; only the template variables differ)
+#   offered work rate nu = (D1 + D15) x (L_p + c * L_out) work tok/s, where
+#     D1  = rate(llm_d_epp_request_total)                    admitted req/s
+#     D15 = rate(llm_d_epp_request_error_total{ServiceUnavailable})  shed req/s
+#     L_p   = rate(vllm:prefix_cache_queries_total) / rate(vllm:request_success_total)
+#     L_out = rate(vllm:generation_tokens_total)    / rate(vllm:request_success_total)
+#   `or vector(<default>)` supplies the calibrated mean lengths when the vLLM
+#   series are absent (zero pods, or idle longer than the 1 m window);
+#   clamp_min(denominator, 0.001) stops a present-but-flat success counter from
+#   turning a ratio into NaN. Per-term `or vector(0)` keeps the rate terms live:
+#   `sum(A) + sum(B)` with B absent vector-matches the whole sum to EMPTY.
+#   metricType AverageValue => desired replicas = ceil(nu / thresholdWork).
+#
+# PREREQUISITES
+#   1. npdFcoff.thresholdWork is 0.70 x the knee-measured nu_max of ONE replica
+#      (staircase of constant offered rates, A = 0.95 TTFT<=1s crossing). The
+#      value below is the research GPU plant's (Qwen3-8B bf16, 1x H100 80GB,
+#      vLLM v0.31.0, --max-model-len 32768). It is a property of the plant:
+#      re-measure it on yours with the `knee` workload before trusting a result,
+#      then override it: --set npdFcoff.thresholdWork=<0.7 x nu_max>.
+#   2. EPP and vLLM metrics must reach the Prometheus KEDA queries, with the
+#      target `namespace` label on both (Prometheus Operator PodMonitor /
+#      ServiceMonitor add it; a hand-written scrape config must relabel it, or
+#      every term reads empty and the trigger silently reads 0).
+#   3. On OpenShift, KEDA reaches Thanos with bearer auth — connection and
+#      Secret come from the cluster-config overlay, not from this file.
+#
+# This scenario deliberately contains NO backend-specific settings (image,
+# accelerator, resources, vLLM command). Pick a backend with --cluster-config:
+#   benchmark/config/cluster-configs/k8s/model-sim-qwen3-8b-npd.yaml  (kind, CPU)
+#   benchmark/config/cluster-configs/ocp/vllm-npd.yaml                (GPU)
+#
+# Merge note: the harness deep-merges dicts but REPLACES lists wholesale. The
+# scaling strategy (keda) lives here because its scaleTargetRef is a topology
+# concern; backend overlays must not set `keda`.
+
+scenario:
+  - name: "optimized-baseline"
+
+    # =========================================================================
+    # NPD-FCOFF CONSTANTS — referenced by the KEDA block below via
+    # ${npdFcoff.*}. Kept out of `keda:` so a run can override one number:
+    #   --set npdFcoff.thresholdWork=9000
+    # =========================================================================
+    npdFcoff:
+      # Work tok/s per replica: 0.70 x nu_max, nu_max = 20,884 work tok/s
+      # (research raw/knee: C_P = 2.42 req/s of 8192:128 x 8,614.4 work tok/req).
+      thresholdWork: "14619"
+      # Decode-token weight c of nu = lambda * (L_p + c * L_out). A property of
+      # the model/hardware (signal-catalog §1.5 fit), not of the workload.
+      cW: "3.3"
+      # Mean prompt / output length used only while the vLLM ratio series are
+      # absent. A per-workload calibration input (8192:128 is the knee mix).
+      lpDef: "8192"
+      loutDef: "128"
+      minReplicas: 1
+      maxReplicas: 6
+      # Replica count baseline.yaml pins (the research static baseline used the
+      # autoscaled peak, 4). Unused by this variant; kept so both files carry
+      # the same constants.
+      staticReplicas: 4
+
+    # =========================================================================
+    # KUSTOMIZE DEPLOY METHOD — disabled; deploying via modelservice below
+    # =========================================================================
+    kustomize:
+      enabled: false
+      guideName: "optimized-baseline"
+      repoPath: ""
+      repoRef: "main"
+      gaieVersion: ""
+      acceleratorBackend: "gpu/vllm"
+      monitoring: false
+      overlayPath: ""
+      extraHelmValues: []
+      extraHelmSets: {}
+      guideVariableOverrides: {}
+      patches: []
+
+    # =========================================================================
+    # MODEL — identity only. Backend overlays set gpuMemoryUtilization.
+    # =========================================================================
+    model:
+      name: Qwen/Qwen3-8B         # served model id + harness request/tokenizer; must equal huggingfaceId
+      shortName: qwen3-8b
+      path: models/Qwen/Qwen3-8B
+      huggingfaceId: Qwen/Qwen3-8B
+      maxModelLen: 32768          # research plant: the agentic workload needs > 8k contexts
+      size: 20Gi
+
+    # =========================================================================
+    # DEPLOYMENT METHOD
+    # =========================================================================
+    modelservice:
+      enabled: true
+
+      uriProtocol: hf
+
+      # Gateway topology — epponly: EPP + Envoy sidecar, no Gateway API objects.
+      gateway:
+        className: epponly
+
+      # No routing sidecar: it only matters for P/D, and the research plant has
+      # none (vLLM binds the service port directly).
+      routing:
+        proxy:
+          enabled: false
+
+      # EPP router — the chart's default plugin set (queue, kv-cache-utilization
+      # and prefix-cache scorers), as on the research plant. No `featureGates`
+      # block: flow control stays OFF, so overload surfaces as queueing in vLLM
+      # (and client timeouts), not as EPP 429s. 503s (D15) only occur when the
+      # pool has no ready endpoint.
+      router:
+        epp:
+          replicas: 1
+          resources:
+            requests:
+              cpu: "100m"
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+        proxy:
+          resources:
+            requests:
+              cpu: "50m"
+              memory: 128Mi
+            limits:
+              cpu: "500m"
+              memory: 512Mi
+        monitoring:
+          # EPP ServiceMonitor; 5 s like the research plant's Prometheus, so the
+          # trigger's 1 m rate windows hold ~12 samples.
+          interval: "5s"
+          prometheus:
+            enabled: true
+
+    # =========================================================================
+    # DECODE — the single serving Deployment. Backend overlays add resources,
+    # accelerator, vllm command, initContainers, env and volumes.
+    # =========================================================================
+    decode:
+      # The run starts at one replica; KEDA owns the count once the
+      # ScaledObject exists.
+      replicas: 1
+      accelerator:
+        count: 1                  # backend overlays override (0 for CPU sims)
+      parallelism:
+        tensor: 1
+        data: 1
+        dataLocal: 1
+        workers: 1
+      extraContainerConfig:
+        ports:
+          - containerPort: 8000   # vLLM serves and exports metrics here (no routing proxy)
+            name: metrics
+            protocol: TCP
+      # The chart-level PodMonitor stays OFF: the top-level
+      # monitoring.podmonitor below already scrapes these pods, and a second one
+      # would double every vLLM counter in the trigger's sums.
+      monitoring:
+        podmonitor:
+          enabled: false
+
+    prefill:
+      enabled: false
+      replicas: 0
+
+    standalone:
+      enabled: false
+
+    monitoring:
+      podmonitor:
+        enabled: true
+      scrapeInterval: "5s"
+
+    # =========================================================================
+    # SCALING STRATEGY (KEDA) — npd-fcoff work-rate law, one ScaledObject.
+    # Query, threshold, activation and behavior are the research law's; only
+    # its envsubst variables are mapped to config references:
+    #   ${NS} -> ${namespace.name}   ${C_W} -> ${npdFcoff.cW}
+    #   ${LP_DEF} -> ${npdFcoff.lpDef}   ${LOUT_DEF} -> ${npdFcoff.loutDef}
+    #   ${THRESHOLD_WORK} -> ${npdFcoff.thresholdWork}
+    # pollingInterval is left unset (KEDA default 30 s), as in the research SO.
+    # =========================================================================
+    keda:
+      enabled: true
+      namespace: ""               # defaults to deploy namespace (first slot of `-p`)
+      prometheus:
+        baseUrl: http://prometheus-operated.monitoring.svc.cluster.local
+        port: 9090
+      scaledObjects:
+      - name: npd-fcoff
+        scaleTargetRef:
+          kind: Deployment
+          name: ${model.idLabel}-decode
+        minReplicas: ${npdFcoff.minReplicas}
+        maxReplicas: ${npdFcoff.maxReplicas}
+        triggers:
+          - name: epp-offered-work-rate
+            type: prometheus
+            metricType: AverageValue
+            query: |
+              (
+                (sum(rate(llm_d_epp_request_total{namespace="${namespace.name}"}[1m])) or vector(0))
+                + (sum(rate(llm_d_epp_request_error_total{namespace="${namespace.name}",
+                                                         error_code="ServiceUnavailable"}[1m])) or vector(0))
+              )
+              *
+              (
+                ((sum(rate(vllm:prefix_cache_queries_total{namespace="${namespace.name}"}[1m]))
+                  / clamp_min(sum(rate(vllm:request_success_total{namespace="${namespace.name}"}[1m])), 0.001)
+                 ) or vector(${npdFcoff.lpDef}))
+                + ${npdFcoff.cW} *
+                ((sum(rate(vllm:generation_tokens_total{namespace="${namespace.name}"}[1m]))
+                  / clamp_min(sum(rate(vllm:request_success_total{namespace="${namespace.name}"}[1m])), 0.001)
+                 ) or vector(${npdFcoff.loutDef}))
+              )
+            threshold: "${npdFcoff.thresholdWork}"
+            activationThreshold: "0"
+        behavior:
+          scaleUp:
+            stabilizationWindowSeconds: 0
+            policies:
+              - type: Pods
+                value: 1
+                periodSeconds: 180
+          scaleDown:
+            stabilizationWindowSeconds: 300
+            policies:
+              - type: Pods
+                value: 1
+                periodSeconds: 300
+
+    # =========================================================================
+    # COMMON — shared-memory volume only. Backends that need extra volumes
+    # (plugins, model config) add them under decode in their overlay.
+    # =========================================================================
+    vllmCommon:
+      shmMemory: 500Mi
+      volumes:
+        - name: dshm
+          type: emptyDir
+          emptyDir:
+            medium: Memory
+            sizeLimit: 500Mi
+      volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+
+    storage:
+      workloadPvc:
+        accessModes:
+          - ReadWriteMany
+        storageClassName: auto
+      modelPvc:
+        size: 20Gi
+        accessModes:
+          - ReadWriteMany
+        storageClassName: auto
+
+    timeouts:
+      controlWait: 300
+      harnessWait: 900000
+
+    workDir: "~/data/optimized-baseline-npd-fcoff"
+
+    # The npd-fcoff workloads (benchmark/config/workloads/npd-fcoff/) are passed
+    # with --workload-file-path; sanity_random.yaml is only the smoke default.
+    harness:
+      name: inference-perf
+      experimentProfile: sanity_random.yaml
+      pvcSize: 3Gi
+      resources:
+        cpu: "2"
+        memory: 4Gi
