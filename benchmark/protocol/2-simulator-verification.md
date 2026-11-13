@@ -104,6 +104,12 @@ For one scenario, with its step 1 verdict in hand:
    namespace. Cluster-scoped objects the overlay creates (such as the
    `ClusterRoleBinding` for Thanos access) carry the namespace name, so they
    are removed with it in step 10.
+   Standup needs `helm` and `helmfile` to reach the chart repositories
+   (`llm-d-incubation.github.io`, `prometheus-community.github.io`, and
+   others) with a trusted TLS chain. Behind a TLS-intercepting proxy, Go
+   tools ignore `SSL_CERT_FILE` on macOS and fail with `x509: certificate
+   signed by unknown authority`; run from a host whose trust store holds the
+   proxy's CA, or the run stops at standup.
 5. **Stand up** with the `run-benchmark` skill, keeping the scenario unchanged.
    Resolve floating tags and record the image digests (a simulator image on
    `latest` has no version). Record the KEDA release.
