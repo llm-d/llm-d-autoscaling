@@ -21,8 +21,11 @@ truth = [float(r["ground_truth_prefill_queue"]) for r in rows]
 # Empty Prometheus result -> KEDA/ignoreNullValues reads 0 (trap T7).
 trigger = [0.0 for _ in rows]
 
-W, H = 760, 420
-PAD_L, PAD_R, PAD_T, PAD_B = 70, 30, 40, 50
+W, H = 760, 460
+# Extra top padding reserves two clear rows above the plot: the title and,
+# below it, the legend -- the earlier version put both in the same 40px band
+# and they overlapped when rendered.
+PAD_L, PAD_R, PAD_T, PAD_B = 70, 30, 80, 50
 plot_w = W - PAD_L - PAD_R
 plot_h = H - PAD_T - PAD_B
 
@@ -112,17 +115,27 @@ svg.append(
     polyline(t, trigger, fill="none", stroke="#555", stroke_width="2", stroke_dasharray="6,4")
 )
 
-# Legend
-svg.append(f'<line x1="{PAD_L+10}" y1="{PAD_T-18}" x2="{PAD_L+40}" y2="{PAD_T-18}" stroke="black" stroke-width="2" />')
-svg.append(f'<text x="{PAD_L+46}" y="{PAD_T-14}" fill="black">ground-truth prefill queue (no role filter)</text>')
+# Title sits in its own row near the top of the canvas.
 svg.append(
-    f'<line x1="{PAD_L+330}" y1="{PAD_T-18}" x2="{PAD_L+360}" y2="{PAD_T-18}" '
+    f'<text x="{W/2}" y="22" text-anchor="middle" font-size="14" font-weight="bold">'
+    f'pd-disaggregation/kv-early: trigger reads 0 while the real queue grows (P9)</text>'
+)
+
+# Legend sits in its own row below the title, well clear of it, and both
+# entries are placed one above the other (rather than side by side) so
+# neither the legend nor the title ever collides with the plot's own
+# "load starts" annotation near the top-left of the axes.
+LEGEND_Y1 = 46
+LEGEND_Y2 = 64
+svg.append(f'<line x1="{PAD_L}" y1="{LEGEND_Y1}" x2="{PAD_L+30}" y2="{LEGEND_Y1}" stroke="black" stroke-width="2" />')
+svg.append(f'<text x="{PAD_L+36}" y="{LEGEND_Y1+4}" fill="black">ground-truth prefill queue (no role filter)</text>')
+svg.append(
+    f'<line x1="{PAD_L}" y1="{LEGEND_Y2}" x2="{PAD_L+30}" y2="{LEGEND_Y2}" '
     f'stroke="#555" stroke-width="2" stroke-dasharray="6,4" />'
 )
-svg.append(f'<text x="{PAD_L+366}" y="{PAD_T-14}" fill="black">KEDA trigger value (role="prefill" filter)</text>')
+svg.append(f'<text x="{PAD_L+36}" y="{LEGEND_Y2+4}" fill="black">KEDA trigger value (role="prefill" filter)</text>')
 
-# Title & axis titles
-svg.append(f'<text x="{W/2}" y="20" text-anchor="middle" font-size="14" font-weight="bold">pd-disaggregation/kv-early: trigger reads 0 while the real queue grows (P9)</text>')
+# Axis titles
 svg.append(f'<text x="{PAD_L+plot_w/2}" y="{H-8}" text-anchor="middle">time since first sample (s)</text>')
 svg.append(
     f'<text x="16" y="{PAD_T+plot_h/2}" text-anchor="middle" '

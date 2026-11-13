@@ -1,33 +1,33 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 420" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 460" font-family="Helvetica,Arial,sans-serif" font-size="12">
 <title>P9: trigger query vs. ground-truth prefill queue, kv-early</title>
 <desc>Line chart over about 4.5 minutes. The ground-truth prefill queue (sum(vllm:num_requests_waiting) read directly from the prefill pod) rises from 0 to over 3000 once load starts around 140 seconds. The ScaledObject's own trigger query, which additionally filters on role="prefill", returns an empty Prometheus result at every sample and so is plotted flat at 0 throughout, confirming step 1's P9 prediction that the role label does not exist on these series.</desc>
-<rect x="0" y="0" width="760" height="420" fill="white" />
-<line x1="70" y1="40" x2="70" y2="370" stroke="black" stroke-width="1" />
-<line x1="70" y1="370" x2="730" y2="370" stroke="black" stroke-width="1" />
-<line x1="70" y1="370.0" x2="730" y2="370.0" stroke="#ddd" stroke-width="1" />
-<text x="62" y="374.0" text-anchor="end" fill="black">0</text>
-<line x1="70" y1="287.5" x2="730" y2="287.5" stroke="#ddd" stroke-width="1" />
-<text x="62" y="291.5" text-anchor="end" fill="black">844</text>
-<line x1="70" y1="205.0" x2="730" y2="205.0" stroke="#ddd" stroke-width="1" />
-<text x="62" y="209.0" text-anchor="end" fill="black">1688</text>
-<line x1="70" y1="122.5" x2="730" y2="122.5" stroke="#ddd" stroke-width="1" />
-<text x="62" y="126.5" text-anchor="end" fill="black">2532</text>
-<line x1="70" y1="40.0" x2="730" y2="40.0" stroke="#ddd" stroke-width="1" />
-<text x="62" y="44.0" text-anchor="end" fill="black">3376</text>
-<text x="70.0" y="390" text-anchor="middle" fill="black">0s</text>
-<text x="235.0" y="390" text-anchor="middle" fill="black">65s</text>
-<text x="400.0" y="390" text-anchor="middle" fill="black">130s</text>
-<text x="565.0" y="390" text-anchor="middle" fill="black">195s</text>
-<text x="730.0" y="390" text-anchor="middle" fill="black">260s</text>
-<line x1="420.3" y1="40" x2="420.3" y2="370" stroke="#888" stroke-width="1" stroke-dasharray="4,3" />
-<text x="424.3" y="52" fill="#555">load starts</text>
-<polyline points="70.0,370.0 110.6,370.0 148.7,370.0 186.8,370.0 224.8,370.0 262.9,370.0 301.0,370.0 341.6,370.0 382.2,370.0 420.3,367.5 458.4,326.3 496.5,286.2 537.1,248.2 575.2,210.0 613.2,173.7 653.8,137.7 691.9,101.1 730.0,64.4" fill="none" stroke="black" stroke-width="2" />
-<polyline points="70.0,370.0 110.6,370.0 148.7,370.0 186.8,370.0 224.8,370.0 262.9,370.0 301.0,370.0 341.6,370.0 382.2,370.0 420.3,370.0 458.4,370.0 496.5,370.0 537.1,370.0 575.2,370.0 613.2,370.0 653.8,370.0 691.9,370.0 730.0,370.0" fill="none" stroke="#555" stroke-width="2" stroke-dasharray="6,4" />
-<line x1="80" y1="22" x2="110" y2="22" stroke="black" stroke-width="2" />
-<text x="116" y="26" fill="black">ground-truth prefill queue (no role filter)</text>
-<line x1="400" y1="22" x2="430" y2="22" stroke="#555" stroke-width="2" stroke-dasharray="6,4" />
-<text x="436" y="26" fill="black">KEDA trigger value (role="prefill" filter)</text>
-<text x="380.0" y="20" text-anchor="middle" font-size="14" font-weight="bold">pd-disaggregation/kv-early: trigger reads 0 while the real queue grows (P9)</text>
-<text x="400.0" y="412" text-anchor="middle">time since first sample (s)</text>
-<text x="16" y="205.0" text-anchor="middle" transform="rotate(-90 16 205.0)">waiting requests</text>
+<rect x="0" y="0" width="760" height="460" fill="white" />
+<line x1="70" y1="80" x2="70" y2="410" stroke="black" stroke-width="1" />
+<line x1="70" y1="410" x2="730" y2="410" stroke="black" stroke-width="1" />
+<line x1="70" y1="410.0" x2="730" y2="410.0" stroke="#ddd" stroke-width="1" />
+<text x="62" y="414.0" text-anchor="end" fill="black">0</text>
+<line x1="70" y1="327.5" x2="730" y2="327.5" stroke="#ddd" stroke-width="1" />
+<text x="62" y="331.5" text-anchor="end" fill="black">844</text>
+<line x1="70" y1="245.0" x2="730" y2="245.0" stroke="#ddd" stroke-width="1" />
+<text x="62" y="249.0" text-anchor="end" fill="black">1688</text>
+<line x1="70" y1="162.5" x2="730" y2="162.5" stroke="#ddd" stroke-width="1" />
+<text x="62" y="166.5" text-anchor="end" fill="black">2532</text>
+<line x1="70" y1="80.0" x2="730" y2="80.0" stroke="#ddd" stroke-width="1" />
+<text x="62" y="84.0" text-anchor="end" fill="black">3376</text>
+<text x="70.0" y="430" text-anchor="middle" fill="black">0s</text>
+<text x="235.0" y="430" text-anchor="middle" fill="black">65s</text>
+<text x="400.0" y="430" text-anchor="middle" fill="black">130s</text>
+<text x="565.0" y="430" text-anchor="middle" fill="black">195s</text>
+<text x="730.0" y="430" text-anchor="middle" fill="black">260s</text>
+<line x1="420.3" y1="80" x2="420.3" y2="410" stroke="#888" stroke-width="1" stroke-dasharray="4,3" />
+<text x="424.3" y="92" fill="#555">load starts</text>
+<polyline points="70.0,410.0 110.6,410.0 148.7,410.0 186.8,410.0 224.8,410.0 262.9,410.0 301.0,410.0 341.6,410.0 382.2,410.0 420.3,407.5 458.4,366.3 496.5,326.2 537.1,288.2 575.2,250.0 613.2,213.7 653.8,177.7 691.9,141.1 730.0,104.4" fill="none" stroke="black" stroke-width="2" />
+<polyline points="70.0,410.0 110.6,410.0 148.7,410.0 186.8,410.0 224.8,410.0 262.9,410.0 301.0,410.0 341.6,410.0 382.2,410.0 420.3,410.0 458.4,410.0 496.5,410.0 537.1,410.0 575.2,410.0 613.2,410.0 653.8,410.0 691.9,410.0 730.0,410.0" fill="none" stroke="#555" stroke-width="2" stroke-dasharray="6,4" />
+<text x="380.0" y="22" text-anchor="middle" font-size="14" font-weight="bold">pd-disaggregation/kv-early: trigger reads 0 while the real queue grows (P9)</text>
+<line x1="70" y1="46" x2="100" y2="46" stroke="black" stroke-width="2" />
+<text x="106" y="50" fill="black">ground-truth prefill queue (no role filter)</text>
+<line x1="70" y1="64" x2="100" y2="64" stroke="#555" stroke-width="2" stroke-dasharray="6,4" />
+<text x="106" y="68" fill="black">KEDA trigger value (role="prefill" filter)</text>
+<text x="400.0" y="452" text-anchor="middle">time since first sample (s)</text>
+<text x="16" y="245.0" text-anchor="middle" transform="rotate(-90 16 245.0)">waiting requests</text>
 </svg>
