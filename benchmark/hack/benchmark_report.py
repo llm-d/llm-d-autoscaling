@@ -1774,7 +1774,6 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
 
         spec = body.get("spec")
         cluster_config = body.get("clusterConfig")
-        namespace = body.get("namespace") or ""
         dry_run = bool(body.get("dryRun"))
 
         if spec not in specs_by_id:
@@ -1783,9 +1782,11 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         if cluster_config not in cluster_configs_by_id:
             self._send_json(400, {"error": f"Unknown cluster-config: {cluster_config!r}"})
             return
-        if not _K8S_NAMESPACE_RE.match(namespace):
+        ns_match = _K8S_NAMESPACE_RE.fullmatch(body.get("namespace") or "")
+        if not ns_match:
             self._send_json(400, {"error": "Namespace is required and must be a valid Kubernetes namespace name"})
             return
+        namespace = ns_match.group(0)
         if not meta["llmdbenchmark_bin_found"]:
             self._send_json(400, {
                 "error": f"llmdbenchmark CLI not found under {meta['llmd_benchmark_dir']} -- "
@@ -1794,9 +1795,19 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             return
 
         llmdbenchmark_bin = os.path.join(self.llmd_benchmark_dir, ".venv", "bin", "llmdbenchmark")
+        spec_path = os.path.realpath(specs_by_id[spec]["path"])
+        cc_path = os.path.realpath(cluster_configs_by_id[cluster_config]["path"])
+        spec_root = os.path.realpath(os.path.join(self.benchmark_dir, "config", "specification"))
+        cc_root = os.path.realpath(os.path.join(self.benchmark_dir, "config", "cluster-configs"))
+        if not spec_path.startswith(spec_root + os.sep) or not os.path.isfile(spec_path):
+            self._send_json(400, {"error": f"Spec path outside expected directory: {spec!r}"})
+            return
+        if not cc_path.startswith(cc_root + os.sep) or not os.path.isfile(cc_path):
+            self._send_json(400, {"error": f"Cluster-config path outside expected directory: {cluster_config!r}"})
+            return
         common_flags = [
-            "--spec", specs_by_id[spec]["path"],
-            "--cluster-config", cluster_configs_by_id[cluster_config]["path"],
+            "--spec", spec_path,
+            "--cluster-config", cc_path,
             "--workspace", self.workspace,
             "-p", namespace,
         ]
@@ -1821,7 +1832,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         def spawn(argv):
             return subprocess.Popen(
                 argv, cwd=self.repo_root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True,
+                start_new_session=True, shell=False,
             )
 
         if action == "all":
