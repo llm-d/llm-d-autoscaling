@@ -9,7 +9,6 @@ Step 2 of the [evaluation protocol](../README.md), following the
 | Scenario | `benchmark/config/scenarios/staging/pd-disaggregation/kv-early.yaml` |
 | Backend overlay | `benchmark/config/cluster-configs/ocp/model-sim-qwen3-32b.yaml` |
 | Simulator | `vllm-model-sim` (real vLLM on CPU, physics latency model) |
-| Kubernetes context | `default/api-rits-roce-fmaas-res-ibm-com:6443/villard@us.ibm.com` |
 | Namespace | `step2-kv-early-20261113` |
 | Cluster version | OpenShift `4.19.19`, Kubernetes server `v1.32.9` |
 | KEDA | `2.19.0` (`openshift-keda`, `custom-metrics-autoscaler-rhel9`). **Below** the `>= 2.20` this repo's README assumes; trap T7 is unverified at this exact release — see Simulator gaps |
