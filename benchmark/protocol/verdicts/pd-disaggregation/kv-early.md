@@ -10,7 +10,8 @@ Step 1 of the [evaluation protocol](../../README.md), produced with the
 | Scenario | `benchmark/config/scenarios/staging/pd-disaggregation/kv-early.yaml` |
 | Backend overlay | `benchmark/config/cluster-configs/ocp/model-sim-qwen3-32b.yaml` (the scenario names none; this is the README's example backend) |
 | Rendered with | `llmdbenchmark standup --dry-run`, llm-d-benchmark@`bd7d768`. The Jinja plan rendered; the Helm step failed offline, so the modelservice values (`helm/ms-values.yaml`) were read before chart rendering |
-| Date | 2026-11-11 |
+| Load | `sanity_random.yaml` (llm-d-benchmark@`bd7d768`): open loop, `constant` at `q` = 1 req/s for 30 s; random prompts, mean ISL 384 and OSL 50, `ignore_eos: true`. So `λ_in = 1 × 384 = 384` and `λ_out = 1 × 50 = 50` tokens/s. Random prompts share no prefix, so capacity does not depend on a cache hit rate |
+| Date | 2026-11-11; revised 2026-11-12 for the load definition of step 1 §1.1 |
 | Verdict | **Rejected** |
 
 Rejected: no trigger is proportional to load, and every query filters on a
@@ -72,6 +73,7 @@ max(vllm:num_requests_waiting{model_name="Qwen/Qwen3-32B",role="prefill"})
 | P3 fixed busyness | fail | 20 waiting requests is a different overload for every prompt and output length; no capacity in the query | config |
 | P4 metric type | fail | `max(...)` is intensive under `AverageValue` (`:20`): the HPA computes `ceil(max / 20)` whatever the pod count | config |
 | P5 bounds | pass | integrating, but `maxReplicaCount: 4` and one pod per 180 s bound the overshoot | config |
+| P6 defined at zero | pass | `minReplicaCount: 1` (`27_keda-scaledobjects.yaml:15`). At zero pods it would read 0, so scaling from zero would not work: the gauge is exported by the prefill vLLM pods (`loggers.py#L503-L508`) and disappears with the last one, and `ignoreNullValues` defaults to true (T7) | config |
 | P7 fails visibly | fail | an empty result reads 0 (`ignoreNullValues` defaults to true, no fallback); see P9 for why it is empty | config |
 | P8 lag and noise | pass | lag `15 + 0 + 30 = 45 s` (scrape, no window, polling); one request moves it by `1 / 20 = 5 %` of the threshold | config |
 | P9 measures what it claims | fail | `role="prefill"` matches no series: vLLM `v0.27.0` labels its gauges `model_name` and `engine` only (`loggers.py#L468`), and the rendered PodMonitor values add no relabeling (`ms-values.yaml:569-571`). The chart puts `llm-d.ai/role` on the pod (`llm-d-modelservice@6965740:charts/llm-d-modelservice/templates/_helpers.tpl#L69`), but a PodMonitor copies pod labels onto series only through `relabelings` or `podTargetLabels`, and neither is set. Whether anything else in the cluster adds it *needs measurement* | source |
@@ -155,8 +157,9 @@ cycles between 2 and the overloaded count as the queue drains and refills.
 1. Do the vLLM series carry a `role` label on the target cluster? Run
    `count by (role) (vllm:num_requests_waiting{model_name="Qwen/Qwen3-32B"})`
    against the Thanos querier. Needed by P9 and P7 of all four triggers.
-2. Per-replica capacity of each role at the TTFT and ITL SLOs for the
-   benchmark's mix. Needed to size a proportional driver (fix 3).
+2. Per-replica capacity `μ_SLO` of each role at the TTFT and ITL SLOs, for the
+   benchmark's mix and cache setup: prefill in prompt tokens/s, decode in
+   output tokens/s. Needed to size a proportional driver (fix 3).
 3. KV-cache usage of each role at that capacity. Needed to tell whether 0.80
    guards the binding resource (KV P5, decode note).
 4. Cold start of a prefill and of a decode pod. Needed to judge the 45 s lag
@@ -169,6 +172,6 @@ cycles between 2 and the overloaded count as the queue drains and refills.
 |---|---|---|
 | All four triggers, P9 | Select by pod name, as `token-aware.yaml:365` does: `role="prefill"` → `pod=~".*-prefill-.*"`, and the same for decode. Or add to both PodMonitors: `relabelings: [{sourceLabels: [__meta_kubernetes_pod_label_llm_d_ai_role], targetLabel: role}]` | the queries match series; P9 passes on the label |
 | KV guard, P4 | `avg(vllm:kv_cache_usage_perc{…})` with `metricType: Value`, or `sum(…)` with `AverageValue`, threshold 0.80 | the ask scales with the pod count; the guard can go past 2 |
-| No driver; queue P1–P4 | Add a driver per pool from a counter of offered work, divided by the measured per-replica capacity, with `AverageValue` and target 0.7. At the router, the offered-rate counter depends on the EPP version (trap T8): on `main`, `sum(rate(llm_d_epp_fairness_id_resolved_total[1m]))` needs no gate. On this stack's `v0.11.0`, the only option is `llm_d_epp_flow_control_requests_total` over every `outcome`, which needs the `flowControl` gate; no scenario here turns it on, and doing so makes the vLLM queue a bounded sawtooth (T4). Either way it is a request rate: weight it by tokens or divide by a capacity measured for the mix (P3) | a proportional trigger decides in normal operation |
+| No driver; queue P1–P4 | Add a driver per pool from a counter of offered work, divided by the measured per-replica capacity, with `AverageValue` and target 0.7. At the router, the offered-rate counter depends on the EPP version (trap T8): on `main`, `sum(rate(llm_d_epp_fairness_id_resolved_total[1m]))` needs no gate. On this stack's `v0.11.0`, the only option is `llm_d_epp_flow_control_requests_total` over every `outcome`, which needs the `flowControl` gate; no scenario here turns it on, and doing so makes the vLLM queue a bounded sawtooth (T4). Either way it is a request rate. On prefill, weight it by prompt tokens to read `λ_in`, and divide by `μ_SLO` in prompt tokens/s. On decode the load is `λ_out`, but output tokens are not known at arrival: a request rate × the mix's mean OSL is as mix-sensitive as a request rate (P3) | a proportional trigger decides in normal operation; a counter at the router exists with no vLLM pod, so scaling from zero could work, provided its series survives zero endpoints (check against T5) |
 | Queue as alarm | Keep it, as `sum(...)` under `AverageValue`, with a threshold that only fires past saturation | it stays out of the result in normal operation and adds pods fast under overload |
 | All drivers, P7 | Change llm-d-benchmark's `27_keda-scaledobjects.yaml.j2` to render `ignoreNullValues` and `fallback`; then set `ignoreNullValues: "false"` and a `fallback` sized for peak | an outage becomes a scaler error, not a reading of 0 |

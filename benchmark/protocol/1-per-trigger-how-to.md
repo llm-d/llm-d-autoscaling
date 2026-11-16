@@ -178,7 +178,7 @@ and put the real curve under *needs measurement*.
 ### P1, proportional to load
 
 **Question.** Does the value double when the load doubles, at a fixed traffic
-mix?
+mix and cache hit rate?
 
 **How.**
 
@@ -187,21 +187,24 @@ mix?
 2. Decide whether the time counted depends on load. Queue wait does: it is
    near 0 at low load and grows without limit near capacity. Prefill time and
    decode time depend on load only mildly.
-3. If it depends on load, compute the value at 20 %, 50 % and 80 % of capacity
-   and the elasticity between each pair (§1.2, P1).
+3. If it depends on load, compute the value at 20 %, 50 %, 80 % and 95 % of
+   capacity and the elasticity between each pair (§1.2, P1). Do not skip 95 %:
+   queue wait grows as `ρ / (1 − ρ)`, so a signal can stay in range up to 80 %
+   and explode above it, where the pool runs during a burst or a cold start.
 
 **Passes when** the time counted does not include queue wait, or `ε` stays
-within about 0.8–1.25 over 20–80 % of capacity.
+within 0.8–1.25 over 20–95 % of capacity.
 
 **Example.** The gauge counts until first token, so the time counted includes
 queue wait. With `S = 3.04 s`:
 
-| Utilization | 20 % | 50 % | 80 % |
-|---|---:|---:|---:|
-| `s` (seconds of work per pod) | 0.684 | 2.279 | 7.293 |
+| Utilization | 20 % | 50 % | 80 % | 95 % |
+|---|---:|---:|---:|---:|
+| `s` (seconds of work per pod) | 0.684 | 2.279 | 7.293 | 30.31 |
 
 `ε = ln(2.279 / 0.684) / ln(2.5) = 1.31` from 20 % to 50 %, and
-`ln(7.293 / 2.279) / ln(1.6) = 2.47` from 50 % to 80 %. **Fail**, from 50 % of
+`ln(7.293 / 2.279) / ln(1.6) = 2.47` from 50 % to 80 %, and
+`ln(30.31 / 7.293) / ln(1.1875) = 8.29` from 80 % to 95 %. **Fail**, from 50 % of
 capacity upward. *From the metric's source*; the real curve *needs
 measurement*.
 
@@ -217,7 +220,8 @@ the pod count `R` and at `R + 1`, with the §1.1 rule for the trigger's
 **Passes when** `U`, and so the desired count, is the same at `R` and `R + 1`.
 For a per-pod value this is `η = −1` (§1.2, P2).
 
-**Example.** Load of 2.5 pods' worth (6,740 prompt tokens per second):
+**Example.** Load of 6,740 prompt tokens per second,
+`6,740 / 2,696 = 2.5` replicas' capacity:
 
 | Pods `R` | 3 | 4 | 5 | 6 |
 |---|---:|---:|---:|---:|
@@ -244,11 +248,14 @@ for, and is it the same for every traffic mix the pool will see?
 3. If the query or the threshold divides by a capacity constant, find where the
    constant came from: the scenario's comments, a calibration script, a
    finding. A capacity measured on an idle replica, or a rate the pool once
-   served, overstates what a replica sustains at the SLO.
+   served, overstates what a replica sustains at the SLO. Note the cache setup
+   it was measured with (prefix hit rate, KV-cache offloading on or off), and
+   whether it counts prompt tokens sent or only those the cache misses.
 
 **Passes when** the utilization is the same across the mix and leaves room for
 bursts (70 % leaves 43 %), and the constant is a capacity measured at the SLO
-on the deployed stack. The constant's value always *needs measurement*.
+on the deployed stack, with the deployed cache setup, in the same tokens the
+query counts. The constant's value always *needs measurement*.
 
 **Example.** `s(ρ) = 1.5` at 37.8 % utilization for 8,192-token prompts and at
 76.1 % for 2,048-token prompts: the same threshold buys twice the busyness on
@@ -304,19 +311,30 @@ gains 0.5 s of work per second, so after a 180 s cold start the ask is
 
 ### P6, defined at zero replicas
 
-**Question.** If the pool is at zero and requests arrive, does the trigger read
-above `activationThreshold`?
+**Question.** If no replica is Ready and requests arrive, does the trigger
+still read the load? Answer it whatever `minReplicaCount` is, so the record
+says whether scaling from zero would work.
 
-**How.** Skip if `minReplicaCount` is above 0, and record "n/a, min 1". Else,
-from step 3, find the process that exports the series. A vLLM pod's series
+**How.** From step 3, find the process that exports the series, and check
+what the query does with the pool's own series gone. A vLLM pod's series
 disappear with the pod; the router's and the gateway's exist with no pods,
 unless step 3 found that the series is deleted when no endpoint exists (trap
-T5).
+T5). A join on a per-pod series, or a filter on live endpoints, also empties
+the result.
 
-**Passes when** the series exists at zero replicas and reads above
-`activationThreshold` for the smallest load that should wake the pool.
+**Passes when** `minReplicaCount` is 1 or more, whatever the query reads at
+zero. If `minReplicaCount` is 0: when the query reads above 0 at zero Ready
+replicas while load arrives, and above `activationThreshold` for the smallest
+load that should wake the pool.
 
-**Example.** `minReplicas: 1` (`token-aware.yaml:299`). **n/a.**
+**Example.** The query keeps only endpoints that also have a
+`per_endpoint_queue_size` series (`and on (target_pod)`,
+`token-aware.yaml:315`). With no prefill pod there is none, so the result is
+empty and `or vector(0)` (`:322`) makes it 0; the gauge is also only added at
+dispatch, which needs a prefill endpoint. Scaling from zero would
+not work, but `minReplicas: 1` (`:299`) keeps the pool from reaching it.
+**Pass**, with the reading at zero noted. *From the config* and *from the
+metric's source*.
 
 ### P7, fails visibly
 
@@ -391,7 +409,7 @@ For each property, record a row:
 
 | Property | Result | Evidence | Tag |
 |---|---|---|---|
-| P2 coupled to actuation | fail | at 2.5 pods' worth, `U` = 13.9 at 4 pods and 11.4 at 5; desired 10, then 8; right answer 4 | from the metric's source |
+| P2 coupled to actuation | fail | at 6,740 prompt tokens/s (2.5 replicas' capacity), `U` = 13.9 at 4 pods and 11.4 at 5; desired 10, then 8; right answer 4 | from the metric's source |
 
 The skill's report template has the full layout.
 
