@@ -101,6 +101,51 @@ hypothesis directly (`count by (job) (vllm:num_requests_waiting{pod="..."})` )
 before using a bare `sum(... pod=...)` reading as a capacity number anywhere
 else in this protocol.
 
+## Second run (2026-11-17)
+
+Same scenario, backend overlay and load profile, re-run with the
+`simulator-verification` skill in a new namespace, `step2-kv-early-20261117`,
+on a cluster with the same versions (Kubernetes `v1.32.9`, KEDA `2.19.0`). The
+rendered queries and EPP config were checked first: the triggers still filter
+on `role`, and the EPP uses the current `llm-d.ai/v1` plugin format, so the
+EPP did not crash this time. Standup created a placeholder `prometheus-auth`
+secret before the `wva-prometheus-auth` ServiceAccount existed; the
+ScaledObjects stayed `READY=False` until the secret was replaced.
+
+| Step 1 says | Observation | Outcome |
+|---|---|---|
+| P9: no series carries `role` | `count by (role, job)(vllm:num_requests_waiting{namespace="step2-kv-early-20261117"})` returns two series, one per pod, labelled by `job` only (no `role` key). `max(vllm:num_requests_waiting{model_name="Qwen/Qwen3-32B",role="prefill"})` and `max(vllm:kv_cache_usage_perc{...,role="decode"})` both return `[]` | **confirmed** |
+| Pools stay at `minReplicaCount: 1` whatever the load | `guide_pd-disaggregation_1` (45 req/s, 5000-token prompts, 250-token outputs). Over 26 samples, 15 s apart, the prefill queue (read by pod name, `max`) went from 0 to 1878 waiting requests in the 150 s after load started, while the role-filtered trigger returned an empty result at every sample. All 22 replica readings show prefill=1, decode=1, and both HPAs read `0/20` on the queue trigger throughout | **confirmed** |
+
+![Run 2: trigger reads 0 while the real queue grows](kv-early-step2/run2-pokprod-trigger-vs-queue.svg)
+
+Data: [`kv-early-step2/run2-pokprod-queue.csv`](kv-early-step2/run2-pokprod-queue.csv)
+(trigger and ground truth, from Thanos) and
+[`kv-early-step2/run2-pokprod-replicas.csv`](kv-early-step2/run2-pokprod-replicas.csv)
+(replica counts from `kubectl get deploy`, same clock). Script:
+[`kv-early-step2/plot_p9.py`](kv-early-step2/plot_p9.py).
+
+The solid line is the prefill pod's real backlog, read by pod name with no
+`role` filter. The dashed line is the ScaledObject's own `role="prefill"`
+query; it returns nothing at any sample, which `ignoreNullValues: true` turns
+into 0. The queue starts rising between the samples at 227 s and 242 s (the
+marker sits on the first non-zero sample) and grows by about 200 requests per
+15 s sample to 1878, while the trigger stays at 0 and both pools stay at one
+replica. This reproduces run 1 with a different queue slope and a shorter
+window, since the harness lost its connection about 4 minutes into the load.
+
+Observations from this run:
+
+- **One scrape job per pod.** Each pod is scraped by a single
+  `*-podmonitor` job in this namespace, so a bare `sum()` over a pod is not
+  doubled here. The run 1 dump showed a second `vllm-<model>` job for the same
+  pods. The 1.9× `sum()` caveat above is therefore specific to that
+  namespace's PodMonitors; its cause is still not established.
+- **EPP killed again.** The EPP container exited 137 about 4 minutes into the
+  load (reason `Error`, not `OOMKilled`, and no error in its log), and the
+  harness then failed to connect. The cause is not confirmed; memory is the
+  suspect given run 1.
+
 ## Simulator gaps
 
 - **KV-cache usage exceeded 1.0** (`sum(vllm:kv_cache_usage_perc{pod=...})`

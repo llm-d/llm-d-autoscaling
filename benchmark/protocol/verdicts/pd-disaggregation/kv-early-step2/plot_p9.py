@@ -9,10 +9,13 @@ line is flat at 0 for the whole run regardless of the real backlog.
 """
 import csv
 import pathlib
+import sys
 
 HERE = pathlib.Path(__file__).parent
 rows = []
-with open(HERE / "p1-p9-queue.csv") as f:
+CSV_NAME = sys.argv[1] if len(sys.argv) > 1 else "p1-p9-queue.csv"
+SVG_NAME = sys.argv[2] if len(sys.argv) > 2 else "p9-trigger-vs-queue.svg"
+with open(HERE / CSV_NAME) as f:
     for r in csv.DictReader(f):
         rows.append(r)
 
@@ -144,6 +147,6 @@ svg.append(
 
 svg.append("</svg>")
 
-out_path = HERE / "p9-trigger-vs-queue.svg"
+out_path = HERE / SVG_NAME
 out_path.write_text("\n".join(svg))
 print(f"wrote {out_path}")
