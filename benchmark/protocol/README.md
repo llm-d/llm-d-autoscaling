@@ -19,5 +19,7 @@ Step 1 has three supporting documents:
 - the [`static-signal-analysis` skill](../../.claude/skills/static-signal-analysis/SKILL.md),
   which runs the step end to end and writes the verdict.
 
+Step 2 is run by the [`simulator-verification` skill](../../.claude/skills/simulator-verification/SKILL.md).
+
 Later steps (benchmark runs, efficiency against an oracle) will be
 added here.
