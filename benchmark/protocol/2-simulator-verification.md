@@ -83,24 +83,25 @@ contention on a loaded node can add latency that the model does not contain.
 
 For one scenario, with its step 1 verdict in hand:
 
-1. **List the properties to test.** Step 1's verdict is a prediction, and a
-   passing prediction can be wrong too, so test every property P1–P9 for every
-   trigger of every ScaledObject, whether step 1 marked it pass, fail, n/a or
-   *needs measurement*. A property that cannot be shown with the chosen
-   simulator is still listed, with the reason (§2.4). For each, write down the
-   observation that would show a pass and the one that would show a fail:
+1. **List the properties.** An experiment can show that a property fails; it
+   cannot prove that one passes (P1 is an example: no finite sweep shows the
+   elasticity is 1 everywhere). So test every property step 1 marked *fail*,
+   and every *needs measurement* that a run can settle. List the properties
+   step 1 marked *pass* or *n/a* in the verdict too, outcome *not verified by
+   this skill*. For each property under test, write down the observation that
+   would show the failure:
 
-   | Property | Experiment | Pass when | Fail when |
-   |---|---|---|---|
-   | P1 proportional | sweep offered load over `[0.2, 1.0]·μ_SLO`; read the signal at each level | fitted `ε ≈ 1` | `ε ≈ 0` (dead band) or `ε ≫ 1` |
-   | P2 coupled to actuation | fix the load, vary the pod count; read the per-pod signal | per-pod signal falls as `1/R` (`η ≈ −1`) | it does not move with `R` |
-   | P3 fixed busyness | repeat the sweep for several prompt/output mixes; read the signal when one replica is at capacity | reading varies by `V ≈ 1` across mixes | `V ≫ 1` |
-   | P4 metric type | with a known total, compare the HPA's `desired` to `ceil(U/T)` (`AverageValue`) or `ceil(N·U/T)` (`Value`) at several pod counts | `desired` follows the formula the aggregation needs | `desired` is capped or shrinks as pods are added |
-   | P5 bounds | step the load past capacity; read the signal and replica count | signal saturates beyond `μ_SLO` (capped), or overshoot stays bounded (integrating) | signal saturates below the SLO, or overshoot is unbounded |
-   | P6 defined at zero | only if `minReplicaCount: 0`: scale to zero, send load, read the signal | `s > 0`, above `activationThreshold` | `s = 0` or empty |
-   | P7 fails visibly | break the source (scale Prometheus or the EPP down, or use a wrong label) | the scaler errors and `fallback` applies | the external metric reads 0 and nothing fires |
-   | P8 lag and noise | step the load; at steady load read the sample-to-sample swing | lag well below cold start; noise well below 10 % of `T` | either one is not |
-   | P9 measures what it claims | read the metric against an independent count of the quantity it claims | it tracks the ground truth | it does not, or the series is absent |
+   | Property | Experiment | Fail is shown when |
+   |---|---|---|
+   | P1 proportional | sweep offered load over `[0.2, 1.0]·μ_SLO`; read the signal at each level | `ε ≈ 0` (dead band) or `ε ≫ 1` |
+   | P2 coupled to actuation | fix the load, vary the pod count; read the per-pod signal | it does not move with `R` |
+   | P3 fixed busyness | repeat the sweep for several prompt/output mixes; read the signal when one replica is at capacity | `V ≫ 1` |
+   | P4 metric type | with a known total, compare the HPA's `desired` to `ceil(U/T)` (`AverageValue`) or `ceil(N·U/T)` (`Value`) at several pod counts | `desired` is capped or shrinks as pods are added |
+   | P5 bounds | step the load past capacity; read the signal and replica count | signal saturates below the SLO, or overshoot is unbounded |
+   | P6 defined at zero | only if `minReplicaCount: 0`: scale to zero, send load, read the signal | `s = 0` or empty |
+   | P7 fails visibly | break the source (scale Prometheus or the EPP down, or use a wrong label) | the external metric reads 0 and nothing fires |
+   | P8 lag and noise | step the load; at steady load read the sample-to-sample swing | either one is not |
+   | P9 measures what it claims | read the metric against an independent count of the quantity it claims | it does not, or the series is absent |
 
 2. **Pick the simulator** per §2.1, and check for gaps per §2.2.
 3. **Use the current Kubernetes context.** The experiments run on the cluster
@@ -160,7 +161,9 @@ One file per scenario, next to the step 1 verdict, as
 - the verdict **by property**: one section per property, P1 to P9, in order,
   each with a table of one row per trigger: step 1's result, the
   observation (the numbers read from the cluster), and an outcome:
-  - **confirmed pass** or **confirmed fail**: the run agrees with step 1;
+  - **not verified by this skill**: step 1 marked it pass or n/a; the row
+    shows step 1's result and no observation;
+  - **confirmed fail**: the run shows the failure step 1 predicted;
   - **refuted**: the run contradicts step 1; step 1 and its verdict are
     corrected, and, if the cause is a metric trap, [traps.md](traps.md) is
     updated;
@@ -172,10 +175,9 @@ One file per scenario, next to the step 1 verdict, as
   that turns them into the property's number (for example `ε = ln(s₂/s₁) /
   ln(λ₂/λ₁) = 0.08`), and an SVG plot (§2.5) drawn from the exported data. A
   failure shown only by reasoning from the source or the configuration is
-  step 1's evidence, not step 2's, and stays *not confirmed*. A pass needs its
-  measured number too, but no plot;
+  step 1's evidence, not step 2's, and stays *not confirmed*;
 - **Simulator gaps**: what had to be extended, assumed, or left out (§2.2);
-- the overall result: step 1's verdict **holds** (every property's outcome
+- the overall result: step 1's verdict **holds** (every tested property's outcome
   agrees with step 1), **holds in part**, or is **withdrawn**.
 
 A configuration whose step 1 verdict holds stays rejected. One whose step 1
@@ -185,7 +187,7 @@ confirmed failure in its driver proceeds to the later steps.
 ## 2.5 Plots
 
 Every *confirmed fail* comes with an SVG plot built from data captured in
-its run (§2.4). A passing property needs its measured number but no plot. A
+its run (§2.4). A
 failure that is a single reading with no time or load dimension (a static P4
 or P9 check) is shown by the raw reading in the table plus a plot of that
 reading against its ground truth over the run, so the proof is still

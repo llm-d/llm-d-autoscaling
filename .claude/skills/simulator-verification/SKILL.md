@@ -45,13 +45,15 @@ cluster version, the KEDA release and the namespace.
 
 ## Step 1: List the properties to test
 
-Test every property P1–P9 for every trigger of every ScaledObject in the
-scenario, including the ones step 1 marked `pass`, `n/a` or `measure`. A
-passing prediction can be wrong, and a verdict that only revisits the failures
-cannot say it holds. Build the list from §2.3 item 1: per property, the
-experiment, what a pass looks like and what a fail looks like. If a property
-cannot be shown with the chosen simulator, keep it on the list and mark it
-*not reproducible here* with the reason in the verdict.
+An experiment can show that a property fails; it cannot prove that one
+passes (P1 is an example: no finite sweep shows the elasticity is 1
+everywhere). So test the properties step 1 marked `fail`, and the `measure`
+ones a run can settle, for every trigger. Build the list from §2.3 item 1: per
+property, the experiment and what a failure looks like. The properties step 1
+marked `pass` or `n/a` are not tested; they stay in the verdict as *not
+verified by this skill*. If a failing property cannot be shown with the chosen
+simulator, keep it on the list and mark it *not reproducible here* with the
+reason.
 
 Order the experiments by cost. Static checks first (a PromQL query against
 live series settles label and series claims in seconds: P7 and P9), then P4
@@ -101,7 +103,8 @@ needs a load axis (§2.3 item 6). Then, one property at a time:
 
 Follow §2.4 and §2.5. Structure the verdict by property, P1 to P9, each
 section holding a table with one row per trigger: step 1's result, the
-measured observation, and the outcome. Every property appears, passing or not.
+measured observation and the outcome. Every property appears; the ones not
+tested say *not verified by this skill*.
 
 A **confirmed fail** needs concrete empirical proof, all three of:
 
@@ -113,8 +116,7 @@ A **confirmed fail** needs concrete empirical proof, all three of:
 
 Reasoning from the source or the configuration is step 1's evidence. If the
 run did not show the failure, the outcome is *not confirmed* (or *refuted*
-when it shows the opposite), however convincing the argument. A pass carries
-its measured number too, without a plot.
+when it shows the opposite), however convincing the argument.
 
 Build each SVG from the exported CSV with a script kept beside it, in
 `verdicts/<guide>/<scenario>-step2/`. Then **render every SVG and look at it**
@@ -124,8 +126,8 @@ do not overlap each other or the data. Do not commit the PNGs. Give each plot a
 caption that states what varied, what was measured, what the plot shows and
 whether it confirms the prediction, with the deciding number.
 
-Outcomes are `confirmed pass`, `confirmed fail`, `refuted` or `not
-reproducible here`. When a run exposes something outside the properties (an
+Outcomes are `confirmed fail`, `refuted`, `not reproducible here` or
+`not verified by this skill`. When a run exposes something outside the properties (an
 unexplained scale event, a KV value above 1.0), record it as unexplained under
 *needs measurement*; do not invent an explanation.
 
@@ -144,6 +146,6 @@ say so in the verdict and give the teardown commands. Never delete a
 namespace this run did not create.
 
 Before finishing, check the verdict against §2.4: all nine properties appear
-for every trigger, each with an outcome, every confirmed fail has values,
+for every trigger, each with an outcome (untested ones say so), every confirmed fail has values,
 arithmetic and a rendered, captioned plot, the Simulator gaps section exists,
 and no cluster name appears.
