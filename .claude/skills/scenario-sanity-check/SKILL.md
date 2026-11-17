@@ -1,6 +1,6 @@
 ---
 name: scenario-sanity-check
-description: Sanity-check a benchmark scenario in this repo's benchmark/ test bed end to end — standup succeeds, every pod is Running and healthy, sending requests increases a role's replicas by 1, and stopping the requests scales it back down to its starting count (or 0). Use before trusting a new or edited scenario/staging variant/backend overlay, or when asked to "sanity check", "smoke test the autoscaling of", or "verify scaling for" a scenario. Invoke with /scenario-sanity-check [spec] [backend] [-p namespace].
+description: Sanity-check a benchmark scenario in this repo's benchmark/ test bed end to end — standup succeeds, every pod is Running and healthy, sending requests increases a role's replicas by 1, and stopping the requests scales it back down to minReplicas. Use before trusting a new or edited scenario/staging variant/backend overlay, or when asked to "sanity check", "smoke test the autoscaling of", or "verify scaling for" a scenario. Invoke with /scenario-sanity-check [spec] [backend] [-p namespace].
 ---
 
 # Scenario sanity check
@@ -14,7 +14,7 @@ order, and stops at the first failure:
 1. **Standup** — did the scenario stand up?
 2. **Health** — are all pods Running, Ready, and not restarting?
 3. **Scale up** — does load increase a scaled role's replicas by at least 1?
-4. **Scale down** — does removing load bring it back to 1 (or 0)?
+4. **Scale down** — does removing load bring it back to `minReplicas`?
 
 Use the `run-benchmark` skill for the mechanics it already documents (Steps 1–4:
 resolving inputs, putting `llmdbenchmark` on PATH, cluster preflight, dry-run;
@@ -67,7 +67,7 @@ its metric cannot pass Check 3, so fail here with the cause.
 ## Check 3 — Load increases replicas by 1
 
 Pick the scaled role(s) from `kubectl get scaledobject -n <ns>`; note each
-Deployment's starting replicas (expect `minReplicas`, 1). If a target starts
+Deployment's starting replicas (expect `minReplicas`). If a target starts
 above 1, wait for it to settle first or report the baseline.
 
 Generate load strong enough to cross the scenario's trigger thresholds (read
@@ -105,8 +105,8 @@ e.g. `vllm:num_requests_running` is 0). Then poll as above.
 
 Timeout: at least the scenario's `scaleDown.stabilizationWindowSeconds` plus
 one `periodSeconds` per pod removed, plus slack — commonly 10–15 minutes.
-PASS: the Deployment drops to 1 replica (or 0 if `minReplicas: 0` / idle
-replicas are configured). FAIL: still above 1 after the timeout; report the HPA
+PASS: the Deployment drops to the ScaledObject's `minReplicas` (read it from
+`spec.minReplicaCount`; 0 is valid). FAIL: still above it after the timeout; report the HPA
 `ScalingActive`/`AbleToScale` conditions and current metric.
 
 ## Output
