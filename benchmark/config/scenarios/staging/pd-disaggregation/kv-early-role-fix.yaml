@@ -82,7 +82,7 @@ scenario:
           pluginsConfigFile: "pd-config.yaml"
           pluginsCustomConfig:
             pd-config.yaml: |
-              apiVersion: llm-d.ai/v1alpha1
+              apiVersion: llm-d.ai/v1
               kind: EndpointPickerConfig
               plugins:
               - type: always-disagg-pd-decider
@@ -90,6 +90,7 @@ scenario:
                 parameters:
                   deciders:
                     prefill: always-disagg-pd-decider
+              - type: approx-prefix-cache-producer
               - type: prefill-filter
               - type: decode-filter
               - type: prefix-cache-scorer
