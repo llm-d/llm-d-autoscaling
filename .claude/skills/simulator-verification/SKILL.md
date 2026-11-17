@@ -64,15 +64,6 @@ Name it `step2-<scenario>-<YYYYMMDD>`; never reuse one. Pass the same
 `--spec`, `--cluster-config`, `--workspace benchmark/results` and `-p` to
 every command. The CLI expects `../llm-d-benchmark` next to the repository.
 
-Known failures, in the order they appear:
-
-| Symptom | Cause | What to do |
-|---|---|---|
-| `x509: certificate signed by unknown authority` from `helm repo add` | the shell's TLS-intercepting proxy; Go tools ignore `SSL_CERT_FILE` on macOS | do not unset the proxy or shim `helm` from the sandbox; give the user the exact command to run in their own shell |
-| EPP `CrashLoopBackOff`, `plugin type '…' is not registered` | scenario's EPP config older than the router image | fix the scenario's `pd-config.yaml` to the image's plugin set; check upstream's guide for the current form |
-| ScaledObjects `READY=False`, HPA `<unknown>`, KEDA log `403` | the overlay's `prometheus-auth` Secret holds a token for a ServiceAccount that standup recreated | the user recreates the token and Secret (mint a token, copy the CA, `kubectl create secret generic prometheus-auth`); repeat after every standup |
-| EPP `OOMKilled` after several minutes of overload | 1 Gi default limit | keep load windows short, record it under Simulator gaps |
-
 Gate on the run-benchmark skill's ScaledObject check before any load: every
 ScaledObject `READY=True` and the HPA showing real values. A run against
 ScaledObjects that cannot read Prometheus measures nothing.
