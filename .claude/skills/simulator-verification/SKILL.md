@@ -1,14 +1,16 @@
 ---
 name: simulator-verification
-description: Run step 2 of this repo's autoscaling evaluation protocol (benchmark/protocol/) — prove on a real cluster, with a vLLM simulator instead of GPUs, that each failure the step 1 verdict predicted for a KEDA scenario actually shows up (or show that step 1 was wrong), and write the verdict with SVG plots drawn from captured data. Use when asked to verify, reproduce, confirm or test a step 1 / static-signal-analysis verdict on a cluster, to run a staging scenario against vllm-model-sim or llm-d-inference-sim, or to check a proposed fix to a scaling trigger. Invoke with /simulator-verification <step 1 verdict.md> [backend overlay].
+description: Run step 2 of this repo's autoscaling evaluation protocol (benchmark/protocol/) — prove on a real cluster, with a vLLM simulator instead of GPUs, that each failure the step 1 verdict predicted for a KEDA scenario actually shows up (or show that step 1 was wrong), and write the verdict with SVG plots drawn from captured data. Use when asked to verify, reproduce, confirm or test a step 1 / static-signal-analysis verdict on a cluster, to run a staging scenario against vllm-model-sim or llm-d-inference-sim, or to check a proposed fix to a scaling trigger. Invoke with /simulator-verification <step 1 verdict.md> [backend overlay] [--context <kube-context>].
 ---
 
 # Simulator verification
 
 **Arguments:** `$ARGUMENTS`: a step 1 verdict under
 `benchmark/protocol/verdicts/<guide>/<strategy>.md`, optionally a backend
-overlay under `benchmark/config/cluster-configs/`. If no overlay is given, use
-the one the verdict names.
+overlay under `benchmark/config/cluster-configs/` (if none is given, use the
+one the verdict names), and optionally `--context <kube-context>`, the
+Kubernetes context to run against. If no context is given, use the current
+one (`kubectl config current-context`).
 
 The procedure lives in the protocol, not here. Read it first and cite its
 sections instead of restating them:
@@ -23,15 +25,18 @@ sections instead of restating them:
   commands.
 
 This skill adds what the protocol cannot say in the abstract: the order to do
-things in, the gates, and the failures this stack is known to produce.
+things in and the gates.
 
 ## Step 0: Get the cluster decision from the user
 
 Everything after this writes to a cluster: namespaces, ClusterRoleBindings,
 Secrets, Deployments, load. A write succeeding does not mean the cluster is
 meant for it, so do not infer permission from `kubectl config
-current-context` and a working `kubectl create`. Ask which cluster and context
-to use, and whether it accepts experiments, before the first write. If the
+current-context` and a working `kubectl create`. Whether the context came from `--context` or is the current one, tell the
+user which it is and ask whether that cluster accepts experiments, before the
+first write. When `--context` is given, pass it to every `kubectl`/`oc`
+command (`--context`) and make sure `llmdbenchmark` extracts the same one;
+never switch the user's current context. If the
 user is not there to answer, stop after the read-only work (steps 1 and 2) and
 say what is needed.
 
