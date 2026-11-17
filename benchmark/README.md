@@ -146,6 +146,13 @@ If you cloned `llm-d-benchmark` somewhere other than the default sibling
 location, activate its venv accordingly and pass `--base-dir` so the specs can
 resolve the sibling paths.
 
+**Git worktrees:** the specs read `<repo-root>/../llm-d-benchmark`, and a
+worktree has no sibling clone. Symlink your clone next to the worktree root:
+
+```bash
+ln -s /path/to/llm-d-benchmark "$(git rev-parse --show-toplevel)/../llm-d-benchmark"
+```
+
 ### Prepare a Kubernetes cluster (local Kind, CPU backends)
 
 1. Create the cluster:
