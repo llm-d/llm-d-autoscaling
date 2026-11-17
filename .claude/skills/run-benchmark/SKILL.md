@@ -15,7 +15,7 @@ harness/workload for `run`. Anything missing is resolved in Step 1.
 The [`benchmark/`](../../../benchmark) directory is an **autoscaling test bed**
 layered on [llm-d-benchmark](https://github.com/llm-d/llm-d-benchmark). It is
 **not** wired into the Makefile — it is driven directly by the upstream
-`llmdbenchmark` CLI (installed from a sibling `../llm-d-benchmark` clone) with
+`llmdbenchmark` CLI (installed from an `llm-d-benchmark` clone next to the repo root — symlinked in worktrees) with
 two repo-local inputs:
 
 - `--spec benchmark/config/specification/{guides,staging}/<name>.yaml.j2` — a
@@ -79,7 +79,7 @@ subcommand — see Step 7.
 
 `sanity_random.yaml` (quick sanity), `guide_pd-disaggregation_1.yaml`,
 `shared_prefix_synthetic.yaml`, `chatbot_synthetic.yaml`. Profiles live in
-`../llm-d-benchmark/workload/profiles/<harness>/`; list them if the user needs
+`$ROOT/../llm-d-benchmark/workload/profiles/<harness>/`; list them if the user needs
 options. Other harnesses: `guidellm`, `vllm-benchmark`, `aiperf`.
 
 ## Workflow
@@ -103,24 +103,41 @@ Restate the resolved plan in one line before proceeding.
 
 ### Step 2 — Put `llmdbenchmark` on PATH
 
-Run everything **from the repo root**
-(`/Users/villardl/Projects/github.com/llm-d/llm-d-autoscaling`).
-The CLI comes from the sibling clone's venv:
+Run everything **from the repo root** — the directory containing `benchmark/`
+(`git rev-parse --show-toplevel`). That may be the main checkout or a git
+worktree.
+
+The specs resolve upstream files at `{{ base_dir }}/../llm-d-benchmark`, i.e. an
+`llm-d-benchmark` directory **next to the repo root**. In the main checkout
+that is a normal sibling clone. A worktree lives elsewhere, so no sibling
+exists; link the real clone in:
 
 ```bash
-source ../llm-d-benchmark/.venv/bin/activate
+ROOT=$(git rev-parse --show-toplevel)
+if [ ! -e "$ROOT/../llm-d-benchmark" ]; then
+  # Find the clone: the main checkout's sibling, or any dir the user names.
+  MAIN=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+  BENCH=$(cd "$MAIN/../llm-d-benchmark" 2>/dev/null && pwd)   # else ask the user
+  ln -s "$BENCH" "$ROOT/../llm-d-benchmark"
+fi
+```
+
+If no clone is found, ask the user for its path (or clone it, below). The
+symlink sits outside the repo, so it is never committed.
+
+The CLI comes from that clone's venv:
+
+```bash
+source "$ROOT/../llm-d-benchmark/.venv/bin/activate"
 llmdbenchmark --version
 ```
 
-If that fails: the sibling clone or its venv is missing. Per `benchmark/README.md`:
+If that fails: the clone or its venv is missing. Per `benchmark/README.md`:
 
 ```bash
-git clone https://github.com/llm-d/llm-d-benchmark.git ../llm-d-benchmark
-cd ../llm-d-benchmark && ./install.sh && cd -
+git clone https://github.com/llm-d/llm-d-benchmark.git "$ROOT/../llm-d-benchmark"
+cd "$ROOT/../llm-d-benchmark" && ./install.sh && cd -
 ```
-
-(If the clone lives elsewhere, activate that venv and be ready to pass
-`--base-dir <path-to-clone>` so the spec's sibling paths resolve.)
 
 ### Step 3 — Preflight the cluster (skip for `dry-run` only)
 
@@ -306,8 +323,9 @@ in-place update).
 
 - **Same flags every phase.** A `-p` / `--spec` / `--cluster-config` /
   `--workspace` mismatch between standup and teardown orphans resources.
-- **Run from the repo root**, with the sibling clone's venv active. Nothing
-  under `benchmark/config/` is vendored — it references `../llm-d-benchmark`.
+- **Run from the repo root**, with the clone's venv active. Nothing
+  under `benchmark/config/` is vendored — it references `<repo-root>/../llm-d-benchmark`
+  (a symlink is fine in worktrees; see Step 2).
 - **`model.name`** in a scenario must equal the vLLM `--served-model-name` and
   the HuggingFace id (it is the harness's request/tokenizer id); `shortName` is
   the k8s label. Don't "fix" one without the others.
