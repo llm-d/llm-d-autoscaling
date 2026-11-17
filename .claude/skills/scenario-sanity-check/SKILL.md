@@ -1,6 +1,6 @@
 ---
 name: scenario-sanity-check
-description: Sanity-check a benchmark scenario in this repo's benchmark/ test bed end to end — standup succeeds, every pod is Running and healthy, sending requests scales a role from 1 to 2 pods, and stopping the requests scales it back to 1 (or 0). Use before trusting a new or edited scenario/staging variant/backend overlay, or when asked to "sanity check", "smoke test the autoscaling of", or "verify scaling for" a scenario. Invoke with /scenario-sanity-check [spec] [backend] [-p namespace].
+description: Sanity-check a benchmark scenario in this repo's benchmark/ test bed end to end — standup succeeds, every pod is Running and healthy, sending requests increases a role's replicas by 1, and stopping the requests scales it back down to its starting count (or 0). Use before trusting a new or edited scenario/staging variant/backend overlay, or when asked to "sanity check", "smoke test the autoscaling of", or "verify scaling for" a scenario. Invoke with /scenario-sanity-check [spec] [backend] [-p namespace].
 ---
 
 # Scenario sanity check
@@ -13,7 +13,7 @@ order, and stops at the first failure:
 
 1. **Standup** — did the scenario stand up?
 2. **Health** — are all pods Running, Ready, and not restarting?
-3. **Scale up** — does load take a scaled role from 1 to 2 replicas?
+3. **Scale up** — does load increase a scaled role's replicas by at least 1?
 4. **Scale down** — does removing load bring it back to 1 (or 0)?
 
 Use the `run-benchmark` skill for the mechanics it already documents (Steps 1–4:
@@ -64,7 +64,7 @@ Then gate on `run-benchmark` Step 7: every ScaledObject `READY=True` and its HPA
 showing real (non-`<unknown>`) metrics. A scenario whose ScaledObject cannot read
 its metric cannot pass Check 3, so fail here with the cause.
 
-## Check 3 — Load scales 1 → 2
+## Check 3 — Load increases replicas by 1
 
 Pick the scaled role(s) from `kubectl get scaledobject -n <ns>`; note each
 Deployment's starting replicas (expect `minReplicas`, 1). If a target starts
@@ -94,7 +94,7 @@ kubectl get scaledobject -n <ns>        # ACTIVE should turn True
 
 Timeout: scale-up policies can be slow (e.g. `Pods: 1` per 180s), so allow at
 least `periodSeconds` + metric scrape lag + pod startup — typically 10–15
-minutes. PASS: a scaled Deployment reaches `readyReplicas >= 2`. FAIL: it never
+minutes. PASS: a scaled Deployment reaches `readyReplicas >= start + 1`. FAIL: it never
 does; report the trigger metric value vs. threshold (query it) to tell "load too
 light" from "scaling broken", and the HPA conditions.
 
@@ -106,7 +106,7 @@ e.g. `vllm:num_requests_running` is 0). Then poll as above.
 Timeout: at least the scenario's `scaleDown.stabilizationWindowSeconds` plus
 one `periodSeconds` per pod removed, plus slack — commonly 10–15 minutes.
 PASS: the Deployment drops to 1 replica (or 0 if `minReplicas: 0` / idle
-replicas are configured). FAIL: still at ≥2 after the timeout; report the HPA
+replicas are configured). FAIL: still above 1 after the timeout; report the HPA
 `ScalingActive`/`AbleToScale` conditions and current metric.
 
 ## Output
@@ -115,7 +115,7 @@ replicas are configured). FAIL: still at ≥2 after the timeout; report the HPA
 Scenario: <spec> / <backend>   ns: <ns>   session: <dir>
 1 standup      PASS|FAIL  <evidence>
 2 pods healthy PASS|FAIL  <n pods, restarts, ScaledObjects>
-3 scale up     PASS|FAIL  <role: 1 -> N after Xm, load used>
+3 scale up     PASS|FAIL  <role: start -> start+N after Xm, load used>
 4 scale down   PASS|FAIL  <role: N -> M after Xm>
 ```
 
