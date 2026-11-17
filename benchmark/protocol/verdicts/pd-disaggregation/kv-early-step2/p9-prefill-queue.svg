@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 424" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<title>P9: the prefill queue trigger reads 0 while the real queue grows</title>
+<desc>Line chart over about 7 minutes. The prefill queue read by pod name rises from 0 to about 2970 waiting requests after load starts near 230 seconds. The ScaledObject's own query, which filters on role="prefill", returns an empty result at every sample and is plotted at 0. The threshold is 20.</desc>
+<rect x="0" y="0" width="760" height="424" fill="white" />
+<text x="380.0" y="22" text-anchor="middle" font-size="14" font-weight="bold">P9: the prefill queue trigger reads 0 while the real queue grows</text>
+<line x1="70" y1="46" x2="100" y2="46" stroke="black" stroke-width="2" />
+<text x="106" y="50">prefill queue, selected by pod name (max)</text>
+<line x1="70" y1="64" x2="100" y2="64" stroke="#555" stroke-width="2" stroke-dasharray="6,4" />
+<text x="106" y="68">vllm-queue-size trigger as rendered (role="prefill"); empty, read as 0</text>
+<line x1="70" y1="84" x2="70" y2="364" stroke="black" />
+<line x1="70" y1="364" x2="730" y2="364" stroke="black" />
+<line x1="70" y1="364.0" x2="730" y2="364.0" stroke="#ddd" />
+<text x="62" y="368.0" text-anchor="end">0</text>
+<line x1="70" y1="294.0" x2="730" y2="294.0" stroke="#ddd" />
+<text x="62" y="298.0" text-anchor="end">800</text>
+<line x1="70" y1="224.0" x2="730" y2="224.0" stroke="#ddd" />
+<text x="62" y="228.0" text-anchor="end">1600</text>
+<line x1="70" y1="154.0" x2="730" y2="154.0" stroke="#ddd" />
+<text x="62" y="158.0" text-anchor="end">2400</text>
+<line x1="70" y1="84.0" x2="730" y2="84.0" stroke="#ddd" />
+<text x="62" y="88.0" text-anchor="end">3200</text>
+<text x="70.0" y="382" text-anchor="middle">0s</text>
+<text x="235.0" y="382" text-anchor="middle">110s</text>
+<text x="400.0" y="382" text-anchor="middle">220s</text>
+<text x="565.0" y="382" text-anchor="middle">330s</text>
+<text x="730.0" y="382" text-anchor="middle">440s</text>
+<text x="16" y="224.0" text-anchor="middle" transform="rotate(-90 16 224.0)">waiting requests</text>
+<line x1="412.0" y1="84" x2="412.0" y2="364" stroke="#888" stroke-dasharray="4,3" />
+<text x="416.0" y="97" fill="#555" font-size="11">first non-zero sample</text>
+<line x1="70" y1="362.2" x2="730" y2="362.2" stroke="#000" stroke-width="1" stroke-dasharray="2,3" />
+<text x="726" y="357.2" text-anchor="end" font-size="11">threshold 20</text>
+<polyline points="70.0,364.0 94.0,364.0 116.5,364.0 139.0,364.0 161.5,364.0 184.0,364.0 206.5,364.0 229.0,364.0 253.0,364.0 275.5,364.0 298.0,364.0 320.5,364.0 343.0,364.0 365.5,364.0 388.0,364.0 412.0,350.9 434.5,334.2 457.0,316.3 479.5,300.1 502.0,280.9 524.5,264.8 547.0,245.2 571.0,228.7 593.5,209.0 616.0,193.0 638.5,174.0 661.0,157.2 683.5,137.9 706.0,121.0 730.0,104.2" fill="none" stroke="black" stroke-width="2" />
+<circle cx="70.0" cy="364.0" r="2.5" fill="black" />
+<circle cx="94.0" cy="364.0" r="2.5" fill="black" />
+<circle cx="116.5" cy="364.0" r="2.5" fill="black" />
+<circle cx="139.0" cy="364.0" r="2.5" fill="black" />
+<circle cx="161.5" cy="364.0" r="2.5" fill="black" />
+<circle cx="184.0" cy="364.0" r="2.5" fill="black" />
+<circle cx="206.5" cy="364.0" r="2.5" fill="black" />
+<circle cx="229.0" cy="364.0" r="2.5" fill="black" />
+<circle cx="253.0" cy="364.0" r="2.5" fill="black" />
+<circle cx="275.5" cy="364.0" r="2.5" fill="black" />
+<circle cx="298.0" cy="364.0" r="2.5" fill="black" />
+<circle cx="320.5" cy="364.0" r="2.5" fill="black" />
+<circle cx="343.0" cy="364.0" r="2.5" fill="black" />
+<circle cx="365.5" cy="364.0" r="2.5" fill="black" />
+<circle cx="388.0" cy="364.0" r="2.5" fill="black" />
+<circle cx="412.0" cy="350.9" r="2.5" fill="black" />
+<circle cx="434.5" cy="334.2" r="2.5" fill="black" />
+<circle cx="457.0" cy="316.3" r="2.5" fill="black" />
+<circle cx="479.5" cy="300.1" r="2.5" fill="black" />
+<circle cx="502.0" cy="280.9" r="2.5" fill="black" />
+<circle cx="524.5" cy="264.8" r="2.5" fill="black" />
+<circle cx="547.0" cy="245.2" r="2.5" fill="black" />
+<circle cx="571.0" cy="228.7" r="2.5" fill="black" />
+<circle cx="593.5" cy="209.0" r="2.5" fill="black" />
+<circle cx="616.0" cy="193.0" r="2.5" fill="black" />
+<circle cx="638.5" cy="174.0" r="2.5" fill="black" />
+<circle cx="661.0" cy="157.2" r="2.5" fill="black" />
+<circle cx="683.5" cy="137.9" r="2.5" fill="black" />
+<circle cx="706.0" cy="121.0" r="2.5" fill="black" />
+<circle cx="730.0" cy="104.2" r="2.5" fill="black" />
+<polyline points="70.0,364.0 94.0,364.0 116.5,364.0 139.0,364.0 161.5,364.0 184.0,364.0 206.5,364.0 229.0,364.0 253.0,364.0 275.5,364.0 298.0,364.0 320.5,364.0 343.0,364.0 365.5,364.0 388.0,364.0 412.0,364.0 434.5,364.0 457.0,364.0 479.5,364.0 502.0,364.0 524.5,364.0 547.0,364.0 571.0,364.0 593.5,364.0 616.0,364.0 638.5,364.0 661.0,364.0 683.5,364.0 706.0,364.0 730.0,364.0" fill="none" stroke="#555" stroke-width="2" stroke-dasharray="6,4" />
+<text x="400.0" y="414" text-anchor="middle">time since first sample (s)</text>
+</svg>

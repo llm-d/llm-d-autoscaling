@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 482" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<title>P7: no error, no fallback, no scale-out while the backlog grows</title>
+<desc>Two stacked panels over about 7 minutes sharing the time axis. Top: the prefill queue read by pod name rises from 0 to about 2970 waiting requests. Bottom: the prefill Deployment stays at 1 replica throughout, far below maxReplicaCount 4.</desc>
+<rect x="0" y="0" width="760" height="482" fill="white" />
+<text x="380.0" y="22" text-anchor="middle" font-size="14" font-weight="bold">P7: no error, no fallback, no scale-out while the backlog grows</text>
+<line x1="70" y1="46" x2="100" y2="46" stroke="black" stroke-width="2" />
+<text x="106" y="50">prefill queue, selected by pod name (max)</text>
+<line x1="70" y1="64" x2="100" y2="64" stroke="#555" stroke-width="2" stroke-dasharray="8,3" />
+<text x="106" y="68">prefill Deployment replicas (kubectl get deploy)</text>
+<line x1="70" y1="82" x2="100" y2="82" stroke="#000" stroke-width="2" stroke-dasharray="2,3" />
+<text x="106" y="86">maxReplicaCount = 4</text>
+<line x1="70" y1="112" x2="70" y2="282" stroke="black" />
+<line x1="70" y1="282" x2="730" y2="282" stroke="black" />
+<line x1="70" y1="282.0" x2="730" y2="282.0" stroke="#ddd" />
+<text x="62" y="286.0" text-anchor="end">0</text>
+<line x1="70" y1="239.5" x2="730" y2="239.5" stroke="#ddd" />
+<text x="62" y="243.5" text-anchor="end">800</text>
+<line x1="70" y1="197.0" x2="730" y2="197.0" stroke="#ddd" />
+<text x="62" y="201.0" text-anchor="end">1600</text>
+<line x1="70" y1="154.5" x2="730" y2="154.5" stroke="#ddd" />
+<text x="62" y="158.5" text-anchor="end">2400</text>
+<line x1="70" y1="112.0" x2="730" y2="112.0" stroke="#ddd" />
+<text x="62" y="116.0" text-anchor="end">3200</text>
+<text x="16" y="197.0" text-anchor="middle" transform="rotate(-90 16 197.0)">waiting requests</text>
+<line x1="70" y1="302" x2="70" y2="422" stroke="black" />
+<line x1="70" y1="422" x2="730" y2="422" stroke="black" />
+<line x1="70" y1="422.0" x2="730" y2="422.0" stroke="#ddd" />
+<text x="62" y="426.0" text-anchor="end">0</text>
+<line x1="70" y1="398.0" x2="730" y2="398.0" stroke="#ddd" />
+<text x="62" y="402.0" text-anchor="end">1</text>
+<line x1="70" y1="374.0" x2="730" y2="374.0" stroke="#ddd" />
+<text x="62" y="378.0" text-anchor="end">2</text>
+<line x1="70" y1="350.0" x2="730" y2="350.0" stroke="#ddd" />
+<text x="62" y="354.0" text-anchor="end">3</text>
+<line x1="70" y1="326.0" x2="730" y2="326.0" stroke="#ddd" />
+<text x="62" y="330.0" text-anchor="end">4</text>
+<line x1="70" y1="302.0" x2="730" y2="302.0" stroke="#ddd" />
+<text x="62" y="306.0" text-anchor="end">5</text>
+<text x="70.0" y="440" text-anchor="middle">0s</text>
+<text x="235.0" y="440" text-anchor="middle">110s</text>
+<text x="400.0" y="440" text-anchor="middle">220s</text>
+<text x="565.0" y="440" text-anchor="middle">330s</text>
+<text x="730.0" y="440" text-anchor="middle">440s</text>
+<text x="16" y="362.0" text-anchor="middle" transform="rotate(-90 16 362.0)">replicas</text>
+<line x1="412.0" y1="112" x2="412.0" y2="282" stroke="#888" stroke-dasharray="4,3" />
+<text x="416.0" y="125" fill="#555" font-size="11">first non-zero sample</text>
+<line x1="412.0" y1="302" x2="412.0" y2="422" stroke="#888" stroke-dasharray="4,3" />
+<text x="416.0" y="315" fill="#555" font-size="11"></text>
+<polyline points="70.0,282.0 94.0,282.0 116.5,282.0 139.0,282.0 161.5,282.0 184.0,282.0 206.5,282.0 229.0,282.0 253.0,282.0 275.5,282.0 298.0,282.0 320.5,282.0 343.0,282.0 365.5,282.0 388.0,282.0 412.0,274.0 434.5,263.9 457.0,253.0 479.5,243.2 502.0,231.5 524.5,221.8 547.0,209.9 571.0,199.9 593.5,187.9 616.0,178.2 638.5,166.7 661.0,156.5 683.5,144.7 706.0,134.5 730.0,124.3" fill="none" stroke="black" stroke-width="2" />
+<circle cx="70.0" cy="282.0" r="2.5" fill="black" />
+<circle cx="94.0" cy="282.0" r="2.5" fill="black" />
+<circle cx="116.5" cy="282.0" r="2.5" fill="black" />
+<circle cx="139.0" cy="282.0" r="2.5" fill="black" />
+<circle cx="161.5" cy="282.0" r="2.5" fill="black" />
+<circle cx="184.0" cy="282.0" r="2.5" fill="black" />
+<circle cx="206.5" cy="282.0" r="2.5" fill="black" />
+<circle cx="229.0" cy="282.0" r="2.5" fill="black" />
+<circle cx="253.0" cy="282.0" r="2.5" fill="black" />
+<circle cx="275.5" cy="282.0" r="2.5" fill="black" />
+<circle cx="298.0" cy="282.0" r="2.5" fill="black" />
+<circle cx="320.5" cy="282.0" r="2.5" fill="black" />
+<circle cx="343.0" cy="282.0" r="2.5" fill="black" />
+<circle cx="365.5" cy="282.0" r="2.5" fill="black" />
+<circle cx="388.0" cy="282.0" r="2.5" fill="black" />
+<circle cx="412.0" cy="274.0" r="2.5" fill="black" />
+<circle cx="434.5" cy="263.9" r="2.5" fill="black" />
+<circle cx="457.0" cy="253.0" r="2.5" fill="black" />
+<circle cx="479.5" cy="243.2" r="2.5" fill="black" />
+<circle cx="502.0" cy="231.5" r="2.5" fill="black" />
+<circle cx="524.5" cy="221.8" r="2.5" fill="black" />
+<circle cx="547.0" cy="209.9" r="2.5" fill="black" />
+<circle cx="571.0" cy="199.9" r="2.5" fill="black" />
+<circle cx="593.5" cy="187.9" r="2.5" fill="black" />
+<circle cx="616.0" cy="178.2" r="2.5" fill="black" />
+<circle cx="638.5" cy="166.7" r="2.5" fill="black" />
+<circle cx="661.0" cy="156.5" r="2.5" fill="black" />
+<circle cx="683.5" cy="144.7" r="2.5" fill="black" />
+<circle cx="706.0" cy="134.5" r="2.5" fill="black" />
+<circle cx="730.0" cy="124.3" r="2.5" fill="black" />
+<line x1="70" y1="326.0" x2="730" y2="326.0" stroke="#000" stroke-width="1" stroke-dasharray="2,3" />
+<text x="726" y="321.0" text-anchor="end" font-size="11">maxReplicaCount 4</text>
+<polyline points="70.0,398.0 173.5,398.0 202.0,398.0 232.0,398.0 259.0,398.0 302.5,398.0 328.0,398.0 361.0,398.0 395.5,398.0 445.0,398.0 487.0,398.0 517.0,398.0 545.5,398.0 577.0,398.0 616.0,398.0 644.5,398.0 670.0,398.0 728.5,398.0" fill="none" stroke="#555" stroke-width="2" stroke-dasharray="8,3" />
+<circle cx="70.0" cy="398.0" r="2.5" fill="#555" />
+<circle cx="173.5" cy="398.0" r="2.5" fill="#555" />
+<circle cx="202.0" cy="398.0" r="2.5" fill="#555" />
+<circle cx="232.0" cy="398.0" r="2.5" fill="#555" />
+<circle cx="259.0" cy="398.0" r="2.5" fill="#555" />
+<circle cx="302.5" cy="398.0" r="2.5" fill="#555" />
+<circle cx="328.0" cy="398.0" r="2.5" fill="#555" />
+<circle cx="361.0" cy="398.0" r="2.5" fill="#555" />
+<circle cx="395.5" cy="398.0" r="2.5" fill="#555" />
+<circle cx="445.0" cy="398.0" r="2.5" fill="#555" />
+<circle cx="487.0" cy="398.0" r="2.5" fill="#555" />
+<circle cx="517.0" cy="398.0" r="2.5" fill="#555" />
+<circle cx="545.5" cy="398.0" r="2.5" fill="#555" />
+<circle cx="577.0" cy="398.0" r="2.5" fill="#555" />
+<circle cx="616.0" cy="398.0" r="2.5" fill="#555" />
+<circle cx="644.5" cy="398.0" r="2.5" fill="#555" />
+<circle cx="670.0" cy="398.0" r="2.5" fill="#555" />
+<circle cx="728.5" cy="398.0" r="2.5" fill="#555" />
+<text x="400.0" y="472" text-anchor="middle">time since first sample (s)</text>
+</svg>

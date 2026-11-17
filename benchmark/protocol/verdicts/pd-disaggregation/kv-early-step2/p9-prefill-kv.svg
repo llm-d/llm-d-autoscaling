@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 424" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<title>P9: the prefill KV trigger reads 0 while KV usage passes its threshold</title>
+<desc>Line chart over about 7 minutes. Prefill KV-cache usage read by pod name rises from 0.002 to 0.92 after load starts near 230 seconds, above the 0.80 threshold. The ScaledObject's own query, which filters on role="prefill", returns an empty result at every sample and is plotted at 0.</desc>
+<rect x="0" y="0" width="760" height="424" fill="white" />
+<text x="380.0" y="22" text-anchor="middle" font-size="14" font-weight="bold">P9: the prefill KV trigger reads 0 while KV usage passes its threshold</text>
+<line x1="70" y1="46" x2="100" y2="46" stroke="black" stroke-width="2" />
+<text x="106" y="50">prefill KV usage, selected by pod name (max)</text>
+<line x1="70" y1="64" x2="100" y2="64" stroke="#555" stroke-width="2" stroke-dasharray="6,4" />
+<text x="106" y="68">vllm-kv-utilization trigger as rendered (role="prefill"); empty, read as 0</text>
+<line x1="70" y1="84" x2="70" y2="364" stroke="black" />
+<line x1="70" y1="364" x2="730" y2="364" stroke="black" />
+<line x1="70" y1="364.0" x2="730" y2="364.0" stroke="#ddd" />
+<text x="62" y="368.0" text-anchor="end">0</text>
+<line x1="70" y1="294.0" x2="730" y2="294.0" stroke="#ddd" />
+<text x="62" y="298.0" text-anchor="end">0.25</text>
+<line x1="70" y1="224.0" x2="730" y2="224.0" stroke="#ddd" />
+<text x="62" y="228.0" text-anchor="end">0.5</text>
+<line x1="70" y1="154.0" x2="730" y2="154.0" stroke="#ddd" />
+<text x="62" y="158.0" text-anchor="end">0.75</text>
+<line x1="70" y1="84.0" x2="730" y2="84.0" stroke="#ddd" />
+<text x="62" y="88.0" text-anchor="end">1</text>
+<text x="70.0" y="382" text-anchor="middle">0s</text>
+<text x="235.0" y="382" text-anchor="middle">110s</text>
+<text x="400.0" y="382" text-anchor="middle">220s</text>
+<text x="565.0" y="382" text-anchor="middle">330s</text>
+<text x="730.0" y="382" text-anchor="middle">440s</text>
+<text x="16" y="224.0" text-anchor="middle" transform="rotate(-90 16 224.0)">KV-cache usage (fraction)</text>
+<line x1="412.0" y1="84" x2="412.0" y2="364" stroke="#888" stroke-dasharray="4,3" />
+<text x="416.0" y="97" fill="#555" font-size="11">first non-zero sample</text>
+<line x1="70" y1="140.0" x2="730" y2="140.0" stroke="#000" stroke-width="1" stroke-dasharray="2,3" />
+<text x="726" y="135.0" text-anchor="end" font-size="11">threshold 0.80</text>
+<polyline points="70.0,363.4 94.0,363.4 116.5,363.4 139.0,363.4 161.5,363.4 184.0,363.4 206.5,363.4 229.0,363.4 253.0,363.4 275.5,363.4 298.0,363.4 320.5,363.4 343.0,363.4 365.5,363.4 388.0,363.4 412.0,106.2 434.5,106.2 457.0,106.2 479.5,106.2 502.0,106.2 524.5,106.2 547.0,106.2 571.0,106.2 593.5,106.2 616.0,106.2 638.5,106.2 661.0,106.2 683.5,106.2 706.0,106.2 730.0,106.2" fill="none" stroke="black" stroke-width="2" />
+<circle cx="70.0" cy="363.4" r="2.5" fill="black" />
+<circle cx="94.0" cy="363.4" r="2.5" fill="black" />
+<circle cx="116.5" cy="363.4" r="2.5" fill="black" />
+<circle cx="139.0" cy="363.4" r="2.5" fill="black" />
+<circle cx="161.5" cy="363.4" r="2.5" fill="black" />
+<circle cx="184.0" cy="363.4" r="2.5" fill="black" />
+<circle cx="206.5" cy="363.4" r="2.5" fill="black" />
+<circle cx="229.0" cy="363.4" r="2.5" fill="black" />
+<circle cx="253.0" cy="363.4" r="2.5" fill="black" />
+<circle cx="275.5" cy="363.4" r="2.5" fill="black" />
+<circle cx="298.0" cy="363.4" r="2.5" fill="black" />
+<circle cx="320.5" cy="363.4" r="2.5" fill="black" />
+<circle cx="343.0" cy="363.4" r="2.5" fill="black" />
+<circle cx="365.5" cy="363.4" r="2.5" fill="black" />
+<circle cx="388.0" cy="363.4" r="2.5" fill="black" />
+<circle cx="412.0" cy="106.2" r="2.5" fill="black" />
+<circle cx="434.5" cy="106.2" r="2.5" fill="black" />
+<circle cx="457.0" cy="106.2" r="2.5" fill="black" />
+<circle cx="479.5" cy="106.2" r="2.5" fill="black" />
+<circle cx="502.0" cy="106.2" r="2.5" fill="black" />
+<circle cx="524.5" cy="106.2" r="2.5" fill="black" />
+<circle cx="547.0" cy="106.2" r="2.5" fill="black" />
+<circle cx="571.0" cy="106.2" r="2.5" fill="black" />
+<circle cx="593.5" cy="106.2" r="2.5" fill="black" />
+<circle cx="616.0" cy="106.2" r="2.5" fill="black" />
+<circle cx="638.5" cy="106.2" r="2.5" fill="black" />
+<circle cx="661.0" cy="106.2" r="2.5" fill="black" />
+<circle cx="683.5" cy="106.2" r="2.5" fill="black" />
+<circle cx="706.0" cy="106.2" r="2.5" fill="black" />
+<circle cx="730.0" cy="106.2" r="2.5" fill="black" />
+<polyline points="70.0,364.0 94.0,364.0 116.5,364.0 139.0,364.0 161.5,364.0 184.0,364.0 206.5,364.0 229.0,364.0 253.0,364.0 275.5,364.0 298.0,364.0 320.5,364.0 343.0,364.0 365.5,364.0 388.0,364.0 412.0,364.0 434.5,364.0 457.0,364.0 479.5,364.0 502.0,364.0 524.5,364.0 547.0,364.0 571.0,364.0 593.5,364.0 616.0,364.0 638.5,364.0 661.0,364.0 683.5,364.0 706.0,364.0 730.0,364.0" fill="none" stroke="#555" stroke-width="2" stroke-dasharray="6,4" />
+<text x="400.0" y="414" text-anchor="middle">time since first sample (s)</text>
+</svg>
