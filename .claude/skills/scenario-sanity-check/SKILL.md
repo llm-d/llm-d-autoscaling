@@ -22,12 +22,49 @@ Step 5 standup; Step 7 ScaledObject checks; Step 10 teardown). Do not repeat
 them here — follow them, with the same flags on every command. Confirm
 `kubectl config current-context` with the user before the first cluster write.
 
+## Speed: patch the timings first
+
+The check must finish in minutes, not the 30+ the scenario's production timings
+need. Before Check 1, generate a fast copy of the spec and scenario (never edit
+the originals):
+
+```bash
+ROOT=$(git rev-parse --show-toplevel)
+PY="$ROOT/../llm-d-benchmark/.venv/bin/python"     # has PyYAML
+"$PY" -I .claude/skills/scenario-sanity-check/patch_scenario.py \
+  <spec.yaml.j2> benchmark/results/sanity/<ns>
+```
+
+The last line it prints is the patched spec; **use it as `--spec` for every
+command** (standup, smoketest, run, teardown) and tell the user the original
+was not touched. For each ScaledObject it sets `pollingInterval: 5`, scale-up
+policy `periodSeconds: 10` and stabilization 0, scale-down stabilization 10s
+and policy `periodSeconds: 10` (plus `cooldownPeriod: 10` when scaling to
+zero). It does not touch triggers, thresholds, min/max, or `scaleTargetRef`:
+the check must still exercise the scenario's own signal. The output dir is under
+the gitignored `benchmark/results/`.
+
+Other time sinks, in order of payoff:
+
+- **Reuse a stack.** If the scenario is already up in `<ns>` from the same
+  patched spec, skip standup; if only the original-timing ScaledObjects are
+  up, teardown and standup with the patched spec (no in-place update).
+- **Smallest backend.** Prefer a CPU sim / inference-sim backend; the model
+  download and pod startup dominate Check 2.
+- **Shrink the load run.** Use a short stage (about 60–90s) at a rate that
+  crosses the trigger threshold, not a full workload profile.
+- **Poll tightly.** 5–10s polls, and stop as soon as the condition holds.
+- **Not patchable:** pod startup/image pull, Prometheus scrape interval
+  (ServiceMonitor `interval`, 15s in these scenarios) and the cluster's HPA sync
+  period. Budget for them; a pod-level count change is typically 1–3 minutes
+  after load starts.
+
 Record each check as PASS/FAIL with the evidence (command output excerpt) and
 print the summary table at the end.
 
 ## Check 1 — Standup
 
-Dry-run first (`run-benchmark` Step 4), then:
+Dry-run first with the patched spec (`run-benchmark` Step 4), then:
 
 ```bash
 llmdbenchmark standup --spec <spec.j2> --cluster-config <backend.yaml> \
@@ -92,9 +129,8 @@ kubectl get hpa,deploy -n <ns>
 kubectl get scaledobject -n <ns>        # ACTIVE should turn True
 ```
 
-Timeout: scale-up policies can be slow (e.g. `Pods: 1` per 180s), so allow at
-least `periodSeconds` + metric scrape lag + pod startup — typically 10–15
-minutes. PASS: a scaled Deployment reaches `readyReplicas >= start + 1`. FAIL: it never
+Timeout (with patched timings): scrape lag (~15s) + polling (5s) + policy
+period (10s) + pod startup — usually 3–5 minutes; give up at 8. PASS: a scaled Deployment reaches `readyReplicas >= start + 1`. FAIL: it never
 does; report the trigger metric value vs. threshold (query it) to tell "load too
 light" from "scaling broken", and the HPA conditions.
 
@@ -103,8 +139,9 @@ light" from "scaling broken", and the HPA conditions.
 Stop the load (let the run finish or kill it; confirm requests have stopped,
 e.g. `vllm:num_requests_running` is 0). Then poll as above.
 
-Timeout: at least the scenario's `scaleDown.stabilizationWindowSeconds` plus
-one `periodSeconds` per pod removed, plus slack — commonly 10–15 minutes.
+Timeout (with patched timings): 10s stabilization + 10s per pod removed +
+scrape lag, usually 1–2 minutes; give up at 5. (With unpatched timings expect
+the original `stabilizationWindowSeconds` plus a `periodSeconds` per pod.)
 PASS: the Deployment drops to the ScaledObject's `minReplicas` (read it from
 `spec.minReplicaCount`; 0 is valid). FAIL: still above it after the timeout; report the HPA
 `ScalingActive`/`AbleToScale` conditions and current metric.
@@ -130,4 +167,7 @@ inferring a result.
 - Load must be sent through the gateway/stack endpoint (what `llmdbenchmark
   run` does), not to a single pod, or the EPP-driven metrics won't move
   correctly.
-- Don't edit the scenario to make a check pass; report the failure.
+- Only the timing patch is allowed. Never change triggers, thresholds, or
+  replica bounds to make a check pass; report the failure.
+- A pass on patched timings says the signal and wiring work, not that the
+  production timings are right.
