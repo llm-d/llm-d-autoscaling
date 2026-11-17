@@ -83,15 +83,24 @@ contention on a loaded node can add latency that the model does not contain.
 
 For one scenario, with its step 1 verdict in hand:
 
-1. **List the claims.** One row per *fail* or *needs measurement* in the
-   verdict, each with the observation that would confirm it. Examples:
+1. **List the properties to test.** Step 1's verdict is a prediction, and a
+   passing prediction can be wrong too, so test every property P1–P9 for every
+   trigger of every ScaledObject, whether step 1 marked it pass, fail, n/a or
+   *needs measurement*. A property that cannot be shown with the chosen
+   simulator is still listed, with the reason (§2.4). For each, write down the
+   observation that would show a pass and the one that would show a fail:
 
-   | Step 1 says | A run confirms it when |
-   |---|---|
-   | P9: `role="prefill"` matches no series (kv-early) | `count by (role)(vllm:num_requests_waiting{…})` is empty, and the HPA's external metric reads 0 at load |
-   | P4: `max()` under `AverageValue` caps the KV guard at 2 pods | with every pod's KV above threshold, `desired` stays at 2 for 4 pods |
-   | P1: queue is a dead band, then explosion | sweep offered load across `[0.2, 1.0]·μ_SLO`; the signal is flat, then jumps; compute `ε` |
-   | P7: an empty result reads 0 | stop the source; the external metric reads 0 and `fallback` does not fire |
+   | Property | Experiment | Pass when | Fail when |
+   |---|---|---|---|
+   | P1 proportional | sweep offered load over `[0.2, 1.0]·μ_SLO`; read the signal at each level | fitted `ε ≈ 1` | `ε ≈ 0` (dead band) or `ε ≫ 1` |
+   | P2 coupled to actuation | fix the load, vary the pod count; read the per-pod signal | per-pod signal falls as `1/R` (`η ≈ −1`) | it does not move with `R` |
+   | P3 fixed busyness | repeat the sweep for several prompt/output mixes; read the signal when one replica is at capacity | reading varies by `V ≈ 1` across mixes | `V ≫ 1` |
+   | P4 metric type | with a known total, compare the HPA's `desired` to `ceil(U/T)` (`AverageValue`) or `ceil(N·U/T)` (`Value`) at several pod counts | `desired` follows the formula the aggregation needs | `desired` is capped or shrinks as pods are added |
+   | P5 bounds | step the load past capacity; read the signal and replica count | signal saturates beyond `μ_SLO` (capped), or overshoot stays bounded (integrating) | signal saturates below the SLO, or overshoot is unbounded |
+   | P6 defined at zero | only if `minReplicaCount: 0`: scale to zero, send load, read the signal | `s > 0`, above `activationThreshold` | `s = 0` or empty |
+   | P7 fails visibly | break the source (scale Prometheus or the EPP down, or use a wrong label) | the scaler errors and `fallback` applies | the external metric reads 0 and nothing fires |
+   | P8 lag and noise | step the load; at steady load read the sample-to-sample swing | lag well below cold start; noise well below 10 % of `T` | either one is not |
+   | P9 measures what it claims | read the metric against an independent count of the quantity it claims | it tracks the ground truth | it does not, or the series is absent |
 
 2. **Pick the simulator** per §2.1, and check for gaps per §2.2.
 3. **Use the current Kubernetes context.** The experiments run on the cluster
@@ -117,8 +126,8 @@ For one scenario, with its step 1 verdict in hand:
    `scaledObjects` disabled or `minReplicaCount == maxReplicaCount`, step the
    load, and read the knee: the load where TTFT or the queue turns up. This is
    the simulator's `μ_SLO` for the traffic mix. Without it, the load axis of
-   every later claim is undefined.
-7. **Run each claim as its own experiment.** Fixed workload shapes, one change
+   every later load experiment is undefined.
+7. **Run each property as its own experiment.** Fixed workload shapes, one change
    at a time: a load sweep for P1/P2, a mix sweep for P3, a step up and a step
    down for P5/P8, a broken source for P7. Keep the load profile and seed with
    the result so it can be rerun.
@@ -128,7 +137,7 @@ For one scenario, with its step 1 verdict in hand:
    cannot tell which trigger decided. Export these series as CSV into the
    verdict's data directory (§2.4) as you go; a plot is drawn only from
    captured data.
-9. **Compare to step 1** claim by claim and write the verdict (§2.4).
+9. **Compare to step 1** property by property and write the verdict (§2.4).
 10. **Tear down.** Once the data is exported, run the `teardown` lifecycle
     step, delete the namespace (`kubectl delete namespace <namespace>`),
     and delete the cluster-scoped leftovers named for it
@@ -136,7 +145,7 @@ For one scenario, with its step 1 verdict in hand:
     a run fails or is abandoned; confirm the namespace is gone and note it in
     the verdict. Never delete a namespace the run did not create.
 
-Keep each run short. A claim about a static property (P4, P7, P9) needs a
+Keep each run short. A static property (P4, P7, P9) needs a
 minute of steady load, not a full trace.
 
 ## 2.4 Verdict
@@ -148,18 +157,26 @@ One file per scenario, next to the step 1 verdict, as
 - the scenario, backend overlay, simulator and its image digest, the profile
   and whether it is tuned, KEDA release, date;
 - the calibrated knee, with the traffic mix it applies to;
-- a table, one row per claim: step 1 prediction, observation (with the
-  metric values or HPA output that show it), and an outcome:
-  - **confirmed**: the run shows the predicted failure;
+- the verdict **by property**: one section per property, P1 to P9, in order,
+  each with a table of one row per trigger: step 1's result, the
+  observation (the numbers read from the cluster), and an outcome:
+  - **confirmed pass** or **confirmed fail**: the run agrees with step 1;
   - **refuted**: the run contradicts step 1; step 1 and its verdict are
     corrected, and, if the cause is a metric trap, [traps.md](traps.md) is
     updated;
   - **not reproducible here**: the simulator cannot show it (a gap named in
-    **Simulator gaps**); the claim stays *needs measurement* for a GPU run;
-- **one SVG plot per claim** (§2.5), after the claim's row;
+    **Simulator gaps**); the property stays *needs measurement* for a GPU run;
+- **empirical proof for every fail**: a *confirmed fail* needs the measured
+  values that show it (the query result, the HPA's current/target/desired,
+  the replica counts, with their timestamps or load levels), the arithmetic
+  that turns them into the property's number (for example `ε = ln(s₂/s₁) /
+  ln(λ₂/λ₁) = 0.08`), and an SVG plot (§2.5) drawn from the exported data. A
+  failure shown only by reasoning from the source or the configuration is
+  step 1's evidence, not step 2's, and stays *not confirmed*. A pass needs its
+  measured number too, but no plot;
 - **Simulator gaps**: what had to be extended, assumed, or left out (§2.2);
-- the overall result: step 1's verdict **holds** (all failed claims
-  confirmed), **holds in part**, or is **withdrawn**.
+- the overall result: step 1's verdict **holds** (every property's outcome
+  agrees with step 1), **holds in part**, or is **withdrawn**.
 
 A configuration whose step 1 verdict holds stays rejected. One whose step 1
 verdict is withdrawn goes back through step 1. Only a configuration with no
@@ -167,18 +184,20 @@ confirmed failure in its driver proceeds to the later steps.
 
 ## 2.5 Plots
 
-Every claim that has a time or load dimension comes with an SVG plot built
-from data captured in that claim's run. A claim without a plot is marked
-*not plotted* with the reason (for example, a static P4 arithmetic check read
-from one HPA output).
+Every *confirmed fail* comes with an SVG plot built from data captured in
+its run (§2.4). A passing property needs its measured number but no plot. A
+failure that is a single reading with no time or load dimension (a static P4
+or P9 check) is shown by the raw reading in the table plus a plot of that
+reading against its ground truth over the run, so the proof is still
+empirical.
 
 - **Data only from the run.** The plot is generated by a script from the
   exported CSV (Prometheus range queries, HPA readings, pod counts). No
   hand-drawn, modeled or illustrative curves. Keep the CSV and the script
   next to the verdict, in `verdicts/<guide>/<scenario>-step2/` as
-  `<claim>.csv`, `<claim>.svg` and `plot.py` (or equivalent), so a reader can
+  `<property>.csv`, `<property>.svg` and `plot.py` (or equivalent), so a reader can
   regenerate the plot. Embed the SVG in the verdict with a relative link.
-- **Relevant to the claim.** Plot the quantity the claim is about, against
+- **Relevant to the property.** Plot the quantity the property is about, against
   what it should follow, and mark the threshold or the expected value:
 
   | Claim | Plot |

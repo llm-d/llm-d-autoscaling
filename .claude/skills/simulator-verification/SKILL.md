@@ -43,13 +43,20 @@ say what is needed.
 Never put the context or cluster name in a committed verdict. Record the
 cluster version, the KEDA release and the namespace.
 
-## Step 1: List the claims
+## Step 1: List the properties to test
 
-From the step 1 verdict, one row per `fail` and per `measure` finding, each
-with the observation that would confirm it (§2.3 item 1). Check each claim
-for a cheaper static test first: a PromQL query against live series (for
-example `count by (role)(...)`) can confirm or refute a label claim in
-seconds, with no load.
+Test every property P1–P9 for every trigger of every ScaledObject in the
+scenario, including the ones step 1 marked `pass`, `n/a` or `measure`. A
+passing prediction can be wrong, and a verdict that only revisits the failures
+cannot say it holds. Build the list from §2.3 item 1: per property, the
+experiment, what a pass looks like and what a fail looks like. If a property
+cannot be shown with the chosen simulator, keep it on the list and mark it
+*not reproducible here* with the reason in the verdict.
+
+Order the experiments by cost. Static checks first (a PromQL query against
+live series settles label and series claims in seconds: P7 and P9), then P4
+from the HPA's arithmetic, then the load experiments (P1, P2, P3, P5, P8),
+which need the knee from step 4.
 
 Pick the simulator per §2.1. If the scenario's model has no tuned profile,
 write the Simulator gaps entry now, not after the run.
@@ -73,10 +80,10 @@ Gate on the run-benchmark skill's ScaledObject check before any load: every
 ScaledObject `READY=True` and the HPA showing real values. A run against
 ScaledObjects that cannot read Prometheus measures nothing.
 
-## Step 4: Run each claim as its own experiment
+## Step 4: Run each property as its own experiment
 
 Calibrate the knee first when the simulator is `vllm-model-sim` and the claim
-needs a load axis (§2.3 item 6). Then, one claim at a time:
+needs a load axis (§2.3 item 6). Then, one property at a time:
 
 - Run a poller inside the cluster (a short-lived pod) that queries the
   trigger's exact PromQL and a ground-truth query every 15 s, and write the
@@ -92,19 +99,35 @@ needs a load axis (§2.3 item 6). Then, one claim at a time:
 
 ## Step 5: Plot and write the verdict
 
-Follow §2.4 and §2.5. Build each SVG from the exported CSV with a script kept
-beside it, in `verdicts/<guide>/<scenario>-step2/`. Then **render every SVG
-and look at it** before committing: on macOS `qlmanage -t -s 900 -o . file.svg`
-makes a PNG to read. Check specifically that the title, legend, annotations
-and event labels do not overlap each other or the data. Do not commit the
-PNGs. Give each plot a caption that states what varied, what was measured,
-what the plot shows and whether it confirms the prediction, with the deciding
-number.
+Follow §2.4 and §2.5. Structure the verdict by property, P1 to P9, each
+section holding a table with one row per trigger: step 1's result, the
+measured observation, and the outcome. Every property appears, passing or not.
 
-Mark every claim `confirmed`, `refuted` or `not reproducible here`. When a
-run exposes something outside the claims (an unexplained scale event, a KV
-value above 1.0), record it as unexplained under *needs measurement*; do not
-invent an explanation.
+A **confirmed fail** needs concrete empirical proof, all three of:
+
+- the measured values, as read: the query result, the HPA's
+  current/target/desired, the replica counts, with load levels or timestamps;
+- the arithmetic from those values to the property's number, with the
+  scenario's own thresholds (for example `ε = ln(1878/102) / ln(…)`);
+- an SVG plot drawn from the exported CSV, with a caption.
+
+Reasoning from the source or the configuration is step 1's evidence. If the
+run did not show the failure, the outcome is *not confirmed* (or *refuted*
+when it shows the opposite), however convincing the argument. A pass carries
+its measured number too, without a plot.
+
+Build each SVG from the exported CSV with a script kept beside it, in
+`verdicts/<guide>/<scenario>-step2/`. Then **render every SVG and look at it**
+before committing: on macOS `qlmanage -t -s 900 -o . file.svg` makes a PNG to
+read. Check specifically that the title, legend, annotations and event labels
+do not overlap each other or the data. Do not commit the PNGs. Give each plot a
+caption that states what varied, what was measured, what the plot shows and
+whether it confirms the prediction, with the deciding number.
+
+Outcomes are `confirmed pass`, `confirmed fail`, `refuted` or `not
+reproducible here`. When a run exposes something outside the properties (an
+unexplained scale event, a KV value above 1.0), record it as unexplained under
+*needs measurement*; do not invent an explanation.
 
 When the claim is that a fix works, add the fix as a sibling scenario (for
 example `<strategy>-<fix>.yaml` and its `.yaml.j2`), leave the original
@@ -120,6 +143,7 @@ or abandoned run too. If the user wants the namespace kept for a follow-up,
 say so in the verdict and give the teardown commands. Never delete a
 namespace this run did not create.
 
-Before finishing, check the verdict against §2.4: every claim has an outcome,
-every plot has a caption and was rendered, the Simulator gaps section exists,
+Before finishing, check the verdict against §2.4: all nine properties appear
+for every trigger, each with an outcome, every confirmed fail has values,
+arithmetic and a rendered, captioned plot, the Simulator gaps section exists,
 and no cluster name appears.
