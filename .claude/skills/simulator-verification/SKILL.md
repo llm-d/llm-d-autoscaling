@@ -9,143 +9,87 @@ description: Run step 2 of this repo's autoscaling evaluation protocol (benchmar
 `benchmark/protocol/verdicts/<guide>/<strategy>.md`, optionally a backend
 overlay under `benchmark/config/cluster-configs/` (if none is given, use the
 one the verdict names), and optionally `--context <kube-context>`, the
-Kubernetes context to run against. If no context is given, use the current
-one (`kubectl config current-context`).
+Kubernetes context to run against (default: the current one).
 
-The procedure lives in the protocol, not here. Read it first and cite its
-sections instead of restating them:
+The rules live in the protocol, not here. Read it first and apply it; this
+skill adds only the order, the gates and the commands:
 
 - [`benchmark/protocol/2-simulator-verification.md`](../../../benchmark/protocol/2-simulator-verification.md):
-  which simulator for which property (§2.1), simulator gaps (§2.2), the
-  procedure (§2.3), the verdict (§2.4), plots (§2.5);
+  which properties to test and how (§2.3), the simulator (§2.1, §2.2), the
+  verdict and its proof (§2.4), plots (§2.5);
 - [`benchmark/protocol/1-static-signal-analysis.md`](../../../benchmark/protocol/1-static-signal-analysis.md)
-  for the properties P1–P9 being tested, and
-  [`benchmark/protocol/traps.md`](../../../benchmark/protocol/traps.md);
+  for P1–P9, and [`benchmark/protocol/traps.md`](../../../benchmark/protocol/traps.md);
 - the `run-benchmark` skill for the standup, smoketest, run and teardown
   commands.
 
-This skill adds what the protocol cannot say in the abstract: the order to do
-things in and the gates.
+## Step 0: Confirm the cluster with the user
 
-## Step 0: Get the cluster decision from the user
+Everything after the dry-run writes to a cluster. A write that succeeds does
+not mean the cluster is meant for experiments, so tell the user which context
+will be used, whether it came from `--context` or is the current one, and ask
+whether it accepts experiments before the first write. Pass `--context` to
+every `kubectl` and `oc` command and make sure `llmdbenchmark` extracts the
+same one. If the user is not there to answer, stop after step 1 and say what
+is needed.
 
-Everything after this writes to a cluster: namespaces, ClusterRoleBindings,
-Secrets, Deployments, load. A write succeeding does not mean the cluster is
-meant for it, so do not infer permission from `kubectl config
-current-context` and a working `kubectl create`. Whether the context came from `--context` or is the current one, tell the
-user which it is and ask whether that cluster accepts experiments, before the
-first write. When `--context` is given, pass it to every `kubectl`/`oc`
-command (`--context`) and make sure `llmdbenchmark` extracts the same one;
-never switch the user's current context. If the
-user is not there to answer, stop after the read-only work (steps 1 and 2) and
-say what is needed.
+## Step 1: Plan and render, locally
 
-Never put the context or cluster name in a committed verdict. Record the
-cluster version, the KEDA release and the namespace.
+List the properties to test (§2.3 item 1) and pick the simulator (§2.1). If
+the scenario's model has no tuned profile, write the Simulator gaps entry now.
 
-## Step 1: List the properties to test
-
-An experiment can show that a property fails; it cannot prove that one
-passes (P1 is an example: no finite sweep shows the elasticity is 1
-everywhere). So test the properties step 1 marked `fail`, and the `measure`
-ones a run can settle, for every trigger. Build the list from §2.3 item 1: per
-property, the experiment and what a failure looks like. The properties step 1
-marked `pass` or `n/a` are not tested; they stay in the verdict as *not
-verified by this skill*. If a failing property cannot be shown with the chosen
-simulator, keep it on the list and mark it *not reproducible here* with the
-reason.
-
-Order the experiments by cost. Static checks first (a PromQL query against
-live series settles label and series claims in seconds: P7 and P9), then P4
-from the HPA's arithmetic, then the load experiments (P1, P2, P3, P5, P8),
-which need the knee from step 4.
-
-Pick the simulator per §2.1. If the scenario's model has no tuned profile,
-write the Simulator gaps entry now, not after the run.
-
-## Step 2: Render and check locally
+Order the experiments by cost: static checks first (a PromQL query against live
+series settles P7 and P9 in seconds), then P4 from the HPA's arithmetic, then
+the load experiments (P1, P2, P3, P5, P8), which need the knee (§2.3 item 5).
 
 Run `llmdbenchmark standup --dry-run` with the scenario and overlay and read
-the rendered `plan/<stack>/27_keda-scaledobjects.yaml`. Confirm the queries
-are the ones step 1 analyzed, placeholders resolved. Dry-run is local and
-safe. Check the EPP plugin config against the pinned router image too: the
-router drops plugins between releases (`disagg-headers-handler` was removed
-in v0.11.0), and a stale config crash-loops the EPP.
+the rendered `plan/<stack>/27_keda-scaledobjects.yaml`: the queries must be the
+ones step 1 analyzed, placeholders resolved. Check the EPP plugin config
+against the pinned router image too; the router drops plugins between releases
+(`disagg-headers-handler` went in v0.11.0) and a stale config crash-loops the
+EPP.
 
-## Step 3: Stand up in a new namespace
+## Step 2: Stand up
 
-Name it `step2-<scenario>-<YYYYMMDD>`; never reuse one. Pass the same
-`--spec`, `--cluster-config`, `--workspace benchmark/results` and `-p` to
-every command. The CLI expects `../llm-d-benchmark` next to the repository.
+Name the namespace `step2-<scenario>-<YYYYMMDD>`. Pass the same `--spec`,
+`--cluster-config`, `--workspace benchmark/results` and `-p` to every command.
+The CLI expects `../llm-d-benchmark` next to the repository. Apply the gate in
+§2.3 item 4 with the `run-benchmark` skill's ScaledObject check.
 
-Gate on the run-benchmark skill's ScaledObject check before any load: every
-ScaledObject `READY=True` and the HPA showing real values. A run against
-ScaledObjects that cannot read Prometheus measures nothing.
+## Step 3: Run each property as its own experiment
 
-## Step 4: Run each property as its own experiment
+Calibrate the knee first when it applies (§2.3 item 5), then one property at a
+time:
 
-Calibrate the knee first when the simulator is `vllm-model-sim` and the claim
-needs a load axis (§2.3 item 6). Then, one property at a time:
-
-- Run a poller inside the cluster (a short-lived pod) that queries the
-  trigger's exact PromQL and a ground-truth query every 15 s, and write the
-  samples to a file **before** deleting the pod. Logs are gone with the pod.
+- Run a poller in the cluster (a short-lived pod) that queries the trigger's
+  exact PromQL and a ground-truth query every 15 s, and write the samples to a
+  file **before** deleting the pod. The logs go with the pod.
 - Take ground truth from `max(...)` or a per-job selector, not a bare
-  `sum(... {pod=…})`: each pod can be scraped by two PodMonitor jobs, and
-  `sum` then reads about twice the real value. Check
-  `count by (job)(...)` before trusting a sum.
+  `sum(... {pod=…})`: a pod scraped by two PodMonitor jobs reads about twice
+  its value under `sum`. Check `count by (job)(...)` before trusting a sum.
 - Record replica counts with `kubectl get deploy` on the same clock as the
-  samples, so scale events line up with the signal.
-- Read the HPA (`kubectl get hpa`, `describe`) as well as Prometheus. The
-  replica count alone cannot say which trigger decided.
+  samples, and read the HPA (`kubectl get hpa`, `describe`) as well.
 
-## Step 5: Plot and write the verdict
+## Step 4: Plot and write the verdict
 
-Follow §2.4 and §2.5. Structure the verdict by property, P1 to P9, each
-section holding a table with one row per trigger: step 1's result, the
-measured observation and the outcome. Every property appears; the ones not
-tested say *not verified by this skill*.
-
-A **confirmed fail** needs concrete empirical proof, all three of:
-
-- the measured values, as read: the query result, the HPA's
-  current/target/desired, the replica counts, with load levels or timestamps;
-- the arithmetic from those values to the property's number, with the
-  scenario's own thresholds (for example `ε = ln(1878/102) / ln(…)`);
-- an SVG plot drawn from the exported CSV, with a caption.
-
-Reasoning from the source or the configuration is step 1's evidence. If the
-run did not show the failure, the outcome is *not confirmed* (or *refuted*
-when it shows the opposite), however convincing the argument.
-
-Build each SVG from the exported CSV with a script kept beside it, in
-`verdicts/<guide>/<scenario>-step2/`. Then **render every SVG and look at it**
-before committing: on macOS `qlmanage -t -s 900 -o . file.svg` makes a PNG to
-read. Check specifically that the title, legend, annotations and event labels
-do not overlap each other or the data. Do not commit the PNGs. Give each plot a
-caption that states what varied, what was measured, what the plot shows and
-whether it confirms the prediction, with the deciding number.
-
-Outcomes are `confirmed fail`, `refuted`, `not reproducible here` or
-`not verified by this skill`. When a run exposes something outside the properties (an
-unexplained scale event, a KV value above 1.0), record it as unexplained under
-*needs measurement*; do not invent an explanation.
+Write the verdict as §2.4 prescribes, structured by property, with the proof
+and plots it requires (§2.5). Build each SVG with a script kept beside the CSV,
+in `verdicts/<guide>/<scenario>-step2/`. Render every SVG to look at it; on
+macOS `qlmanage -t -s 900 -o . file.svg` makes a PNG. Do not commit the PNGs.
+When a run shows something outside the properties (an unexplained scale event,
+a KV value above 1.0), record it as unexplained under *needs measurement*; do
+not invent an explanation.
 
 When the claim is that a fix works, add the fix as a sibling scenario (for
 example `<strategy>-<fix>.yaml` and its `.yaml.j2`), leave the original
-scenario unchanged so its verdicts stay true, and re-run in a fresh teardown
-and standup.
+unchanged so its verdicts stay true, and re-run after a fresh teardown and
+standup.
 
-## Step 6: Tear down
+## Step 5: Tear down
 
-Run `llmdbenchmark teardown` with the same flags, delete the namespace, and
-delete cluster-scoped leftovers named for it
-(`kubectl get clusterrolebinding | grep <namespace>`). Do this after a failed
-or abandoned run too. If the user wants the namespace kept for a follow-up,
-say so in the verdict and give the teardown commands. Never delete a
-namespace this run did not create.
+Run `llmdbenchmark teardown` with the same flags, then
+`kubectl delete namespace <namespace>`, then delete the leftovers named for it
+(`kubectl get clusterrolebinding | grep <namespace>`). If the user wants the
+namespace kept for a follow-up, say so in the verdict and give the commands.
 
-Before finishing, check the verdict against §2.4: all nine properties appear
-for every trigger, each with an outcome (untested ones say so), every confirmed fail has values,
-arithmetic and a rendered, captioned plot, the Simulator gaps section exists,
-and no cluster name appears.
+Before finishing, check the verdict against §2.4 and §2.5, and that no context
+or cluster name appears in it.

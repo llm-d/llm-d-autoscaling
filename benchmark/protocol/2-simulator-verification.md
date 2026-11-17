@@ -48,7 +48,7 @@ the engine's saturation behavior.
 The `llm-d-inference-sim` has no knee we can rely on. Its linear
 `time-factor-under-load` can show that a pool scales out in the right
 direction, but it cannot tell a signal that saturates from one that does not.
-Do not use it to pass P1, P3 or P5.
+Do not use it to show or refute P1, P3 or P5.
 
 ## 2.2 When the simulator needs extending
 
@@ -81,15 +81,17 @@ contention on a loaded node can add latency that the model does not contain.
 
 ## 2.3 Procedure
 
-For one scenario, with its step 1 verdict in hand:
+For one scenario, with its step 1 verdict in hand. The
+[`simulator-verification` skill](../../.claude/skills/simulator-verification/SKILL.md)
+runs these steps in this order, with the commands.
 
 1. **List the properties.** An experiment can show that a property fails; it
    cannot prove that one passes (P1 is an example: no finite sweep shows the
    elasticity is 1 everywhere). So test every property step 1 marked *fail*,
-   and every *needs measurement* that a run can settle. List the properties
-   step 1 marked *pass* or *n/a* in the verdict too, outcome *not verified by
-   this skill*. For each property under test, write down the observation that
-   would show the failure:
+   and every *needs measurement* that a run can settle. The properties step 1
+   marked *pass* or *n/a* are not tested; they stay in the verdict as *not
+   verified by this skill*. For each property under test, write down the
+   observation that would show the failure:
 
    | Property | Experiment | Fail is shown when |
    |---|---|---|
@@ -104,57 +106,52 @@ For one scenario, with its step 1 verdict in hand:
    | P9 measures what it claims | read the metric against an independent count of the quantity it claims | it does not, or the series is absent |
 
 2. **Pick the simulator** per §2.1, and check for gaps per §2.2.
-3. **Use the current Kubernetes context.** The experiments run on the cluster
-   `kubectl config current-context` points to; the protocol does not switch
-   contexts. Record the context name, the namespace and the cluster version in
-   the verdict, and stop if the context is not one you may load.
-4. **Create a new namespace** for the run, named for the scenario and the
-   date (for example `step2-kv-early-20261113`), and use it for everything
-   below (`-p <namespace>` on the benchmark CLI). Never reuse an existing
-   namespace. Cluster-scoped objects the overlay creates (such as the
-   `ClusterRoleBinding` for Thanos access) carry the namespace name, so they
-   are removed with it in step 10.
+3. **Isolate the run.** Use the Kubernetes context the user chose (the
+   current one by default), confirm with the user that the cluster accepts
+   experiments before the first write, and never switch their context. Create
+   a new namespace named for the scenario and the date (for example
+   `step2-kv-early-20261113`) and use it for everything; never reuse one.
+   Cluster-scoped objects the overlay creates carry the namespace name, so
+   they go with it at teardown.
    Standup needs `helm` and `helmfile` to reach the chart repositories
    (`llm-d-incubation.github.io`, `prometheus-community.github.io`, and
    others) with a trusted TLS chain. Behind a TLS-intercepting proxy, Go
    tools ignore `SSL_CERT_FILE` on macOS and fail with `x509: certificate
    signed by unknown authority`; run from a host whose trust store holds the
    proxy's CA, or the run stops at standup.
-5. **Stand up** with the `run-benchmark` skill, keeping the scenario unchanged.
-   Resolve floating tags and record the image digests (a simulator image on
-   `latest` has no version). Record the KEDA release.
-6. **Calibrate first** (only for `vllm-model-sim`). Drive one replica with
+4. **Stand up the scenario unchanged** (`run-benchmark` skill). Resolve
+   floating tags and record the image digests (a simulator image on `latest`
+   has no version), and the KEDA release. Do not apply load until every
+   ScaledObject is ready and the HPA shows real values: a run against
+   triggers that cannot read Prometheus measures nothing.
+5. **Calibrate first** (only for `vllm-model-sim`). Drive one replica with
    `scaledObjects` disabled or `minReplicaCount == maxReplicaCount`, step the
    load, and read the knee: the load where TTFT or the queue turns up. This is
    the simulator's `μ_SLO` for the traffic mix. Without it, the load axis of
    every later load experiment is undefined.
-7. **Run each property as its own experiment.** Fixed workload shapes, one change
-   at a time: a load sweep for P1/P2, a mix sweep for P3, a step up and a step
-   down for P5/P8, a broken source for P7. Keep the load profile and seed with
-   the result so it can be rerun.
-8. **Read the signals directly**, not only the replica count: the Prometheus
-   value of each trigger, the HPA's `kubectl describe` (current, target,
-   desired per metric), and the pod count over time. A replica count alone
-   cannot tell which trigger decided. Export these series as CSV into the
-   verdict's data directory (§2.4) as you go; a plot is drawn only from
-   captured data.
-9. **Compare to step 1** property by property and write the verdict (§2.4).
-10. **Tear down.** Once the data is exported, run the `teardown` lifecycle
-    step, delete the namespace (`kubectl delete namespace <namespace>`),
-    and delete the cluster-scoped leftovers named for it
-    (`kubectl get clusterrolebinding | grep <namespace>`). Do this also when
-    a run fails or is abandoned; confirm the namespace is gone and note it in
-    the verdict. Never delete a namespace the run did not create.
-
-Keep each run short. A static property (P4, P7, P9) needs a
-minute of steady load, not a full trace.
+6. **Run each property as its own experiment.** Fixed workload shapes, one
+   change at a time: a load sweep for P1/P2, a mix sweep for P3, a step up and
+   a step down for P5/P8, a broken source for P7. Keep the load profile and
+   seed with the result so it can be rerun. A static property (P4, P7, P9)
+   needs a minute of steady load, not a full trace.
+7. **Read the signals directly**, not only the replica count: the Prometheus
+   value of each trigger, the HPA's current, target and desired per metric,
+   and the pod count over time. A replica count alone cannot tell which
+   trigger decided. Export these series as CSV into the verdict's data
+   directory (§2.4) as you go; a plot is drawn only from captured data.
+8. **Write the verdict** (§2.4), property by property.
+9. **Tear down**, also after a failed or abandoned run: uninstall the
+   releases, delete the namespace and the cluster-scoped leftovers named for
+   it, and confirm they are gone. Never delete a namespace the run did not
+   create.
 
 ## 2.4 Verdict
 
 One file per scenario, next to the step 1 verdict, as
 `verdicts/<guide>/<scenario>-step2.md`. It states:
 
-- the Kubernetes context, namespace and cluster version the runs used;
+- the namespace and cluster version the runs used, never the context or
+  cluster name;
 - the scenario, backend overlay, simulator and its image digest, the profile
   and whether it is tuned, KEDA release, date;
 - the calibrated knee, with the traffic mix it applies to;
@@ -187,22 +184,21 @@ confirmed failure in its driver proceeds to the later steps.
 ## 2.5 Plots
 
 Every *confirmed fail* comes with an SVG plot built from data captured in
-its run (§2.4). A
-failure that is a single reading with no time or load dimension (a static P4
-or P9 check) is shown by the raw reading in the table plus a plot of that
-reading against its ground truth over the run, so the proof is still
-empirical.
+its run (§2.4). A failure that is a single reading with no time or load
+dimension (a static P4 or P9 check) is shown by the raw reading in the table
+plus a plot of that reading against its ground truth over the run, so the
+proof is still empirical.
 
 - **Data only from the run.** The plot is generated by a script from the
   exported CSV (Prometheus range queries, HPA readings, pod counts). No
   hand-drawn, modeled or illustrative curves. Keep the CSV and the script
   next to the verdict, in `verdicts/<guide>/<scenario>-step2/` as
-  `<property>.csv`, `<property>.svg` and `plot.py` (or equivalent), so a reader can
-  regenerate the plot. Embed the SVG in the verdict with a relative link.
+  `<property>.csv`, `<property>.svg` and `plot.py` (or equivalent), so a reader
+  can regenerate the plot. Embed the SVG in the verdict with a relative link.
 - **Relevant to the property.** Plot the quantity the property is about, against
   what it should follow, and mark the threshold or the expected value:
 
-  | Claim | Plot |
+  | Property | Plot |
   |---|---|
   | P1 proportional | signal vs. offered load (log-log), with the line of slope 1 and the fitted `ε` |
   | P2 coupled to actuation | per-pod signal vs. replica count at fixed load |
@@ -216,7 +212,9 @@ empirical.
 - **Readable alone.** Axis labels with units, a legend, the threshold or
   target drawn and labelled, and a title that states what the plot shows.
   Colors must stay distinguishable in grayscale, and the SVG needs a
-  `<title>` and `<desc>` for accessibility.
+  `<title>` and `<desc>` for accessibility. Render it and look at it before
+  committing: titles, legends, annotations and event labels must not overlap
+  each other or the data.
 - **Caption.** Directly below each plot, two to four sentences: what was
   varied, what was measured, what the plot shows, and whether it confirms
   or refutes the prediction, with the number that decides it (for example
