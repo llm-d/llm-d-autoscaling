@@ -149,6 +149,10 @@ scenario:
           portName: metrics
           path: /metrics
           interval: 15s
+          relabelings:
+          - targetLabel: role
+            replacement: decode
+            action: replace
 
     # =========================================================================
     # PREFILL — backend-agnostic skeleton (see DECODE).
@@ -174,6 +178,10 @@ scenario:
           portName: metrics
           path: /metrics
           interval: 15s
+          relabelings:
+          - targetLabel: role
+            replacement: prefill
+            action: replace
 
     standalone:
       enabled: false

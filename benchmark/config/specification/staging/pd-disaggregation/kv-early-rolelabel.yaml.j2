@@ -1,0 +1,21 @@
+# pd-disaggregation KEDA experiment: kv-early-rolelabel (staging / test bed).
+# Delta from baseline: vllm-kv-utilization threshold 0.95->0.80.
+# Select a backend at run time with:
+#   --cluster-config benchmark/config/cluster-configs/{vllm,vllm-sim-qwen3-32b,inference-sim}.yaml
+# See benchmark/config/scenarios/staging/pd-disaggregation/ and benchmark/README.md.
+
+# [REQUIRED]
+{% set base_dir = base_dir | default('../') -%}
+base_dir: {{ base_dir }}
+
+# [REQUIRED] Reuse upstream llm-d-benchmark defaults (sibling clone) — not vendored.
+values_file:
+  path: {{ base_dir }}/../llm-d-benchmark/config/templates/values/defaults.yaml
+
+# [REQUIRED]
+template_dir:
+  path: {{ base_dir }}/../llm-d-benchmark/config/templates/jinja
+
+# [OPTIONAL]
+scenario_file:
+  path: {{ base_dir }}/benchmark/config/scenarios/staging/pd-disaggregation/kv-early-rolelabel.yaml
