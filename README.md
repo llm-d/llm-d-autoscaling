@@ -6,6 +6,19 @@ Autoscaling for [llm-d](https://github.com/llm-d/llm-d) inference deployments.
 This repository holds **KEDA manifest blueprints** and the **evaluation test bed**
 used to validate and tune them.
 
+## Claude Code skills
+
+The benchmark and evaluation-protocol skills in `.claude/skills/` are published
+as a Claude Code plugin marketplace:
+
+```
+/plugin marketplace add llm-d/llm-d-autoscaling
+/plugin install llm-d-autoscaling@llm-d-autoscaling
+```
+
+It provides `run-benchmark`, `scenario-sanity-check`, `static-signal-analysis`
+and `simulator-verification`.
+
 ## 1. The Workload-Variant-Autoscaler (WVA) is deprecated
 
 WVA — the custom autoscaling controller this repository used to host — is
