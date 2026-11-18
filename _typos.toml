@@ -8,6 +8,8 @@ parms = "parms"
 # Short code fragments / false positives
 ot = "ot"
 vas = "vas"
+pn = "pn"
+thr = "thr"
 # "mis-" prefix used as a hyphenated modifier (mis-classified, mis-attributed)
 mis = "mis"
 # Valid English variant (unparseable vs unparsable)
