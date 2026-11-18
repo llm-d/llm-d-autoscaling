@@ -1,0 +1,23 @@
+{
+  "name": "llm-d-autoscaling",
+  "owner": {
+    "name": "llm-d"
+  },
+  "metadata": {
+    "description": "Skills for evaluating llm-d autoscaling with the benchmark/ test bed"
+  },
+  "plugins": [
+    {
+      "name": "llm-d-autoscaling",
+      "source": "./",
+      "description": "Run benchmark scenarios and apply the autoscaling evaluation protocol (static signal analysis, simulator verification) to KEDA configurations",
+      "strict": false,
+      "skills": [
+        "./.claude/skills/run-benchmark",
+        "./.claude/skills/scenario-sanity-check",
+        "./.claude/skills/static-signal-analysis",
+        "./.claude/skills/simulator-verification"
+      ]
+    }
+  ]
+}
