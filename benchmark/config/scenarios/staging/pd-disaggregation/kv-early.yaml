@@ -2,6 +2,7 @@
 # Delta from baseline.yaml (this dir): scale earlier on KV-cache pressure.
 #   - vllm-kv-utilization threshold 0.95 -> 0.80 (prefill + decode)
 # Everything else is identical to baseline so results isolate this delta.
+# The PodMonitors stamp the `role` label the triggers select on (see baseline).
 #
 # This scenario deliberately contains NO backend-specific settings (image,
 # accelerator, per-role resources, vLLM command, plugins). Pick a backend by
@@ -145,6 +146,10 @@ scenario:
           portName: metrics
           path: /metrics
           interval: 15s
+          relabelings:
+          - targetLabel: role
+            replacement: decode
+            action: replace
 
     # =========================================================================
     # PREFILL — backend-agnostic skeleton (see DECODE).
@@ -170,6 +175,10 @@ scenario:
           portName: metrics
           path: /metrics
           interval: 15s
+          relabelings:
+          - targetLabel: role
+            replacement: prefill
+            action: replace
 
     standalone:
       enabled: false

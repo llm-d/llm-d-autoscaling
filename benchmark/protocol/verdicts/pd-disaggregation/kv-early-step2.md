@@ -5,6 +5,8 @@ the `simulator-verification` skill. It tests the properties the step 1
 verdict [`kv-early.md`](kv-early.md) marked as failing. The properties P1–P9
 are defined in [step 1](../../1-static-signal-analysis.md) §1.2.
 
+> **Superseded scenario.** This verdict describes `kv-early.yaml` as run on 2026-11-17. The PodMonitors now stamp the `role` label, so the P9 and P7 failures below no longer apply to the current file; see git history for the pre-fix scenario.
+
 | | |
 |---|---|
 | Scenario | `benchmark/config/scenarios/staging/pd-disaggregation/kv-early.yaml` |
