@@ -28,7 +28,8 @@ there is no step 2 verdict.
 | Loads | written by `gen_load.py`: the knees from the estimates below; runs 2 to 10 from the knees and the lengths below, in [`index.json`](npd-fcoff-step5/index.json) |
 | Cold start | 128 s, requested (21:17:31 UTC, `paused-replicas` 1 → 2) to Ready (21:19:39 UTC), read from the pod's `Ready` condition; the standup pod took 250 s with the first model load |
 | Lengths (§5.3) | T = 640 s (ΔR = 2 at 180 s, cold start 128 s, polling 30 s, + 120 s); phases 1,280 s; R = 158 s; Q = 720 s; G = 150 s; H = 1,178 s; D = 1,020 s |
-| Threshold in force from run 2 | `thresholdWork` 11,086, patched into the live ScaledObject at 21:23 UTC (was 14,619) |
+| Profiles of runs 2 to 10 | as `gen_load.py` writes them, except `report.request_lifecycle.summary: false` and `per_request_fields.computed_metrics: false`. inference-perf 0.7.0 re-tokenizes every streamed chunk once per report it writes; these two settings remove two of its four passes. TTFT and TPOT are derived from each record's token times with inference-perf's own formulas; on run 1d's 2,648 completed requests, that derivation equals `computed_metrics` exactly. `--wait-timeout` is 9,000 s |
+| Threshold in force from run 2 | `thresholdWork` 11,086, patched into the live ScaledObject after the loads were generated (21:21 UTC) and before run 2 (was 14,619) |
 
 ## μ_SLO
 
@@ -50,7 +51,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 1b | knee 2048:2048 | done | as expected; μ_SLO 1.74 req/s | 0.569 (whole run) | 380 timeout | 1,800 | [report](npd-fcoff-step5/knee-2048x2048/report.md) |
 | 1c | knee 256:4096 | done (second attempt) | as expected; μ_SLO 1.26 req/s | 0.367 (whole run) | 870 timeout, 2 without latency | 1,800 | [report](npd-fcoff-step5/knee-256x4096/report.md) |
 | 1d | knee blend | done | as expected; μ_SLO 1.59 req/s | 0.561 (whole run) | 1 without latency | 1,800 | [report](npd-fcoff-step5/knee-blend/report.md) |
-| 2 | SO-active staircase | running | | | | | |
+| 2 | SO-active staircase | running (second attempt) | | | | | |
 | 3 | mix-shift | pending | | | | | |
 | 4a | overload under the cap | pending | | | | | |
 | 4b | overload over the cap | pending | | | | | |
@@ -66,6 +67,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | Run | Session | Reason | Rerun |
 |---|---|---|---|
 | 1c, knee 256:4096 at an estimate of 0.7 req/s | `villardl-20261119-134008-873` | A = 1.000 through stage 5 (1.33 req/s) and 0.170 at stage 6 (1.75 req/s): the crossing is not between stages 2 and 5 (§5.3). The data otherwise passed the gate; the `llm-d-prism` pod, not a serving pod, was evicted for node ephemeral storage during the run | `knee-256x4096-r2`, estimate 1.2 req/s |
+| 2, SO-active staircase | `villardl-20261119-162317-913` | No per-request records: inference-perf was still writing its reports 43 min after the load ended (22:18 UTC) when `llmdbenchmark`'s 4,800 s wait expired, and the harness pod was deleted with `per_request_lifecycle_metrics.json` at 0 bytes. A tool fault, outside the configuration | the same trace, with the profile changes below |
 
 ## Conclusions
 
@@ -95,5 +97,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 - 2026-11-19: run 1d done. `llmdbenchmark` exited 1 on a workstation-side
   `Bad Gateway` after the load ended; the results were copied from the PVC.
 - 2026-11-19: run 1c (second attempt) done. The knees are final.
-- 2026-11-19 21:17–21:19 UTC: cold-start probe (pin 2). 21:23 UTC: threshold
+- 2026-11-19 21:17–21:19 UTC: cold-start probe (pin 2). then: threshold
   patched to 11,086; runs 2 to 10 generated and staged.
+- 2026-11-19: run 2 discarded (no per-request records, see Discarded
+  attempts); profiles of runs 2 to 10 changed; run 2 restarted at 23:06 UTC.

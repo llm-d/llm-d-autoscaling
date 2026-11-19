@@ -6,7 +6,8 @@
 Requests are sent in trace order, so the per-request records sorted by start
 map one to one onto the trace rows: each request gets its scheduled offset,
 ISL and OSL from the trace. The phase of a request is the one its scheduled
-offset falls in. A counts a request as good when it completed without error
+offset falls in. TTFT and TPOT come from inference-perf's computed_metrics or,
+when the profile leaves them out, from the same formulas on the raw token times. A counts a request as good when it completed without error
 and met TTFT and TPOT; failures and completions without latency are misses.
 
 Prometheus series (replicas-ready.json, replicas-spec.json) are placed on the
@@ -103,6 +104,13 @@ def main():
             continue
         m = rec.get("computed_metrics") or {}
         a, b = m.get("time_to_first_token"), m.get("time_per_output_token")
+        if not m:
+            # Profiles without computed_metrics: inference-perf's own formulas on the
+            # raw token times (TTFT = first - start, TPOT = (last - first) / (n - 1)).
+            rm = (rec.get("info") or {}).get("response_metrics") or {}
+            ct, n = rm.get("chunk_times") or [], rm.get("output_tokens") or 0
+            if len(ct) > 1 and n > 1:
+                a, b = ct[0] - rec["start_time"], (ct[-1] - ct[0]) / (n - 1)
         if a is None or b is None:
             o["errors"]["completed without latency"] = o["errors"].get("completed without latency", 0) + 1
             continue
