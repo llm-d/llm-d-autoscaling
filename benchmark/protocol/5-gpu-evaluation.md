@@ -10,10 +10,9 @@ its reports comes from a run on a live cluster. Step 5 measures; it does not
 rank policies against an oracle (efficiency η is a later step, with the
 `autoscaling-efficiency` skill).
 
-A configuration enters step 5 with a step 1 verdict and, where step 2 applies,
-a step 2 verdict with no confirmed failure in its driver. A configuration whose
-driver fails in step 2 does not run here: the GPU time would measure a known
-defect.
+Step 5 does not depend on steps 1 and 2: any scenario can run it. When
+verdicts from those steps exist, the summary links them, and a run that shows
+a failure they predicted says so.
 
 ## 5.1 Prerequisites
 
@@ -93,8 +92,8 @@ runs these steps in this order, with the commands.
 1. **Confirm the cluster** with the user before the first write: which
    context, and whether its GPUs may be used for the duration (about 3 h for
    the six runs, plus standup). Never switch the user's context.
-2. **Render and check locally.** `standup --dry-run`; the rendered ScaledObject
-   must be the one steps 1 and 2 analyzed. Check §5.1.
+2. **Render and check locally.** `standup --dry-run`; read the rendered
+   ScaledObject (placeholders resolved, the thresholds intended). Check §5.1.
 3. **Stand up** in a new namespace `step5-<scenario>-<YYYYMMDD>`. Resolve and
    record every image digest, the KEDA release and the vLLM arguments.
 4. **Gate before load.** The ScaledObject is `READY=True`, the HPA shows real
@@ -119,7 +118,7 @@ runs these steps in this order, with the commands.
 
 ## 5.5 Reports
 
-Files live next to the step 1 and step 2 verdicts:
+Files live under `verdicts/`, next to any other verdicts for the scenario:
 
 ```
 verdicts/<guide>/<scenario>-step5.md          # summary

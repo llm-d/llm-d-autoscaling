@@ -7,7 +7,7 @@ description: Run step 5 of this repo's autoscaling evaluation protocol (benchmar
 
 **Arguments:** `$ARGUMENTS`: a scenario under `benchmark/config/scenarios/`,
 optionally a GPU backend overlay under `benchmark/config/cluster-configs/ocp/`
-(default: the one the scenario's header or step 1 verdict names), and
+(default: the one the scenario's header names), and
 optionally `--context <kube-context>` (default: the current one).
 
 The rules live in the protocol; this skill adds the order, the gates and the
@@ -16,7 +16,8 @@ commands. Read first:
 - [`benchmark/protocol/5-gpu-evaluation.md`](../../../benchmark/protocol/5-gpu-evaluation.md):
   prerequisites (§5.1), load and SLO (§5.2), the runs (§5.3), the reports and
   their writing rules (§5.5), the gate after each run (§5.6);
-- the scenario's step 1 and step 2 verdicts under `benchmark/protocol/verdicts/<guide>/`;
+- the scenario's step 1 and step 2 verdicts under `benchmark/protocol/verdicts/<guide>/`,
+  if any (step 5 does not need them);
 - the `run-benchmark` skill for the `llmdbenchmark` commands, and the
   `load-vs-supply` skill for the figure.
 
@@ -32,9 +33,6 @@ from, the GPUs the runs hold (`maxReplicaCount` × GPUs per replica, for about
 3 h plus standup), the SLO and X (§5.2) and the run list. If nobody answers,
 do Step 1 only and say what is needed. Never switch the user's context.
 
-Check the entry condition: a step 1 verdict exists, and no step 2 verdict
-shows a confirmed failure in the driver. If one does, stop and say so.
-
 ## Step 1: Prepare, locally
 
 1. Check §5.1: the llm-d-benchmark commit, the overlay, Prometheus access.
@@ -44,8 +42,9 @@ shows a confirmed failure in the driver. If one does, stop and say so.
    to `benchmark/config/workloads/<scenario>/`, set the mix, put the SLO in
    `report.goodput.constraints`, and keep `per_request: true` and
    `computed_metrics: true`. The rates of runs 2 to 6 wait for run 1.
-3. `llmdbenchmark standup --dry-run` with the spec and overlay. The rendered
-   ScaledObject in `plan/<stack>/` must match the one the verdicts analyzed.
+3. `llmdbenchmark standup --dry-run` with the spec and overlay. Read the
+   rendered ScaledObject in `plan/<stack>/`: placeholders resolved, the
+   thresholds intended, and, if verdicts exist, the object they analyzed.
 
 ## Step 2: Stand up and gate
 
