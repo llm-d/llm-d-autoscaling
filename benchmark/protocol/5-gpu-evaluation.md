@@ -58,7 +58,12 @@ The knee runs (run 1) give the numbers every other rate follows from:
 - **μ_SLO(m)**: the highest request rate one replica serves at A ≥ X for
   mix m. It is measured for every mix in M and for B.
 - **C = maxReplicaCount × μ_SLO(B)**: what the pool serves at its cap, in
-  requests per second of the blend.
+  requests per second of the blend, if capacity grows linearly with the
+  replica count. Step 5 does not measure that: the router's scorers and,
+  with flow control on, its saturation gate can make a pool of N replicas
+  serve less than N × μ_SLO. When a run misses X near the cap with every
+  replica Ready, the report lists the miss as unexplained, not as a fault
+  of the configuration.
 
 With several pools (P/D), each scaled pool has its own μ_SLO, measured with the
 other pools pinned large enough that they cannot be the bottleneck, and C is
