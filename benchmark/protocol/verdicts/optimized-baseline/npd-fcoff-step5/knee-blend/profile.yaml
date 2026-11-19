@@ -1,0 +1,48 @@
+# step 5 run knee-blend, written by gen_load.py; do not edit by hand.
+# knee, blend (8192:256,2048:2048,256:4096), stages at (0.4, 0.7, 1.0, 1.4, 1.9, 2.5) x estimate 1.1 req/s
+# Run with --workload-file-path <this file> --dataset /requests/datasets/knee-blend.csv
+load:
+  type: trace_replay
+  trace:
+    file: REPLACE_ENV_LLMDBENCH_RUN_DATASET_DIR/REPLACE_ENV_LLMDBENCH_RUN_DATASET_FILE
+    format: AzurePublicDataset
+  stages:
+    - rate: 1
+      duration: 1800
+  request_timeout: 311
+  stage_teardown_grace_seconds: 311
+  num_workers: 4
+  worker_max_concurrency: 512
+api:
+  type: completion
+  streaming: true
+server:
+  type: vllm
+  model_name: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+  base_url: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+  ignore_eos: true
+tokenizer:
+  pretrained_model_name_or_path: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_TOKENIZER
+data:
+  type: random
+  trace:
+    file: REPLACE_ENV_LLMDBENCH_RUN_DATASET_DIR/REPLACE_ENV_LLMDBENCH_RUN_DATASET_FILE
+    format: AzurePublicDataset
+report:
+  request_lifecycle:
+    summary: true
+    per_stage: true
+    per_request: true
+    per_request_fields:
+      request: false
+      response: false
+      info: true
+      response_chunks: false
+      computed_metrics: true
+  goodput:
+    constraints:
+      ttft: 2
+      tpot: 0.05
+storage:
+  local_storage:
+    path: /workspace
