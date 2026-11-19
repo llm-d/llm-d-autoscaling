@@ -36,7 +36,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 |---|---|---|
 | 8192:256 | 1.75 | [run 1a](npd-fcoff-step5/knee-8192x256/report.md): A 0.980 at 1.68 req/s, 0.681 at 2.40 req/s |
 | 2048:2048 | 1.74 | [run 1b](npd-fcoff-step5/knee-2048x2048/report.md): A 1.000 at 1.68 req/s, 0.535 at 2.28 req/s |
-| 256:4096 | pending | run 1 |
+| 256:4096 | 1.26 | [run 1c](npd-fcoff-step5/knee-256x4096/report.md): A 1.000 at 1.20 req/s, 0.591 at 1.68 req/s |
 | blend | 1.59 | [run 1d](npd-fcoff-step5/knee-blend/report.md): A 0.998 at 1.54 req/s, 0.482 at 2.09 req/s; C = 6 × 1.591 = 9.55 req/s |
 
 ## Runs
@@ -45,7 +45,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 |---|---|---|---|---|---|---|---|
 | 1a | knee 8192:256 | done | as expected; μ_SLO 1.75 req/s | 0.222 (whole run) | 3,449 timeout, 2 without latency | 1,800 | [report](npd-fcoff-step5/knee-8192x256/report.md) |
 | 1b | knee 2048:2048 | done | as expected; μ_SLO 1.74 req/s | 0.569 (whole run) | 380 timeout | 1,800 | [report](npd-fcoff-step5/knee-2048x2048/report.md) |
-| 1c | knee 256:4096 | running (rerun, see Discarded attempts) | | | | | |
+| 1c | knee 256:4096 | done (second attempt) | as expected; μ_SLO 1.26 req/s | 0.367 (whole run) | 870 timeout, 2 without latency | 1,800 | [report](npd-fcoff-step5/knee-256x4096/report.md) |
 | 1d | knee blend | done | as expected; μ_SLO 1.59 req/s | 0.561 (whole run) | 1 without latency | 1,800 | [report](npd-fcoff-step5/knee-blend/report.md) |
 | 2 | SO-active staircase | pending | | | | | |
 | 3 | mix-shift | pending | | | | | |
@@ -66,7 +66,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 
 ## Conclusions
 
-2026-11-19 20:35 UTC, covering runs 1a, 1b and 1d; runs 1c (rerun), 2 to 10 and 6 pending.
+2026-11-19 21:20 UTC, covering run 1 (all knees); runs 2 to 10 and 6 pending.
 
 - μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
   TTFT does.
@@ -79,6 +79,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 - μ_SLO(2048:2048) = 1.74 req/s. There TTFT binds, with vLLM at 128 running
   sequences and a full KV cache. The work rate at that knee, 15,363 work tok/s,
   is 3 % below the 8192:256 knee's 15,836.
+- μ_SLO(256:4096) = 1.26 req/s, the lowest of the three mixes; TTFT binds.
 - μ_SLO(B) = 1.59 req/s, so C = 9.55 req/s of the blend at 6 replicas. The
   trigger read 0.98 to 1.15 × the blend's offered ν through the knee.
 
@@ -90,3 +91,4 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   stages); rerun at an estimate of 1.2 req/s.
 - 2026-11-19: run 1d done. `llmdbenchmark` exited 1 on a workstation-side
   `Bad Gateway` after the load ended; the results were copied from the PVC.
+- 2026-11-19: run 1c (second attempt) done. The knees are final.
