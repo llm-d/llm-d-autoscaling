@@ -81,7 +81,18 @@ kubectl -n $NS get pods -o jsonpath='{range .items[*]}{.spec.containers[*].image
 ```
 
 Record the digests, the KEDA release, the cluster version and the vLLM
-arguments. Send one minute of smoke load and check that every trigger leaves
+arguments. Create the summary
+`benchmark/protocol/verdicts/<guide>/<scenario>-step5.md` now: the shared
+header, the §5.2 inputs, and the run table with every run *pending*:
+
+```markdown
+| # | Run | Status | Outcome | A | Errors | GPU-s | Report |
+|---|---|---|---|---|---|---|---|
+| 1 | knee 8192:256 | pending | | | | | |
+...
+```
+
+Commit it. Send one minute of smoke load and check that every trigger leaves
 0 (`trigger_series.py` over that minute). A trigger that stays at 0 stops the
 evaluation: fix the metric path first.
 
@@ -95,7 +106,8 @@ llmdbenchmark ... run -l inference-perf --monitoring \
   --wait-timeout 3600
 ```
 
-Then the same with each other knee. Read A per stage from the benchmark
+Then the same with each other knee, reporting each one (Step 5) before the
+next. Read A per stage from the benchmark
 report's per-stage results (or the figure's CSV) and interpolate μ_SLO at
 A = X. If the crossing is not between stages 2 and 5, regenerate the knee with
 a new estimate and rerun (§5.3). If the configuration derives its threshold
@@ -146,13 +158,15 @@ check (#2188); if the check still fails on the empty pool, pass
 
 Capture the ScaledObject during or right after the run, before any patch for
 the next one. Then apply the gate (§5.6). A run that fails it for an
-infrastructure fault is discarded and rerun; keep its session and reason for
-the summary. With bearer-auth Prometheus (OpenShift Thanos Querier), export
+infrastructure fault is discarded and rerun; its summary row says so, with the
+session and the reason. Report every run (Step 5) and commit before arming
+the next one. With bearer-auth Prometheus (OpenShift Thanos Querier), export
 the token as `PROM_TOKEN`.
 
-## Step 5: Reports
+## Step 5: Report each run as it finishes
 
-For each run, in `benchmark/protocol/verdicts/<guide>/<scenario>-step5/<run>/`:
+Mark the run *running* in the summary when it starts. When it ends, in
+`benchmark/protocol/verdicts/<guide>/<scenario>-step5/<run>/`:
 
 1. Copy the results directory's `benchmark_report_v0.2,_*.yaml` unchanged
    (gzip it if over 1,000 KB), the profile, `scaledobject.json` and
@@ -175,14 +189,33 @@ For each run, in `benchmark/protocol/verdicts/<guide>/<scenario>-step5/<run>/`:
    say so. Render the SVG (`qlmanage -t -s 900 -o . load-vs-supply.svg` on
    macOS) and look at it. Do not commit the PNG.
 3. Write `report.md` per §5.5: header, figure and caption, the per-stage
-   table, what the run shows and its outcome.
+   table, what the run shows and its outcome, and an empty **Amendments**
+   section.
+4. Update the summary: the run's row, the conclusions so far (with the UTC
+   time and the runs they cover), and, once runs 3 and 6 are both done, their
+   comparison.
+5. Amend what this run changes (§5.5): a knee rerun changes the needs in
+   every report computed from it; a measured cold start that differs from the
+   one R used marks the bursty load for regeneration. Add a dated entry to
+   each amended report and to the summary's log.
+6. Reread the new and amended text against the writing rules in §5.5 (each
+   number traceable to a file, n = 1 stated, errors by type, no cause the run
+   did not measure, no cluster, context or node name), run `pre-commit` on
+   the files, and commit.
 
-Then the summary `<scenario>-step5.md`, with run 3 against run 6.
+When the last run is reported, or the evaluation stops early, close the
+summary: mark the runs not done as *not run* with the reason.
 
-Before finishing, reread every report against the writing rules in §5.5: each
-number traceable to a file, n = 1 stated, errors by type, no cause the run did
-not measure, no cluster, context or node name. Run `pre-commit` on the new
-files.
+## Resuming
+
+A new session continues from the summary, not from memory. Read its run
+table; check that the namespace still exists, its ScaledObject is the one in
+the last report's `scaledobject.json`, and `$LOAD/index.json` is the one the
+reports cite (regenerate it with the same arguments if the directory is
+gone; the seeds make the traces identical). A run left *running* has no
+report: if its results directory and Prometheus series are complete, gate and
+report it; otherwise mark it *discarded* and rerun it. Then go on with the
+first *pending* run.
 
 ## Step 6: Tear down
 

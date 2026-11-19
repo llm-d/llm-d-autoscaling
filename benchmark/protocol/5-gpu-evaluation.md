@@ -153,7 +153,8 @@ runs these steps in this order, with the commands.
 2. **Render and check locally.** `standup --dry-run`; read the rendered
    ScaledObject (placeholders resolved, the thresholds intended). Check §5.1.
 3. **Stand up** in a new namespace `step5-<scenario>-<YYYYMMDD>`. Resolve and
-   record every image digest, the KEDA release and the vLLM arguments.
+   record every image digest, the KEDA release and the vLLM arguments, and
+   create the summary with every run *pending* (§5.5).
 4. **Gate before load.** The ScaledObject is `READY=True`, the HPA shows real
    values, and a one-minute smoke load moves every trigger off 0. An
    `or vector(0)` guard turns a broken metric into a zero signal, and a run
@@ -169,8 +170,12 @@ runs these steps in this order, with the commands.
       `kube_deployment_status_replicas_ready` over the run's window;
    4. **gate after the run** (§5.6). A run that fails the gate for a reason
       outside the configuration (node eviction, image pull, a dead client) is
-      **discarded**: rerun it and list the discarded attempt with its reason.
-6. **Write the reports** (§5.5).
+      **discarded**: rerun it and list the discarded attempt with its reason;
+   5. **report it** (§5.5): write the run's report, update the summary, amend
+      any earlier report the run changes, and commit, before arming the next
+      run.
+6. **Close the summary** when the last run is reported, or when the
+   evaluation stops early, with the runs not done and why.
 7. **Tear down**, also after a failed run: the releases, the namespace, and the
    cluster-scoped objects named for it.
 
@@ -216,6 +221,36 @@ mix and SLO it applies to, one row per run (outcome, A, errors, GPU-seconds,
 link), the discarded attempts, and the run 3 against run 6 comparison:
 GPU-seconds (requested replica-seconds × GPUs per replica, since a GPU is held
 from the moment a pod is scheduled) and A per phase, side by side.
+
+### Reporting as results come in
+
+The run set takes most of a working day, and a session can stop at any run
+(a lost cluster, the end of a GPU slot, a failed gate). The reports are
+therefore built one run at a time, and the tree is correct after every
+commit:
+
+- **The summary exists from the start.** It is created at standup with the
+  shared header and one row per run, each with a status: *pending*,
+  *running*, *done*, *discarded* (with the reason and a link to the rerun) or
+  *not run* (with the reason).
+- **One run, one update.** When a run passes the gate, its `report.md` is
+  written and its summary row filled in, and both are committed before the
+  next run is armed. A run that fails the gate gets its *discarded* row in
+  the same way.
+- **Partial conclusions say they are partial.** The summary's conclusions
+  cover the *done* runs only, start with the UTC time of the update and the
+  runs it includes, and name the runs still pending. The run 3 against run 6
+  comparison appears once both are done.
+- **Amend, do not rewrite.** A later result can change an earlier report: a
+  knee rerun changes μ_SLO and so every need computed from it, run 2's cold
+  start changes the burst lengths, a rerun replaces a discarded run. Update
+  the changed numbers in the earlier report and add a dated entry to its
+  **Amendments** section: what changed, from which value to which, and which
+  run caused it. The summary keeps the same log. A run whose load was built
+  from a value later found wrong is marked *superseded*, links its rerun, and
+  stays in the tree.
+- **Git history holds the earlier versions.** Commit at each update; never
+  rewrite a committed report's history.
 
 ### Writing rules
 
