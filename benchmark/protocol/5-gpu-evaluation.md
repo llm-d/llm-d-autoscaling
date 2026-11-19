@@ -241,14 +241,20 @@ commit:
   cover the *done* runs only, start with the UTC time of the update and the
   runs it includes, and name the runs still pending. The run 3 against run 6
   comparison appears once both are done.
-- **Amend, do not rewrite.** A later result can change an earlier report: a
-  knee rerun changes μ_SLO and so every need computed from it, run 2's cold
-  start changes the burst lengths, a rerun replaces a discarded run. Update
-  the changed numbers in the earlier report and add a dated entry to its
-  **Amendments** section: what changed, from which value to which, and which
-  run caused it. The summary keeps the same log. A run whose load was built
-  from a value later found wrong is marked *superseded*, links its rerun, and
-  stays in the tree.
+- **Amend, do not rewrite.** A later finding can change an earlier report:
+  a fault found during a later run that was already present in earlier ones
+  (a node evicting pods, a scrape gap), or a corrected tool or query that
+  changes a reported number. Update the changed numbers in the earlier
+  report and add a dated entry to its **Amendments** section: what changed,
+  from which value to which, and what found it. The summary keeps the same
+  log. A run the finding invalidates is marked *superseded*, links its
+  rerun, and stays in the tree. A rerun that replaces a *discarded* run
+  changes only the summary.
+- **The knees are final once run 2 starts.** A knee is rerun only before
+  anything uses it (its crossing missed the stages, or it failed the gate).
+  A change to the plant after that (GPU type, node pool, image, vLLM
+  arguments) makes it a different plant: close the summary and start a new
+  evaluation.
 - **Git history holds the earlier versions.** Commit at each update; never
   rewrite a committed report's history.
 

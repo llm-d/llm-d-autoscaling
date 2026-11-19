@@ -194,10 +194,10 @@ Mark the run *running* in the summary when it starts. When it ends, in
 4. Update the summary: the run's row, the conclusions so far (with the UTC
    time and the runs they cover), and, once runs 3 and 6 are both done, their
    comparison.
-5. Amend what this run changes (§5.5): a knee rerun changes the needs in
-   every report computed from it; a measured cold start that differs from the
-   one R used marks the bursty load for regeneration. Add a dated entry to
-   each amended report and to the summary's log.
+5. Amend what this run changes (§5.5): a fault or a tool error it reveals
+   that also affected earlier runs. Add a dated entry to each amended report
+   and to the summary's log. A measured cold start that differs from the one
+   R used changes no report: regenerate the bursty load before run 8.
 6. Reread the new and amended text against the writing rules in §5.5 (each
    number traceable to a file, n = 1 stated, errors by type, no cause the run
    did not measure, no cluster, context or node name), run `pre-commit` on
