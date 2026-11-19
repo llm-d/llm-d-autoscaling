@@ -1,0 +1,289 @@
+{
+ "inputs": {
+  "mixes": "8192:256,2048:2048,256:4096",
+  "mu": {
+   "8192:256": 1.752,
+   "2048:2048": 1.744,
+   "256:4096": 1.259
+  },
+  "mu_blend": 1.591,
+  "max_replicas": 6,
+  "min_replicas": 1,
+  "stage_s": 640,
+  "phase_s": 1280,
+  "C_req_s": 9.546,
+  "slo": {
+   "ttft": 2.0,
+   "tpot": 0.05
+  }
+ },
+ "stair": {
+  "what": "SO-active staircase, blend, stages at (0.15, 0.3, 0.5, 0.7, 0.9) x C (C = 9.546 req/s)",
+  "seed": 102,
+  "duration_s": 3200,
+  "requests": 15429,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 640,
+    "rate": 1.4319,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 640,
+    "rate": 2.8638,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 640,
+    "rate": 4.773,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 640,
+    "rate": 6.6822,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 640,
+    "rate": 8.5914,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "mixshift": {
+  "what": "mix-shift at 3.777 req/s, one phase per mix: 8192:256 needs 3, 2048:2048 needs 3, 256:4096 needs 3 replicas",
+  "seed": 103,
+  "duration_s": 3840,
+  "requests": 14519,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 1280,
+    "rate": 3.777,
+    "mix": "8192:256"
+   },
+   {
+    "seconds": 1280,
+    "rate": 3.777,
+    "mix": "2048:2048"
+   },
+   {
+    "seconds": 1280,
+    "rate": 3.777,
+    "mix": "256:4096"
+   }
+  ]
+ },
+ "overload-under": {
+  "what": "overload under the cap, blend: 1.909 then 0.8 x C = 7.637 req/s",
+  "seed": 104,
+  "duration_s": 2560,
+  "requests": 12377,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 1280,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 1280,
+    "rate": 7.6368,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "overload-over": {
+  "what": "overload over the cap, blend: 1.909 then 1.5 x C = 14.319 req/s",
+  "seed": 105,
+  "duration_s": 2560,
+  "requests": 20506,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 1280,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 1280,
+    "rate": 14.319,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "bursty": {
+  "what": "bursty, blend: 720 s at 0.2 x C = 1.909 req/s, then 3 x (158 s at 0.7 x C = 6.682 req/s, 720 s quiet)",
+  "seed": 108,
+  "duration_s": 3354,
+  "requests": 8674,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 720,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 158,
+    "rate": 6.6822,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 720,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 158,
+    "rate": 6.6822,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 720,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 158,
+    "rate": 6.6822,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 720,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "short-spikes": {
+  "what": "short spikes, blend: 300 s at 0.2 x C, then 6 x (79 s at 0.7 x C = 6.682 req/s, 150 s gap at 1.909 req/s), last gap 720 s",
+  "seed": 109,
+  "duration_s": 2244,
+  "requests": 6425,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 300,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 79,
+    "rate": 6.6822,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 150,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 79,
+    "rate": 6.6822,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 150,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 79,
+    "rate": 6.6822,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 150,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 79,
+    "rate": 6.6822,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 150,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 79,
+    "rate": 6.6822,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 150,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 79,
+    "rate": 6.6822,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 720,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "scale-down": {
+  "what": "scale-down, blend: 1178 s at 0.9 x C = 8.591 req/s, then 1020 s steps at 0.6, 0.3, 0.1 x C; needs 6, 4, 2, 1 replicas",
+  "seed": 110,
+  "duration_s": 4238,
+  "requests": 20036,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 1178,
+    "rate": 8.5914,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 1020,
+    "rate": 5.7276,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 1020,
+    "rate": 2.8638,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 1020,
+    "rate": 0.9546,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "agentic": {
+  "what": "agentic: 0.233 then 0.698 req/s = 0.1 and 0.3 x C x mean ISL of the blend (33398 prompt tok/s) / estimated mean prompt 14364",
+  "seed": 106,
+  "duration_s": 3840,
+  "phases": [
+   {
+    "seconds": 1280,
+    "rate": 0.233
+   },
+   {
+    "seconds": 2560,
+    "rate": 0.698
+   }
+  ],
+  "mean_prompt_estimate": 14364.0
+ },
+ "baseline": {
+  "what": "static baseline: replays mixshift.csv with mixshift.yaml"
+ }
+}
