@@ -1,6 +1,6 @@
 ---
 name: gpu-evaluation
-description: Run step 5 of this repo's autoscaling evaluation protocol (benchmark/protocol/) — evaluate a KEDA scenario on a real GPU plant with the fixed run set (knee staircase, SO-active staircase, mix-shift, overload under and over the cap, agentic, static-replica baseline, scale from zero, bursty) and write one report per run (llm-d-benchmark's report plus a load-vs-supply figure) and a summary, from data captured on the live cluster. Use when asked to run a scenario on GPUs, to measure a scaling configuration on real hardware, to calibrate a knee or μ_SLO on a GPU, or to compare an autoscaled run with a static fleet. Invoke with /gpu-evaluation <scenario.yaml> [backend overlay] [--context <kube-context>].
+description: Run step 5 of this repo's autoscaling evaluation protocol (benchmark/protocol/) — evaluate a KEDA scenario on a real GPU plant with the fixed run set (knee staircase, SO-active staircase, mix-shift, overload under and over the cap, agentic, static-replica baseline, scale from zero, bursty, short spikes, scale-down) and write one report per run (llm-d-benchmark's report plus a load-vs-supply figure) and a summary, from data captured on the live cluster. Use when asked to run a scenario on GPUs, to measure a scaling configuration on real hardware, to calibrate a knee or μ_SLO on a GPU, or to compare an autoscaled run with a static fleet. Invoke with /gpu-evaluation <scenario.yaml> [backend overlay] [--context <kube-context>].
 ---
 
 # GPU evaluation
@@ -36,7 +36,7 @@ The shell scripts take `--context` through `KUBECTL="kubectl --context <ctx>"`.
 
 Stop and ask before any cluster write. Name the context and where it came
 from, the GPUs the runs hold (`maxReplicaCount` × GPUs per replica, for about
-6 h plus standup), the §5.2 inputs (SLO and X, the two mixes, the replica
+9.5 h plus standup), the §5.2 inputs (SLO and X, the mix set, the replica
 unit) and the run list. If nobody answers,
 do Step 1 only and say what is needed. Never switch the user's context.
 
@@ -118,12 +118,13 @@ for each scaled pool.
 
 Read the cold start (requested to Ready) at the first scale-up you see, or
 take it from the overlay's earlier runs, and set the stage length T and the
-burst lengths R and Q (§5.3) from it and the ScaledObject's behavior.
+lengths R, Q, G, H and D (§5.3) from it and the ScaledObject's behavior.
 Then write the other runs' loads and stage them:
 
 ```bash
 python3 -I $S/gen_load.py runs --mu 8192:256=<μ>,2048:2048=<μ>,256:4096=<μ> --mu-blend <μ> \
   --max-replicas <max> --min-replicas <min> --stage <T> --spike <R> --quiet <Q> \
+  --gap <G> --hold <H> --down-stage <D> \
   --slo $SLO --out $LOAD
 $S/stage.sh $NS $LOAD
 ```
@@ -131,13 +132,14 @@ $S/stage.sh $NS $LOAD
 `$LOAD/index.json` holds every schedule and the numbers it came from; each
 report's header cites it.
 
-## Step 4: Runs 2 to 8
+## Step 4: Runs 2 to 10
 
 Order: 2 (`stair`), 3 (`mixshift`), 4a (`overload-under`), 4b
-(`overload-over`), 5 (`agentic`, no `--dataset`), 8 (`bursty`), 6
-(`mixshift` again, pinned), 7 (`bootstrap`, only with `minReplicaCount: 0`).
-If run 2 shows a cold start other than the one R was computed from,
-regenerate with the measured one before run 8. Each run:
+(`overload-over`), 5 (`agentic`, no `--dataset`), 8 (`bursty`), 9
+(`short-spikes`), 10 (`scale-down`), 6 (`mixshift` again, pinned), 7
+(`bootstrap`, only with `minReplicaCount: 0`). If run 2 shows a cold start
+other than the one R and H were computed from, regenerate with the measured
+one before run 8. Each run:
 
 ```bash
 $S/arm.sh $NS <so> active               # run 6: pin <peak Ready of run 3>; run 7: zero
@@ -197,7 +199,7 @@ Mark the run *running* in the summary when it starts. When it ends, in
 5. Amend what this run changes (§5.5): a fault or a tool error it reveals
    that also affected earlier runs. Add a dated entry to each amended report
    and to the summary's log. A measured cold start that differs from the one
-   R used changes no report: regenerate the bursty load before run 8.
+   R used changes no report: regenerate runs 8 to 10's loads before run 8.
 6. Reread the new and amended text against the writing rules in §5.5 (each
    number traceable to a file, n = 1 stated, errors by type, no cause the run
    did not measure, no cluster, context or node name), run `pre-commit` on

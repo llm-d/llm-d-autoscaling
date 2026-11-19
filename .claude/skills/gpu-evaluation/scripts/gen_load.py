@@ -7,13 +7,14 @@ by the rules of §5.3, so no rate is chosen by hand.
     gen_load.py knee --mix 8192:256|blend --estimate 2.4 --slo ttft=2,tpot=0.05 --out DIR
     gen_load.py runs --mu 8192:256=2.1,2048:2048=0.9,256:4096=0.5 --mu-blend 0.8 \
         --max-replicas 6 [--min-replicas 1] [--stage 300] --spike 105 --quiet 720 \
+        --gap 150 --hold 1125 --down-stage 1020 \
         --slo ttft=2,tpot=0.05 --out DIR
 
 The mix set M defaults to llm-d-benchmark's random_* mixes (--mixes overrides it);
 the blend draws each request's mix from M with equal weight.
 
 `knee` writes one knee trace and profile (run 1), for one mix or the blend. `runs`
-writes runs 2 to 8 once every knee is measured: <run>.csv (an AzurePublicDataset trace for
+writes runs 2 to 10 once every knee is measured: <run>.csv (an AzurePublicDataset trace for
 inference-perf's trace_replay) and <run>.yaml (its profile), agentic.yaml
 (Poisson stages, no trace), and index.json with every schedule and the numbers
 it came from. Run 6 (static baseline) replays mixshift.csv with mixshift.yaml.
@@ -261,6 +262,20 @@ def runs(a, out, limits):
          f"bursty, blend: {a.quiet} s at 0.2 x C = {0.2 * C:.3f} req/s, then 3 x ({a.spike} s at "
          f"0.7 x C = {0.7 * C:.3f} req/s, {a.quiet} s quiet)", index)
 
+    short = max(30, a.spike // 2)
+    spikes = [(300, 0.2 * C, blend)]
+    for i in range(6):
+        spikes += [(short, 0.7 * C, blend), (a.gap if i < 5 else a.quiet, 0.2 * C, blend)]
+    emit(out, "short-spikes", spikes, seed + 9, limits,
+         f"short spikes, blend: 300 s at 0.2 x C, then 6 x ({short} s at 0.7 x C = "
+         f"{0.7 * C:.3f} req/s, {a.gap} s gap at {0.2 * C:.3f} req/s), last gap {a.quiet} s", index)
+
+    down = [(a.hold, 0.9 * C, blend)] + [(a.down_stage, f * C, blend) for f in (0.6, 0.3, 0.1)]
+    emit(out, "scale-down", down, seed + 10, limits,
+         f"scale-down, blend: {a.hold} s at 0.9 x C = {0.9 * C:.3f} req/s, then {a.down_stage} s "
+         f"steps at 0.6, 0.3, 0.1 x C; needs "
+         + ", ".join(str(math.ceil(f * C / mu)) for f in (0.9, 0.6, 0.3, 0.1)) + " replicas", index)
+
     if a.min_replicas == 0:
         emit(out, "bootstrap", [(P, 0.4 * mu, blend)], seed + 7, limits,
              f"scale from zero, blend: {0.4 * mu:.3f} req/s", index)
@@ -305,6 +320,9 @@ def main():
     r.add_argument("--stage", type=int, default=300, help="stage length T, s (§5.3)")
     r.add_argument("--spike", required=True, type=int, help="burst spike length R, s (§5.3)")
     r.add_argument("--quiet", required=True, type=int, help="burst quiet length Q, s (§5.3)")
+    r.add_argument("--gap", required=True, type=int, help="short-spike gap G, s (§5.3)")
+    r.add_argument("--hold", required=True, type=int, help="scale-down opening hold H, s (§5.3)")
+    r.add_argument("--down-stage", required=True, type=int, help="scale-down step length D, s (§5.3)")
     r.add_argument("--seed", type=int, default=100)
     for p in (k, r):
         p.add_argument("--mixes", default=MIXES, help=f"the mix set M (default {MIXES})")
@@ -313,8 +331,8 @@ def main():
     a = ap.parse_args()
     if a.cmd == "runs" and a.stage < 300:
         ap.error("--stage must be at least 300 s (§5.3)")
-    if a.cmd == "runs" and (a.spike < 60 or a.quiet < 300):
-        ap.error("--spike must be at least 60 s and --quiet at least 300 s (§5.3)")
+    if a.cmd == "runs" and (a.spike < 60 or a.quiet < 300 or a.gap < 60):
+        ap.error("--spike and --gap must be at least 60 s, --quiet at least 300 s (§5.3)")
     a.out.mkdir(parents=True, exist_ok=True)
     if a.cmd == "knee":
         name, index = knee(a, a.out, a.slo)

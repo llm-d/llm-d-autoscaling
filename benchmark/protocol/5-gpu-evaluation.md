@@ -94,6 +94,18 @@ when the spike ends. The quiet phase lasts
 `Q = scale-down stabilization + scale-down period + 120 s` (at least 300 s),
 so the pool can shrink between spikes.
 
+**Short spikes** (run 9) last `R/2` (at least 30 s, one bin of the figure),
+so a replica requested for a spike is Ready only after it has ended. The gap
+between spikes is `G = min(2 R, scale-down stabilization / 2)` (at least
+60 s), short enough that the pool cannot shrink between them.
+
+**Scale-down lengths** (run 10). The opening hold lasts
+`H = (ceil(0.9 × maxReplicaCount) − minReplicaCount) × scale-up period + R +
+120 s`, long enough to reach the replicas 0.9 × C needs. Each step down
+lasts `D = ΔR↓ × scale-down period + scale-down stabilization + 120 s`, where
+ΔR↓ is the most replicas a step sheds (`ceil` of the need before minus the
+need after).
+
 | # | Run | Arm | Load | Read from the run | Shows a problem when |
 |---|---|---|---|---|---|
 | 1 | Knees | 1 replica, autoscaling paused | one run per mix in M and one for B; six 300 s stages at 0.4, 0.7, 1.0, 1.4, 1.9 and 2.5 × an estimate of μ_SLO (from a simulator profile, a previous run, or a short probe) | A, TTFT and TPOT per stage; μ_SLO is the rate where A crosses X, interpolated linearly between the two stages around it | the crossing is not between stages 2 and 5: move the estimate and rerun |
@@ -105,15 +117,18 @@ so the pool can shrink between spikes.
 | 6 | Static-replica baseline | autoscaling paused at the peak Ready count of run 3 | run 3's trace, byte-identical | A per phase; replica-seconds against run 3 | not a pass/fail run: it is the cost reference for run 3 |
 | 7 | Scale from zero | 0 Ready, ScaledObject active (only when `minReplicaCount` is 0) | B, one phase at 0.4 × μ_SLO(B) | time to the first Ready replica; requests failed before it | requests still fail after the first replica is Ready |
 | 8 | Bursty | as 2 | B, a quiet phase Q at 0.2 × C, then three cycles of a spike R at 0.7 × C and a quiet phase Q | per cycle: scale-ups and scale-downs, replicas requested in a spike that were Ready only after it ended, A in the spike and in the quiet phase; requests failed when a replica was removed (`requests_errored_at_end`); replica-seconds | A < X in a quiet phase, or requests fail at a scale-down |
+| 9 | Short spikes | as 2 | B, 300 s at 0.2 × C, then six spikes of R/2 at 0.7 × C separated by gaps G at 0.2 × C, then Q at 0.2 × C | per spike: whether it caused a scale-up, and whether that replica was Ready before the spike ended; A in each spike and each gap; Ready replicas through the run and after the last spike; replica-seconds | A < X in a gap, or requests fail at a scale-down |
+| 10 | Scale-down | as 2 | B, H at 0.9 × C, then steps of length D at 0.6, 0.3 and 0.1 × C | per step down: time until Ready replicas reach the new need `ceil(q / μ_SLO(B))`, replica-seconds above that need, A, and requests failed when a replica was removed (`requests_errored_at_end`) | A < X after a step down, requests fail at a scale-down, or replicas have not reached the new need at the end of a step |
 
 Notes on the run set:
 
-- **Order.** The knees, then 2 to 5, then 8 (it needs the cold start read in
-  run 2), then 6 (it needs run 3's peak), then 7. For a single-pool scenario
-  with the three mixes of M and T = 300 s the load lasts about 5.5 h (four
-  knees of 30 min; run 8 is about 53 min for `npd-fcoff`'s HPA behavior:
-  Q = 720 s, R ≈ 105 s); with the drain and the arm between runs (about
-  10 min each), about 7.5 h, plus standup.
+- **Order.** The knees, then 2 to 5, then 8 to 10 (they need the cold start
+  read in run 2), then 6 (it needs run 3's peak), then 7. For a single-pool
+  scenario with the three mixes of M and T = 300 s, and `npd-fcoff`'s HPA
+  behavior (R ≈ 105 s, Q = 720 s, G = 150 s, H ≈ 1,125 s, D = 1,020 s), the
+  load lasts about 7.3 h (four knees of 30 min, run 8 about 53 min, run 9
+  about 35 min, run 10 about 70 min); with the drain and the arm between runs
+  (about 10 min each), about 9.5 h, plus standup.
 - **The blend** gives every load-shape run all the mixes at once, so no run
   favors a configuration tuned to one of them. Its arrivals are one Poisson
   process; only the mix of each request is drawn.
@@ -122,8 +137,13 @@ Notes on the run set:
   every phase under the cap.
 - **Bursty is not overload.** Overload holds a load above capacity for longer
   than any scale-up and tests the cap; a burst is shorter than the pool's
-  reaction and its peak is within the cap. It tests whether the pool chases
-  spikes it cannot catch, and the only repeated scale-down in the set.
+  reaction and its peak is within the cap.
+- **Runs 8 to 10 split the time-varying cases.** Bursty (8): a spike as long
+  as the reaction, then time to shrink, so each cycle scales up and down.
+  Short spikes (9): too short to catch and too close together to shrink
+  between, so it shows whether the pool chases spikes and what it holds
+  afterwards. Scale-down (10): load leaving a full pool in steps, so it shows
+  how fast and how cleanly capacity is released.
 - **Overload** is measured against the cap, not one replica: 0.8 × C needs a
   ramp to most of the cap and stays servable; 1.5 × C cannot be served. Each
   starts from a phase at 1.2 × μ_SLO, so the step comes from a pool already
@@ -148,7 +168,7 @@ The [`gpu-evaluation` skill](../../.claude/skills/gpu-evaluation/SKILL.md)
 runs these steps in this order, with the commands.
 
 1. **Confirm the cluster** with the user before the first write: which
-   context, and whether its GPUs may be used for the duration (about 7.5 h for
+   context, and whether its GPUs may be used for the duration (about 9.5 h for
    the runs, plus standup). Never switch the user's context.
 2. **Render and check locally.** `standup --dry-run`; read the rendered
    ScaledObject (placeholders resolved, the thresholds intended). Check §5.1.
