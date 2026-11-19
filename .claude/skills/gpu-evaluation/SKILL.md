@@ -1,6 +1,6 @@
 ---
 name: gpu-evaluation
-description: Run step 5 of this repo's autoscaling evaluation protocol (benchmark/protocol/) — evaluate a KEDA scenario on a real GPU plant with the fixed run set (knee staircase, SO-active staircase, mix-shift, overload 2.5× and 6.6×, agentic, static-replica baseline) and write one report per run (llm-d-benchmark's report plus a load-vs-supply figure) and a summary, from data captured on the live cluster. Use when asked to run a scenario on GPUs, to measure a scaling configuration on real hardware, to calibrate a knee or μ_SLO on a GPU, or to compare an autoscaled run with a static fleet. Invoke with /gpu-evaluation <scenario.yaml> [backend overlay] [--context <kube-context>].
+description: Run step 5 of this repo's autoscaling evaluation protocol (benchmark/protocol/) — evaluate a KEDA scenario on a real GPU plant with the fixed run set (knee staircase, SO-active staircase, mix-shift, overload under and over the cap, agentic, static-replica baseline, scale from zero) and write one report per run (llm-d-benchmark's report plus a load-vs-supply figure) and a summary, from data captured on the live cluster. Use when asked to run a scenario on GPUs, to measure a scaling configuration on real hardware, to calibrate a knee or μ_SLO on a GPU, or to compare an autoscaled run with a static fleet. Invoke with /gpu-evaluation <scenario.yaml> [backend overlay] [--context <kube-context>].
 ---
 
 # GPU evaluation
@@ -21,27 +21,44 @@ commands. Read first:
 - the `run-benchmark` skill for the `llmdbenchmark` commands, and the
   `load-vs-supply` skill for the figure.
 
-Scripts in this directory: `scripts/arm.sh` sets a run's starting state,
-`scripts/trigger_series.py` exports the trigger and replica series from
-Prometheus. Both take the namespace and ScaledObject name; pass `--context`
-through `KUBECTL="kubectl --context <ctx>"`.
+Scripts in this directory (standard library Python, bash):
+
+- `scripts/gen_load.py` writes every run's trace and inference-perf profile
+  from the §5.2 inputs, by the §5.3 rules;
+- `scripts/stage.sh` copies the traces onto the namespace's workload PVC;
+- `scripts/arm.sh` sets a run's starting state;
+- `scripts/trigger_series.py` exports the trigger and replica series from
+  Prometheus.
+
+The shell scripts take `--context` through `KUBECTL="kubectl --context <ctx>"`.
 
 ## Step 0: Confirm with the user
 
 Stop and ask before any cluster write. Name the context and where it came
 from, the GPUs the runs hold (`maxReplicaCount` × GPUs per replica, for about
-3 h plus standup), the SLO and X (§5.2) and the run list. If nobody answers,
+5 h plus standup), the §5.2 inputs (SLO and X, the two mixes, the replica
+unit) and the run list. If nobody answers,
 do Step 1 only and say what is needed. Never switch the user's context.
 
 ## Step 1: Prepare, locally
 
 1. Check §5.1: the llm-d-benchmark commit, the overlay, Prometheus access.
-2. Pick the profiles. For `optimized-baseline/npd-fcoff` they exist in
-   `benchmark/config/workloads/npd-fcoff/` with traces from
-   `benchmark/hack/npd-fcoff/gen_traces.py`. For another scenario copy them
-   to `benchmark/config/workloads/<scenario>/`, set the mix, put the SLO in
-   `report.goodput.constraints`, and keep `per_request: true` and
-   `computed_metrics: true`. The rates of runs 2 to 6 wait for run 1.
+2. Fix the §5.2 inputs, from the scenario and its guide: the SLO, the
+   reference mix (the guide's default workload), the second mix, the replica
+   unit, and an estimate of μ_SLO for each mix (a simulator profile, an
+   earlier run, or a short probe). Write the knee loads:
+
+   ```bash
+   S=.claude/skills/gpu-evaluation/scripts
+   python3 -I $S/gen_load.py knee --mix <ref> --estimate <req/s> --slo ttft=<s>,tpot=<s> \
+     --name knee-ref --out $LOAD
+   python3 -I $S/gen_load.py knee --mix <second> --estimate <req/s> --slo ttft=<s>,tpot=<s> \
+     --name knee-second --out $LOAD
+   ```
+
+   `$LOAD` is a working directory outside the repository; the profile of each
+   run is committed later with its report. The other runs' loads wait for the
+   knees.
 3. `llmdbenchmark standup --dry-run` with the spec and overlay. Read the
    rendered ScaledObject in `plan/<stack>/`: placeholders resolved, the
    thresholds intended, and, if verdicts exist, the object they analyzed.
@@ -63,35 +80,59 @@ arguments. Send one minute of smoke load and check that every trigger leaves
 0 (`trigger_series.py` over that minute). A trigger that stays at 0 stops the
 evaluation: fix the metric path first.
 
-## Step 3: Run 1, the knee
+## Step 3: Runs 1a and 1b, the knees
 
 ```bash
-scripts/arm.sh $NS <so> pin 1
+$S/stage.sh $NS $LOAD
+$S/arm.sh $NS <so> pin 1                # other pools: pin them large enough (§5.2)
 llmdbenchmark ... run -l inference-perf --monitoring \
-  --workload-file-path <knee profile> [--dataset <trace>] --wait-timeout 3600
+  --workload-file-path $LOAD/knee-ref.yaml --dataset /requests/datasets/knee-ref.csv \
+  --wait-timeout 3600
 ```
 
-Read A per stage from the benchmark report's per-stage results (or the
-figure's CSV) and interpolate μ_SLO at A = X. If no stage, or the first stage,
-is below X, move the range and rerun (§5.3). Derive the scenario's threshold
-from μ_SLO if it has such a rule, apply it with `kubectl patch scaledobject`,
-and record the value. Then set the rates of the other runs.
+Then the same with `knee-second`. Read A per stage from the benchmark
+report's per-stage results (or the figure's CSV) and interpolate μ_SLO at
+A = X. If the crossing is not between stages 2 and 5, regenerate the knee with
+a new estimate and rerun (§5.3). If the configuration derives its threshold
+from capacity, compute it from the reference knee, apply it with
+`kubectl patch scaledobject`, and record the value. With several pools, repeat
+for each scaled pool.
 
-## Step 4: Runs 2 to 6
-
-Order: 2, 3, 4a, 4b, 5, 6 (run 6 needs run 3's peak Ready count). Each run:
+Read the cold start (requested to Ready) at the first scale-up you see, or
+take it from the overlay's earlier runs, and set the stage length T (§5.3).
+Then write the other runs' loads and stage them:
 
 ```bash
+python3 -I $S/gen_load.py runs --mix <ref> --mu <μ ref> --mix2 <second> --mu2 <μ second> \
+  --max-replicas <max> --min-replicas <min> --stage <T> --slo ttft=<s>,tpot=<s> --out $LOAD
+$S/stage.sh $NS $LOAD
+```
+
+`$LOAD/index.json` holds every schedule and the numbers it came from; each
+report's header cites it.
+
+## Step 4: Runs 2 to 7
+
+Order: 2 (`stair`), 3 (`mixshift`), 4a (`overload-under`), 4b
+(`overload-over`), 5 (`agentic`, no `--dataset`), 6 (`mixshift` again,
+pinned), 7 (`bootstrap`, only with `minReplicaCount: 0`). Each run:
+
+```bash
+$S/arm.sh $NS <so> active               # run 6: pin <peak Ready of run 3>; run 7: zero
 date +%s > $RUN/start
-scripts/arm.sh $NS <so> active          # run 6: scripts/arm.sh $NS <so> pin <peak of run 3>
 llmdbenchmark ... run -l inference-perf --monitoring \
-  --workload-file-path <profile> [--dataset <trace>] --wait-timeout 4800
+  --workload-file-path $LOAD/<run>.yaml --dataset /requests/datasets/<run>.csv \
+  --wait-timeout 4800
 date +%s > $RUN/end
 kubectl -n $NS get scaledobject <so> -o json > $RUN/scaledobject.json
-python3 -I scripts/trigger_series.py --scaledobject $RUN/scaledobject.json \
+python3 -I $S/trigger_series.py --scaledobject $RUN/scaledobject.json \
   --prom <url> [--insecure] --start $(cat $RUN/start) --end $(cat $RUN/end) --out $RUN/triggers
 kubectl -n $NS get events --sort-by=.lastTimestamp > $RUN/events.txt
 ```
+
+For run 7, llm-d-benchmark wakes a scaled-to-zero stack before its model
+check (#2188); if the check still fails on the empty pool, pass
+`--endpoint-url` (the router's service) and `--model`.
 
 Capture the ScaledObject during or right after the run, before any patch for
 the next one. Then apply the gate (§5.6). A run that fails it for an

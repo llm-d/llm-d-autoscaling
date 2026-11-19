@@ -26,63 +26,103 @@ a failure they predicted says so.
 | the `load-vs-supply` skill | the per-run figure (§5.5) | the `autoscaling` plugin of `llm-d-autoscaling-research` (`plugins/autoscaling/skills/load-vs-supply/`) |
 | Prometheus reachable from the workstation, with the run's retention | the run directory holds the HPA's reading per tick (per pod, for `AverageValue`), not the trigger's value; the figure takes the trigger from a Prometheus range query after each run | a port-forward or route, and a token where the overlay uses bearer auth |
 
-## 5.2 Load and SLO
+## 5.2 Load, SLO and capacity
 
 Load is λ = (λ_in, λ_out): the input and output tokens per second the clients
-send, as the `load-vs-supply` skill defines it. Every run is open loop
-(`trace_replay`, `poisson` or `constant`), so the offered load does not depend
-on what the pool does. The agentic run is Poisson too: requests arrive at the
-stage rate, and each turn's context comes from its session.
+send, as the `load-vs-supply` skill defines it. Every run is open loop: requests
+arrive on a schedule (a replayed trace, or Poisson stages for the agentic run),
+so the offered load does not depend on what the pool does. Prompts are random
+tokens except in the agentic run, so the prefix cache never hits and a run can
+be repeated with the same result for the cache.
 
-The SLO is configuration. Fix it before the first run, write it in every
-profile's `report.goodput.constraints`, and use it unchanged in every report.
-**Attainment A** is the share of requests **sent** that completed and met
-every constraint; failed and timed-out requests count as misses. The objective
-X (for example 0.95) is fixed with the SLO.
+Four inputs are fixed before run 1 and do not change during the evaluation:
 
-All rates below are multiples of **μ_SLO**, the highest offered rate one
-replica serves at A ≥ X for the reference mix, measured by run 1. The
-reference mix is the scenario's own (8192:128 for `npd-fcoff`).
+- **The SLO**: TTFT and TPOT limits, from the guide the scenario belongs to
+  (for example llm-d-benchmark's `ttft: 2`, `tpot: 0.05`), and the objective
+  X (for example 0.95). **Attainment A** is the share of requests **sent** that
+  completed and met every limit; failed and timed-out requests count as
+  misses. The limits go in every profile's `report.goodput.constraints`.
+- **The reference mix** (ISL:OSL): the scenario's target workload, for example
+  the guide's default profile (5000:250 for `pd-disaggregation`).
+- **The second mix**: the reference mix's opposite, decode-heavy if the
+  reference is prefill-heavy and the other way round, with ISL/OSL different
+  by at least 10× (for example 8192:128 and 128:512).
+- **The replica**: the unit the ScaledObject scales (a pod, or a
+  LeaderWorkerSet group).
+
+Two numbers come from the knee runs (run 1) and set every other rate:
+
+- **μ_SLO(mix)**: the highest request rate one replica serves at A ≥ X for
+  that mix. It is measured for both mixes.
+- **C = maxReplicaCount × μ_SLO(reference)**: what the pool serves at its cap,
+  in requests per second of the reference mix.
+
+With several pools (P/D), each scaled pool has its own μ_SLO, measured with the
+other pools pinned large enough that they cannot be the bottleneck, and C is
+the smallest of the pools' `maxReplicaCount × μ_SLO`. The report names the pool
+that sets C.
+
+The knee has two uses. If the configuration derives its threshold from
+capacity (as `npd-fcoff`'s `thresholdWork = 0.70 × ν_max`), the reference-mix
+knee sets that threshold once, before run 2, and it stays fixed. In every
+configuration, μ_SLO is also the ruler the reports use to say how many replicas
+a load needed. The second mix's knee serves only as that ruler, for run 3.
 
 ## 5.3 The runs
 
 One standup serves every run. Each run starts from the same plant state, its
 **arm**, set with the ScaledObject before the load starts (§5.4). The
-`npd-fcoff` profiles in [`workloads/npd-fcoff/`](../config/workloads/npd-fcoff/)
-implement every shape below; another scenario copies them and changes the
-rates and the mix.
+[`gen_load.py`](../../.claude/skills/gpu-evaluation/scripts/gen_load.py)
+script of the `gpu-evaluation` skill writes every run's trace and profile from
+the inputs above, so no rate is chosen by hand.
+
+**Stage length T.** A staircase stage must outlast the pool's reaction to it
+and leave time to measure:
+`T ≥ ΔR × scale-up period + cold start + pollingInterval + 120 s`, and
+`T ≥ 300 s`, where ΔR is the most replicas a stage adds, the scale-up period
+comes from the HPA behavior (`npd-fcoff`: 1 pod per 180 s), and cold start is
+the time from a new replica being requested to Ready, read off the first
+scale-up. Phases (runs 3 to 5) last `max(600 s, 2 T)`.
 
 | # | Run | Arm | Load | Read from the run | Shows a problem when |
 |---|---|---|---|---|---|
-| 1 | Knee staircase | 1 replica, autoscaling paused | reference mix, six 300 s stages of constant rate spanning the knee (`npd-fcoff`: 1 to 6 req/s) | A, TTFT and ITL per stage; μ_SLO is the rate where A crosses X, interpolated linearly between the two stages around it | no stage, or the first stage, is below X: the range missed the knee; move it and rerun |
-| 2 | SO-active staircase | ScaledObject active, `minReplicaCount` Ready | reference mix, five 300 s stages from 0.33 to 1.65 × μ_SLO | Ready, requested and HPA-desired replicas against each stage; A per stage | replicas do not rise with the stages, or A < X at a stage after the pool settled |
-| 3 | Mix-shift at constant rate | ScaledObject active, `minReplicaCount` Ready | two 600 s phases, reference mix then a decode-heavy mix (`npd-fcoff`: 128:512), each at the same multiple (about 2×) of one replica's capacity for its mix | replicas across the shift; A per phase; the request rate swing | replicas move by more than one across the shift, or A < X in phase 2 |
-| 4a | Overload 2.5× | ScaledObject active, `minReplicaCount` Ready | 600 s at 1.2 × μ_SLO, then 600 s at 2.5 × μ_SLO | replicas, A and errors by type through the step | A < X after Ready replicas stop rising |
-| 4b | Overload 6.6× | as 4a | 600 s at 1.2 × μ_SLO, then 600 s at 6.6 × μ_SLO | the trigger at the cap; errors by type (timeouts, 429, 503) | the trigger reads 0 or falls while the load holds, or replicas stop below `maxReplicaCount` |
-| 5 | Agentic | ScaledObject active, `minReplicaCount` Ready | AgentX-shaped multi-turn sessions (shared system prompt, growing context, tool pauses), 600 s at a low request rate then 1,200 s at 3× that rate (`npd-fcoff`: 0.5 then 1.5 req/s), context scaled to fit `--max-model-len` | replicas; A and errors by type; TTFT by prompt-length bucket | A < X after the pool settled; any context-overflow error (the trace does not fit the plant, so fix the trace) |
+| 1a | Knee, reference mix | 1 replica, autoscaling paused | reference mix, six 300 s stages at 0.4, 0.7, 1.0, 1.4, 1.9 and 2.5 × an estimate of μ_SLO (from a simulator profile, a previous run, or a short probe) | A, TTFT and TPOT per stage; μ_SLO is the rate where A crosses X, interpolated linearly between the two stages around it | the crossing is not between stages 2 and 5: move the estimate and rerun |
+| 1b | Knee, second mix | as 1a | as 1a, with the second mix | μ_SLO of the second mix | as 1a |
+| 2 | SO-active staircase | ScaledObject active, `minReplicaCount` Ready | reference mix, five stages of length T at 0.15, 0.3, 0.5, 0.7 and 0.9 × C | Ready, requested and HPA-desired replicas per stage, against the stage's need `ceil(q / μ_SLO)`; A per stage | replicas do not rise with the stages, or A < X once the pool settled |
+| 3 | Mix-shift at constant rate | as 2 | one request rate `q = 0.5 × maxReplicaCount × min(μ_SLO(reference), μ_SLO(second))` throughout; the reference mix for the first phase, the second mix for the second | settled Ready replicas in each phase against that phase's need `ceil(q / μ_SLO(mix))`; A per phase | A < X once settled, or settled replicas differ from the need by more than the configuration's stated headroom (for a target utilization U, `ceil(q / (U × μ_SLO))`) |
+| 4a | Overload under the cap | as 2 | a phase at 1.2 × μ_SLO, then a phase at 0.8 × C | replicas, A and errors by type through the step | A < X after Ready replicas stop rising |
+| 4b | Overload over the cap | as 2 | a phase at 1.2 × μ_SLO, then a phase at 1.5 × C | the trigger at the cap; errors by type (timeouts, 429, 503) | the trigger reads 0 or falls while the load holds, or replicas stop below `maxReplicaCount` |
+| 5 | Agentic | as 2 | multi-turn sessions (shared system prompt, growing context, tool pauses), a phase at 0.1 then a phase of twice the length at 0.3 of the pool's prompt-token capacity `C × ISL(reference)`, converted to requests per second with the sessions' estimated mean prompt length; contexts capped by `--max-model-len` | replicas; A and errors by type; TTFT by prompt-length bucket | A < X once settled; any context-overflow error (the sessions do not fit the plant: fix the profile and rerun) |
 | 6 | Static-replica baseline | autoscaling paused at the peak Ready count of run 3 | run 3's trace, byte-identical | A per phase; replica-seconds against run 3 | not a pass/fail run: it is the cost reference for run 3 |
+| 7 | Scale from zero | 0 Ready, ScaledObject active (only when `minReplicaCount` is 0) | reference mix, one phase at 0.4 × μ_SLO | time to the first Ready replica; requests failed before it | requests still fail after the first replica is Ready |
 
 Notes on the run set:
 
-- **Order.** Run 1 first: it fixes μ_SLO and so the rates of every other run.
-  Run 6 after run 3, whose peak sets its fleet size.
-- **The second mix's capacity** (run 3) comes from a knee run on that mix
-  (repeat run 1 with it), or from the scenario's own work model when it has one
-  (`npd-fcoff`'s `c_W`). The report says which.
-- **Overload multipliers** are relative to one replica's μ_SLO. 2.5× must fit
-  under `maxReplicaCount` and 6.6× must exceed it; with `npd-fcoff`'s cap of 6
-  they do. For another cap, keep 2.5× and set the hard step to
-  `1.1 × maxReplicaCount × μ_SLO`, and say so.
-- **Agentic** is the closest shape llm-d-benchmark expresses:
-  inference-perf `conversation_replay` has no subagent fan-out and drains at
-  the stage boundary (see the `npd-fcoff` workload README). State this in the
-  report; do not call it AgentX.
-- **Scale from zero** is a seventh run when `minReplicaCount` is 0: arm at 0
-  Ready, constant load at about 0.4 × μ_SLO (`bootstrap.yaml.in`).
-- **Thresholds.** A threshold derived from μ_SLO (as `npd-fcoff`'s
-  `thresholdWork = 0.70 × ν_max`) is set from run 1 before run 2, with
-  `--set` at standup or a `kubectl patch` of the live ScaledObject. Record the
-  value used.
+- **Order.** 1a, 1b, then 2 to 5, then 6 (it needs run 3's peak), then 7.
+  For a single-pool scenario with T = 300 s the load lasts about 3.3 h;
+  with the drain and the arm between runs (about 10 min each), about 5 h,
+  plus standup.
+- **Mix-shift holds the request rate constant**, so a trigger that counts
+  requests reads no change while the need changes by the ratio of the two
+  μ_SLO. `q` keeps both phases under the cap.
+- **Overload** is measured against the cap, not one replica: 0.8 × C needs a
+  ramp to most of the cap and stays servable; 1.5 × C cannot be served. Each
+  starts from a phase at 1.2 × μ_SLO, so the step comes from a pool already
+  past one replica.
+- **Agentic** load needs more GPU per prompt token than the reference mix
+  (long contexts), so its rates are a fraction of C and the report does not
+  judge its sizing, only attainment, errors and replicas. inference-perf's
+  `conversation_replay` is the closest shape llm-d-benchmark expresses: it has
+  no subagent fan-out, and it drains in-flight requests at the phase boundary.
+  State both in the report.
+- **The static baseline** may instead be the guide's `baseline.yaml` static
+  fleet, if its replica count equals run 3's peak.
+- **`npd-fcoff`** as a worked example (Qwen3-8B, one H100 per replica,
+  reference 8192:128, `maxReplicaCount` 6, μ_SLO = 2.42 req/s in the research
+  runs): C = 14.5 req/s, so run 4a steps to 11.6 req/s and run 4b to
+  21.8 req/s. The research campaign's 2.5× and 6.6× of one replica
+  (6.0 and 16.0 req/s) are 0.41 × C and 1.1 × C: the first was absorbed
+  without reaching overload, which is why the rule uses C.
 
 ## 5.4 Procedure
 
@@ -90,8 +130,8 @@ The [`gpu-evaluation` skill](../../.claude/skills/gpu-evaluation/SKILL.md)
 runs these steps in this order, with the commands.
 
 1. **Confirm the cluster** with the user before the first write: which
-   context, and whether its GPUs may be used for the duration (about 3 h for
-   the six runs, plus standup). Never switch the user's context.
+   context, and whether its GPUs may be used for the duration (about 5 h for
+   the runs, plus standup). Never switch the user's context.
 2. **Render and check locally.** `standup --dry-run`; read the rendered
    ScaledObject (placeholders resolved, the thresholds intended). Check §5.1.
 3. **Stand up** in a new namespace `step5-<scenario>-<YYYYMMDD>`. Resolve and
@@ -139,7 +179,8 @@ The raw results directory stays under `benchmark/results/` (not committed);
 
 1. a header table: namespace, cluster version, scenario, overlay, model, GPU
    type and GPUs per replica, image digests, KEDA release, the SLO and X, the
-   profile and trace, the arm, the session, start and end times (UTC);
+   profile and trace with their entry in `gen_load.py`'s `index.json`, the
+   arm, the session, start and end times (UTC);
 2. the load-vs-supply figure, drawn with the `load-vs-supply` skill
    (`--slo` and `--attainment-target` from §5.2, `--scaledobject` from the
    captured object, one `--trigger` per trigger), and a caption of two to four
