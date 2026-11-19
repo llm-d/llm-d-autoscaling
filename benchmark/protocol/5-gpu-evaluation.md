@@ -84,6 +84,13 @@ comes from the HPA behavior (`npd-fcoff`: 1 pod per 180 s), and cold start is
 the time from a new replica being requested to Ready, read off the first
 scale-up. Phases (runs 3 to 5) last `max(600 s, 2 T)`.
 
+**Burst lengths** (run 8) come from the same HPA behavior. The spike lasts
+the pool's reaction time `R = pollingInterval + scale-up stabilization + cold
+start` (at least 60 s): a replica requested at the start of a spike is Ready
+when the spike ends. The quiet phase lasts
+`Q = scale-down stabilization + scale-down period + 120 s` (at least 300 s),
+so the pool can shrink between spikes.
+
 | # | Run | Arm | Load | Read from the run | Shows a problem when |
 |---|---|---|---|---|---|
 | 1a | Knee, reference mix | 1 replica, autoscaling paused | reference mix, six 300 s stages at 0.4, 0.7, 1.0, 1.4, 1.9 and 2.5 × an estimate of μ_SLO (from a simulator profile, a previous run, or a short probe) | A, TTFT and TPOT per stage; μ_SLO is the rate where A crosses X, interpolated linearly between the two stages around it | the crossing is not between stages 2 and 5: move the estimate and rerun |
@@ -95,16 +102,22 @@ scale-up. Phases (runs 3 to 5) last `max(600 s, 2 T)`.
 | 5 | Agentic | as 2 | multi-turn sessions (shared system prompt, growing context, tool pauses), a phase at 0.1 then a phase of twice the length at 0.3 of the pool's prompt-token capacity `C × ISL(reference)`, converted to requests per second with the sessions' estimated mean prompt length; contexts capped by `--max-model-len` | replicas; A and errors by type; TTFT by prompt-length bucket | A < X once settled; any context-overflow error (the sessions do not fit the plant: fix the profile and rerun) |
 | 6 | Static-replica baseline | autoscaling paused at the peak Ready count of run 3 | run 3's trace, byte-identical | A per phase; replica-seconds against run 3 | not a pass/fail run: it is the cost reference for run 3 |
 | 7 | Scale from zero | 0 Ready, ScaledObject active (only when `minReplicaCount` is 0) | reference mix, one phase at 0.4 × μ_SLO | time to the first Ready replica; requests failed before it | requests still fail after the first replica is Ready |
+| 8 | Bursty | as 2 | reference mix, a quiet phase Q at 0.2 × C, then three cycles of a spike R at 0.7 × C and a quiet phase Q | per cycle: scale-ups and scale-downs, replicas requested in a spike that were Ready only after it ended, A in the spike and in the quiet phase; requests failed when a replica was removed (`requests_errored_at_end`); replica-seconds | A < X in a quiet phase, or requests fail at a scale-down |
 
 Notes on the run set:
 
-- **Order.** 1a, 1b, then 2 to 5, then 6 (it needs run 3's peak), then 7.
-  For a single-pool scenario with T = 300 s the load lasts about 3.3 h;
-  with the drain and the arm between runs (about 10 min each), about 5 h,
-  plus standup.
+- **Order.** 1a, 1b, then 2 to 5, then 8 (it needs the cold start read in
+  run 2), then 6 (it needs run 3's peak), then 7. For a single-pool scenario
+  with T = 300 s the load lasts about 4.1 h (run 8 is about 53 min for
+  `npd-fcoff`'s HPA behavior: Q = 720 s, R ≈ 105 s); with the drain and the
+  arm between runs (about 10 min each), about 6 h, plus standup.
 - **Mix-shift holds the request rate constant**, so a trigger that counts
   requests reads no change while the need changes by the ratio of the two
   μ_SLO. `q` keeps both phases under the cap.
+- **Bursty is not overload.** Overload holds a load above capacity for longer
+  than any scale-up and tests the cap; a burst is shorter than the pool's
+  reaction and its peak is within the cap. It tests whether the pool chases
+  spikes it cannot catch, and the only repeated scale-down in the set.
 - **Overload** is measured against the cap, not one replica: 0.8 × C needs a
   ramp to most of the cap and stays servable; 1.5 × C cannot be served. Each
   starts from a phase at 1.2 × μ_SLO, so the step comes from a pool already
@@ -130,7 +143,7 @@ The [`gpu-evaluation` skill](../../.claude/skills/gpu-evaluation/SKILL.md)
 runs these steps in this order, with the commands.
 
 1. **Confirm the cluster** with the user before the first write: which
-   context, and whether its GPUs may be used for the duration (about 5 h for
+   context, and whether its GPUs may be used for the duration (about 6 h for
    the runs, plus standup). Never switch the user's context.
 2. **Render and check locally.** `standup --dry-run`; read the rendered
    ScaledObject (placeholders resolved, the thresholds intended). Check §5.1.

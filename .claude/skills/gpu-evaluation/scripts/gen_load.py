@@ -7,11 +7,11 @@ by the rules of §5.3, so no rate is chosen by hand.
     gen_load.py knee --mix 8192:128 --estimate 2.4 --slo ttft=2,tpot=0.05 \
         --name knee-ref --out DIR
     gen_load.py runs --mix 8192:128 --mu 2.42 --mix2 128:512 --mu2 11.4 \
-        --max-replicas 6 [--min-replicas 1] [--stage 300] \
+        --max-replicas 6 [--min-replicas 1] [--stage 300] --spike 105 --quiet 720 \
         --slo ttft=2,tpot=0.05 --out DIR
 
 `knee` writes one knee trace and profile (run 1a or 1b). `runs` writes runs 2 to 7
-once both knees are measured: <run>.csv (an AzurePublicDataset trace for
+(and 8) once both knees are measured: <run>.csv (an AzurePublicDataset trace for
 inference-perf's trace_replay) and <run>.yaml (its profile), agentic.yaml
 (Poisson stages, no trace), and index.json with every schedule and the numbers
 it came from. Run 6 (static baseline) replays mixshift.csv with mixshift.yaml.
@@ -215,6 +215,11 @@ def runs(a, out, limits):
     emit(out, "overload-over", [(P, warm, ref), (P, 1.5 * C, ref)], seed + 5, limits,
          f"overload over the cap: {warm:.3f} then 1.5 x C = {1.5 * C:.3f} req/s", index)
 
+    burst = [(a.quiet, 0.2 * C, ref)] + [(a.spike, 0.7 * C, ref), (a.quiet, 0.2 * C, ref)] * 3
+    emit(out, "bursty", burst, seed + 8, limits,
+         f"bursty: {a.quiet} s at 0.2 x C = {0.2 * C:.3f} req/s, then 3 x ({a.spike} s at "
+         f"0.7 x C = {0.7 * C:.3f} req/s, {a.quiet} s quiet)", index)
+
     if a.min_replicas == 0:
         emit(out, "bootstrap", [(P, 0.4 * a.mu, ref)], seed + 7, limits,
              f"scale from zero: {0.4 * a.mu:.3f} req/s", index)
@@ -257,6 +262,8 @@ def main():
     r.add_argument("--max-replicas", required=True, type=int)
     r.add_argument("--min-replicas", type=int, default=1)
     r.add_argument("--stage", type=int, default=300, help="stage length T, s (§5.3)")
+    r.add_argument("--spike", required=True, type=int, help="burst spike length R, s (§5.3)")
+    r.add_argument("--quiet", required=True, type=int, help="burst quiet length Q, s (§5.3)")
     r.add_argument("--seed", type=int, default=100)
     for p in (k, r):
         p.add_argument("--slo", required=True, type=slo, help="ttft=S,tpot=S")
@@ -264,6 +271,8 @@ def main():
     a = ap.parse_args()
     if a.cmd == "runs" and a.stage < 300:
         ap.error("--stage must be at least 300 s (§5.3)")
+    if a.cmd == "runs" and (a.spike < 60 or a.quiet < 300):
+        ap.error("--spike must be at least 60 s and --quiet at least 300 s (§5.3)")
     a.out.mkdir(parents=True, exist_ok=True)
     index = (knee if a.cmd == "knee" else runs)(a, a.out, a.slo)
     path = a.out / ("index.json" if a.cmd == "runs" else f"{a.name}.json")

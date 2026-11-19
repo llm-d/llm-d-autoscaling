@@ -1,6 +1,6 @@
 ---
 name: gpu-evaluation
-description: Run step 5 of this repo's autoscaling evaluation protocol (benchmark/protocol/) — evaluate a KEDA scenario on a real GPU plant with the fixed run set (knee staircase, SO-active staircase, mix-shift, overload under and over the cap, agentic, static-replica baseline, scale from zero) and write one report per run (llm-d-benchmark's report plus a load-vs-supply figure) and a summary, from data captured on the live cluster. Use when asked to run a scenario on GPUs, to measure a scaling configuration on real hardware, to calibrate a knee or μ_SLO on a GPU, or to compare an autoscaled run with a static fleet. Invoke with /gpu-evaluation <scenario.yaml> [backend overlay] [--context <kube-context>].
+description: Run step 5 of this repo's autoscaling evaluation protocol (benchmark/protocol/) — evaluate a KEDA scenario on a real GPU plant with the fixed run set (knee staircase, SO-active staircase, mix-shift, overload under and over the cap, agentic, static-replica baseline, scale from zero, bursty) and write one report per run (llm-d-benchmark's report plus a load-vs-supply figure) and a summary, from data captured on the live cluster. Use when asked to run a scenario on GPUs, to measure a scaling configuration on real hardware, to calibrate a knee or μ_SLO on a GPU, or to compare an autoscaled run with a static fleet. Invoke with /gpu-evaluation <scenario.yaml> [backend overlay] [--context <kube-context>].
 ---
 
 # GPU evaluation
@@ -36,7 +36,7 @@ The shell scripts take `--context` through `KUBECTL="kubectl --context <ctx>"`.
 
 Stop and ask before any cluster write. Name the context and where it came
 from, the GPUs the runs hold (`maxReplicaCount` × GPUs per replica, for about
-5 h plus standup), the §5.2 inputs (SLO and X, the two mixes, the replica
+6 h plus standup), the §5.2 inputs (SLO and X, the two mixes, the replica
 unit) and the run list. If nobody answers,
 do Step 1 only and say what is needed. Never switch the user's context.
 
@@ -99,23 +99,26 @@ from capacity, compute it from the reference knee, apply it with
 for each scaled pool.
 
 Read the cold start (requested to Ready) at the first scale-up you see, or
-take it from the overlay's earlier runs, and set the stage length T (§5.3).
+take it from the overlay's earlier runs, and set the stage length T and the
+burst lengths R and Q (§5.3) from it and the ScaledObject's behavior.
 Then write the other runs' loads and stage them:
 
 ```bash
 python3 -I $S/gen_load.py runs --mix <ref> --mu <μ ref> --mix2 <second> --mu2 <μ second> \
-  --max-replicas <max> --min-replicas <min> --stage <T> --slo ttft=<s>,tpot=<s> --out $LOAD
+  --max-replicas <max> --min-replicas <min> --stage <T> --spike <R> --quiet <Q> --slo ttft=<s>,tpot=<s> --out $LOAD
 $S/stage.sh $NS $LOAD
 ```
 
 `$LOAD/index.json` holds every schedule and the numbers it came from; each
 report's header cites it.
 
-## Step 4: Runs 2 to 7
+## Step 4: Runs 2 to 8
 
 Order: 2 (`stair`), 3 (`mixshift`), 4a (`overload-under`), 4b
-(`overload-over`), 5 (`agentic`, no `--dataset`), 6 (`mixshift` again,
-pinned), 7 (`bootstrap`, only with `minReplicaCount: 0`). Each run:
+(`overload-over`), 5 (`agentic`, no `--dataset`), 8 (`bursty`), 6
+(`mixshift` again, pinned), 7 (`bootstrap`, only with `minReplicaCount: 0`).
+If run 2 shows a cold start other than the one R was computed from,
+regenerate with the measured one before run 8. Each run:
 
 ```bash
 $S/arm.sh $NS <so> active               # run 6: pin <peak Ready of run 3>; run 7: zero
