@@ -4,14 +4,16 @@
 Every rate follows from the inputs of benchmark/protocol/5-gpu-evaluation.md §5.2
 by the rules of §5.3, so no rate is chosen by hand.
 
-    gen_load.py knee --mix 8192:128 --estimate 2.4 --slo ttft=2,tpot=0.05 \
-        --name knee-ref --out DIR
-    gen_load.py runs --mix 8192:128 --mu 2.42 --mix2 128:512 --mu2 11.4 \
+    gen_load.py knee --mix 8192:256|blend --estimate 2.4 --slo ttft=2,tpot=0.05 --out DIR
+    gen_load.py runs --mu 8192:256=2.1,2048:2048=0.9,256:4096=0.5 --mu-blend 0.8 \
         --max-replicas 6 [--min-replicas 1] [--stage 300] --spike 105 --quiet 720 \
         --slo ttft=2,tpot=0.05 --out DIR
 
-`knee` writes one knee trace and profile (run 1a or 1b). `runs` writes runs 2 to 7
-(and 8) once both knees are measured: <run>.csv (an AzurePublicDataset trace for
+The mix set M defaults to llm-d-benchmark's random_* mixes (--mixes overrides it);
+the blend draws each request's mix from M with equal weight.
+
+`knee` writes one knee trace and profile (run 1), for one mix or the blend. `runs`
+writes runs 2 to 8 once every knee is measured: <run>.csv (an AzurePublicDataset trace for
 inference-perf's trace_replay) and <run>.yaml (its profile), agentic.yaml
 (Poisson stages, no trace), and index.json with every schedule and the numbers
 it came from. Run 6 (static baseline) replays mixshift.csv with mixshift.yaml.
@@ -27,18 +29,43 @@ import random
 from pathlib import Path
 
 EPOCH = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
-TIMEOUT = 60      # request timeout, s: a stuck request becomes a failure
-DRAIN = 240       # grace after the last arrival, s
+# A stuck request becomes a failure after the timeout. The timeout is 1.5 x the
+# slowest request that still meets the SLO (TTFT + longest OSL x TPOT), at least
+# 60 s; the drain after the last arrival is at least as long.
+def timeouts(limits, osl_max):
+    t = max(60, math.ceil(1.5 * (limits.get("ttft", 2) + osl_max * limits.get("tpot", 0.05))))
+    return t, max(240, t)
+
 WORKERS = 4
 
 # conversation_replay distribution means (agentic profile below), for the
 # mean prompt length estimate: system + dynamic + input + half the history.
 AG = dict(system=4096, dynamic=2048, turns=10, input=1200, output=360)
 
+# llm-d-benchmark workload/profiles/inference-perf/random_{prefill_heavy,symmetrical,decode_heavy}
+MIXES = "8192:256,2048:2048,256:4096"
+
 
 def mix(spec):
     i, o = spec.split(":")
     return int(i), int(o)
+
+
+def mixes(spec):
+    return [mix(m) for m in spec.split(",")]
+
+
+def label(ms):
+    return "blend" if len(ms) > 1 else f"{ms[0][0]}x{ms[0][1]}"
+
+
+def mus(spec):
+    """8192:256=2.1,... -> [((8192, 256), 2.1), ...] in the given order"""
+    out = []
+    for part in spec.split(","):
+        m, v = part.split("=")
+        out.append((mix(m), float(v)))
+    return out
 
 
 def slo(spec):
@@ -52,15 +79,19 @@ def slo(spec):
 
 
 def trace(phases, seed):
-    """phases: [(duration s, rate req/s, (isl, osl))] -> [(offset s, isl, osl)]"""
+    """phases: [(duration s, rate req/s, [(isl, osl), ...])] -> [(offset s, isl, osl)]
+
+    One Poisson arrival process; each request's mix is drawn uniformly from the
+    phase's mixes (a blend), or is the phase's only mix."""
     rng = random.Random(seed)
     rows, t0 = [], 0.0
-    for dur, rate, (isl, osl) in phases:
+    for dur, rate, ms in phases:
         t = t0
         while rate > 0:
             t += rng.expovariate(rate)
             if t >= t0 + dur:
                 break
+            isl, osl = ms[0] if len(ms) == 1 else rng.choice(ms)
             rows.append((t, isl, osl))
         t0 += dur
     return rows
@@ -74,9 +105,9 @@ def write_trace(path, rows):
             f.write(f"{ts.strftime('%Y-%m-%d %H:%M:%S.%f')},{isl},{osl}\n")
 
 
-def concurrency(max_rate):
+def concurrency(max_rate, timeout):
     # the worst backlog (max rate x timeout) must fit, or the replay stops being open loop
-    return max(512, math.ceil(max_rate * TIMEOUT * 1.5 / WORKERS))
+    return max(512, math.ceil(max_rate * timeout * 1.5 / WORKERS))
 
 
 def constraints(limits):
@@ -170,70 +201,81 @@ def emit(out, name, phases, seed, limits, what, index):
     rows = trace(phases, seed)
     write_trace(out / f"{name}.csv", rows)
     duration = int(sum(d for d, _, _ in phases))
+    timeout, drain = timeouts(limits, max(o for _, _, ms in phases for _, o in ms))
     (out / f"{name}.yaml").write_text(REPLAY.format(
-        name=name, what=what, duration=duration, timeout=TIMEOUT, drain=DRAIN,
-        workers=WORKERS, conc=concurrency(max(r for _, r, _ in phases)),
+        name=name, what=what, duration=duration, timeout=timeout, drain=drain,
+        workers=WORKERS, conc=concurrency(max(r for _, r, _ in phases), timeout),
         constraints=constraints(limits)))
     index[name] = dict(what=what, seed=seed, duration_s=duration, requests=len(rows),
-                       phases=[dict(seconds=d, rate=round(r, 4), mix=f"{i}:{o}")
-                               for d, r, (i, o) in phases])
+                       timeout_s=timeout, drain_s=drain,
+                       phases=[dict(seconds=d, rate=round(r, 4),
+                                    mix=",".join(f"{i}:{o}" for i, o in ms))
+                               for d, r, ms in phases])
     print(f"{name}: {len(rows)} requests, {duration} s")
 
 
 def knee(a, out, limits):
-    m = mix(a.mix)
+    ms = mixes(a.mixes) if a.mix == "blend" else [mix(a.mix)]
+    name = a.name or f"knee-{label(ms)}"
     factors = (0.4, 0.7, 1.0, 1.4, 1.9, 2.5)
-    phases = [(300, f * a.estimate, m) for f in factors]
+    phases = [(300, f * a.estimate, ms) for f in factors]
     index = {}
-    emit(out, a.name, phases, a.seed, limits,
-         f"knee, {a.mix}, stages at {factors} x estimate {a.estimate} req/s", index)
-    return index
+    emit(out, name, phases, a.seed, limits,
+         f"knee, {label(ms)} ({','.join(f'{i}:{o}' for i, o in ms)}), "
+         f"stages at {factors} x estimate {a.estimate} req/s", index)
+    return name, index
 
 
 def runs(a, out, limits):
-    ref, second = mix(a.mix), mix(a.mix2)
-    C = a.max_replicas * a.mu
+    per_mix = mus(a.mu)
+    blend = mixes(a.mixes)
+    if sorted(m for m, _ in per_mix) != sorted(blend):
+        raise SystemExit(f"--mu must give one μ_SLO per mix of the set {a.mixes}")
+    mu = a.mu_blend
+    C = a.max_replicas * mu
     T = a.stage
     P = max(600, 2 * T)
     seed = a.seed
-    index = {"inputs": dict(mix=a.mix, mu=a.mu, mix2=a.mix2, mu2=a.mu2,
-                            max_replicas=a.max_replicas, min_replicas=a.min_replicas,
-                            stage_s=T, phase_s=P, C_req_s=round(C, 4), slo=limits)}
+    index = {"inputs": dict(mixes=a.mixes, mu={f"{i}:{o}": v for (i, o), v in per_mix},
+                            mu_blend=mu, max_replicas=a.max_replicas,
+                            min_replicas=a.min_replicas, stage_s=T, phase_s=P,
+                            C_req_s=round(C, 4), slo=limits)}
 
     fr = (0.15, 0.3, 0.5, 0.7, 0.9)
-    emit(out, "stair", [(T, f * C, ref) for f in fr], seed + 2, limits,
-         f"SO-active staircase, {a.mix}, stages at {fr} x C (C = {C:.3f} req/s)", index)
+    emit(out, "stair", [(T, f * C, blend) for f in fr], seed + 2, limits,
+         f"SO-active staircase, blend, stages at {fr} x C (C = {C:.3f} req/s)", index)
 
-    q = 0.5 * a.max_replicas * min(a.mu, a.mu2)
-    emit(out, "mixshift", [(P, q, ref), (P, q, second)], seed + 3, limits,
-         f"mix-shift at {q:.3f} req/s, {a.mix} then {a.mix2}; "
-         f"need {math.ceil(q / a.mu)} then {math.ceil(q / a.mu2)} replicas", index)
+    q = 0.5 * a.max_replicas * min(v for _, v in per_mix)
+    need = ", ".join(f"{i}:{o} needs {math.ceil(q / v)}" for (i, o), v in per_mix)
+    emit(out, "mixshift", [(P, q, [m]) for m, _ in per_mix], seed + 3, limits,
+         f"mix-shift at {q:.3f} req/s, one phase per mix: {need} replicas", index)
 
-    warm = 1.2 * a.mu
-    emit(out, "overload-under", [(P, warm, ref), (P, 0.8 * C, ref)], seed + 4, limits,
-         f"overload under the cap: {warm:.3f} then 0.8 x C = {0.8 * C:.3f} req/s", index)
-    emit(out, "overload-over", [(P, warm, ref), (P, 1.5 * C, ref)], seed + 5, limits,
-         f"overload over the cap: {warm:.3f} then 1.5 x C = {1.5 * C:.3f} req/s", index)
+    warm = 1.2 * mu
+    emit(out, "overload-under", [(P, warm, blend), (P, 0.8 * C, blend)], seed + 4, limits,
+         f"overload under the cap, blend: {warm:.3f} then 0.8 x C = {0.8 * C:.3f} req/s", index)
+    emit(out, "overload-over", [(P, warm, blend), (P, 1.5 * C, blend)], seed + 5, limits,
+         f"overload over the cap, blend: {warm:.3f} then 1.5 x C = {1.5 * C:.3f} req/s", index)
 
-    burst = [(a.quiet, 0.2 * C, ref)] + [(a.spike, 0.7 * C, ref), (a.quiet, 0.2 * C, ref)] * 3
+    burst = [(a.quiet, 0.2 * C, blend)] + [(a.spike, 0.7 * C, blend), (a.quiet, 0.2 * C, blend)] * 3
     emit(out, "bursty", burst, seed + 8, limits,
-         f"bursty: {a.quiet} s at 0.2 x C = {0.2 * C:.3f} req/s, then 3 x ({a.spike} s at "
+         f"bursty, blend: {a.quiet} s at 0.2 x C = {0.2 * C:.3f} req/s, then 3 x ({a.spike} s at "
          f"0.7 x C = {0.7 * C:.3f} req/s, {a.quiet} s quiet)", index)
 
     if a.min_replicas == 0:
-        emit(out, "bootstrap", [(P, 0.4 * a.mu, ref)], seed + 7, limits,
-             f"scale from zero: {0.4 * a.mu:.3f} req/s", index)
+        emit(out, "bootstrap", [(P, 0.4 * mu, blend)], seed + 7, limits,
+             f"scale from zero, blend: {0.4 * mu:.3f} req/s", index)
 
     mean_prompt = AG["system"] + AG["dynamic"] + AG["input"] + \
         (AG["turns"] - 1) / 2 * (AG["input"] + AG["output"])
-    cap_tokens = C * ref[0]
+    cap_tokens = C * sum(i for i, _ in blend) / len(blend)
     low, high = 0.1 * cap_tokens / mean_prompt, 0.3 * cap_tokens / mean_prompt
-    what = (f"agentic: {low:.3f} then {high:.3f} req/s = 0.1 and 0.3 x C x ISL "
+    what = (f"agentic: {low:.3f} then {high:.3f} req/s = 0.1 and 0.3 x C x mean ISL of the blend "
             f"({cap_tokens:.0f} prompt tok/s) / estimated mean prompt {mean_prompt:.0f}")
     turn_s = 2 + 2  # about a turn plus a tool pause, s
+    ag_timeout, ag_drain = timeouts(limits, 4096)  # output_tokens_per_turn max
     (out / "agentic.yaml").write_text(AGENTIC.format(
         what=what, low=round(low, 3), high=round(high, 3), p1=P, p2=2 * P,
-        timeout=TIMEOUT, drain=DRAIN, workers=WORKERS, conc=concurrency(high),
+        timeout=ag_timeout, drain=ag_drain, workers=WORKERS, conc=concurrency(high, ag_timeout),
         seed=seed + 6, slots=max(64, math.ceil(high * turn_s * 4)),
         constraints=constraints(limits), **AG))
     index["agentic"] = dict(what=what, seed=seed + 6, duration_s=3 * P,
@@ -250,15 +292,14 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     k = sub.add_parser("knee")
-    k.add_argument("--mix", required=True, help="ISL:OSL")
+    k.add_argument("--mix", required=True, help="ISL:OSL, or blend")
     k.add_argument("--estimate", required=True, type=float, help="estimated μ_SLO, req/s")
-    k.add_argument("--name", default="knee")
+    k.add_argument("--name", help="default knee-<ISL>x<OSL> or knee-blend")
     k.add_argument("--seed", type=int, default=1)
     r = sub.add_parser("runs")
-    r.add_argument("--mix", required=True, help="reference ISL:OSL")
-    r.add_argument("--mu", required=True, type=float, help="μ_SLO of the reference mix, req/s")
-    r.add_argument("--mix2", required=True, help="second ISL:OSL")
-    r.add_argument("--mu2", required=True, type=float, help="μ_SLO of the second mix, req/s")
+    r.add_argument("--mu", required=True, help="μ_SLO per mix, ISL:OSL=req/s,...; "
+                   "the mix-shift phases follow this order")
+    r.add_argument("--mu-blend", required=True, type=float, help="μ_SLO of the blend, req/s")
     r.add_argument("--max-replicas", required=True, type=int)
     r.add_argument("--min-replicas", type=int, default=1)
     r.add_argument("--stage", type=int, default=300, help="stage length T, s (§5.3)")
@@ -266,6 +307,7 @@ def main():
     r.add_argument("--quiet", required=True, type=int, help="burst quiet length Q, s (§5.3)")
     r.add_argument("--seed", type=int, default=100)
     for p in (k, r):
+        p.add_argument("--mixes", default=MIXES, help=f"the mix set M (default {MIXES})")
         p.add_argument("--slo", required=True, type=slo, help="ttft=S,tpot=S")
         p.add_argument("--out", required=True, type=Path)
     a = ap.parse_args()
@@ -274,8 +316,11 @@ def main():
     if a.cmd == "runs" and (a.spike < 60 or a.quiet < 300):
         ap.error("--spike must be at least 60 s and --quiet at least 300 s (§5.3)")
     a.out.mkdir(parents=True, exist_ok=True)
-    index = (knee if a.cmd == "knee" else runs)(a, a.out, a.slo)
-    path = a.out / ("index.json" if a.cmd == "runs" else f"{a.name}.json")
+    if a.cmd == "knee":
+        name, index = knee(a, a.out, a.slo)
+        path = a.out / f"{name}.json"
+    else:
+        index, path = runs(a, a.out, a.slo), a.out / "index.json"
     path.write_text(json.dumps(index, indent=1) + "\n")
 
 

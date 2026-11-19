@@ -43,18 +43,23 @@ do Step 1 only and say what is needed. Never switch the user's context.
 ## Step 1: Prepare, locally
 
 1. Check §5.1: the llm-d-benchmark commit, the overlay, Prometheus access.
-2. Fix the §5.2 inputs, from the scenario and its guide: the SLO, the
-   reference mix (the guide's default workload), the second mix, the replica
-   unit, and an estimate of μ_SLO for each mix (a simulator profile, an
-   earlier run, or a short probe). Write the knee loads:
+2. Fix the §5.2 inputs, from the scenario and its guide: the SLO, the mix
+   set M (the three `random_*` mixes, plus the guide's own workload if it
+   names one), the replica unit, and an estimate of μ_SLO for each mix and
+   the blend (a simulator profile, an earlier run, or a short probe). Write
+   one knee load per mix and one for the blend:
 
    ```bash
    S=.claude/skills/gpu-evaluation/scripts
-   python3 -I $S/gen_load.py knee --mix <ref> --estimate <req/s> --slo ttft=<s>,tpot=<s> \
-     --name knee-ref --out $LOAD
-   python3 -I $S/gen_load.py knee --mix <second> --estimate <req/s> --slo ttft=<s>,tpot=<s> \
-     --name knee-second --out $LOAD
+   SLO=ttft=<s>,tpot=<s>
+   python3 -I $S/gen_load.py knee --mix 8192:256 --estimate <req/s> --slo $SLO --out $LOAD
+   python3 -I $S/gen_load.py knee --mix 2048:2048 --estimate <req/s> --slo $SLO --out $LOAD
+   python3 -I $S/gen_load.py knee --mix 256:4096 --estimate <req/s> --slo $SLO --out $LOAD
+   python3 -I $S/gen_load.py knee --mix blend --estimate <req/s> --slo $SLO --out $LOAD
    ```
+
+   Each writes `knee-<mix>.csv` and `.yaml` (`knee-blend` for the blend).
+   With a mix set other than the default, pass `--mixes` to every command.
 
    `$LOAD` is a working directory outside the repository; the profile of each
    run is committed later with its report. The other runs' loads wait for the
@@ -80,21 +85,22 @@ arguments. Send one minute of smoke load and check that every trigger leaves
 0 (`trigger_series.py` over that minute). A trigger that stays at 0 stops the
 evaluation: fix the metric path first.
 
-## Step 3: Runs 1a and 1b, the knees
+## Step 3: Run 1, the knees
 
 ```bash
 $S/stage.sh $NS $LOAD
 $S/arm.sh $NS <so> pin 1                # other pools: pin them large enough (§5.2)
 llmdbenchmark ... run -l inference-perf --monitoring \
-  --workload-file-path $LOAD/knee-ref.yaml --dataset /requests/datasets/knee-ref.csv \
+  --workload-file-path $LOAD/knee-8192x256.yaml --dataset /requests/datasets/knee-8192x256.csv \
   --wait-timeout 3600
 ```
 
-Then the same with `knee-second`. Read A per stage from the benchmark
+Then the same with each other knee. Read A per stage from the benchmark
 report's per-stage results (or the figure's CSV) and interpolate μ_SLO at
 A = X. If the crossing is not between stages 2 and 5, regenerate the knee with
 a new estimate and rerun (§5.3). If the configuration derives its threshold
-from capacity, compute it from the reference knee, apply it with
+from capacity, compute it from the knee its rule names (the blend's if it
+names none), apply it with
 `kubectl patch scaledobject`, and record the value. With several pools, repeat
 for each scaled pool.
 
@@ -104,8 +110,9 @@ burst lengths R and Q (§5.3) from it and the ScaledObject's behavior.
 Then write the other runs' loads and stage them:
 
 ```bash
-python3 -I $S/gen_load.py runs --mix <ref> --mu <μ ref> --mix2 <second> --mu2 <μ second> \
-  --max-replicas <max> --min-replicas <min> --stage <T> --spike <R> --quiet <Q> --slo ttft=<s>,tpot=<s> --out $LOAD
+python3 -I $S/gen_load.py runs --mu 8192:256=<μ>,2048:2048=<μ>,256:4096=<μ> --mu-blend <μ> \
+  --max-replicas <max> --min-replicas <min> --stage <T> --spike <R> --quiet <Q> \
+  --slo $SLO --out $LOAD
 $S/stage.sh $NS $LOAD
 ```
 
