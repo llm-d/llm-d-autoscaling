@@ -34,7 +34,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 
 | Mix | μ_SLO (req/s) | Source |
 |---|---|---|
-| 8192:256 | pending | run 1 |
+| 8192:256 | 1.75 | [run 1a](npd-fcoff-step5/knee-8192x256/report.md): A 0.980 at 1.68 req/s, 0.681 at 2.40 req/s |
 | 2048:2048 | pending | run 1 |
 | 256:4096 | pending | run 1 |
 | blend | pending | run 1 |
@@ -43,7 +43,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 
 | # | Run | Status | Outcome | A | Errors | GPU-s | Report |
 |---|---|---|---|---|---|---|---|
-| 1a | knee 8192:256 | pending | | | | | |
+| 1a | knee 8192:256 | done | as expected; μ_SLO 1.75 req/s | 0.222 (whole run) | 3,449 timeout, 2 without latency | 1,800 | [report](npd-fcoff-step5/knee-8192x256/report.md) |
 | 1b | knee 2048:2048 | pending | | | | | |
 | 1c | knee 256:4096 | pending | | | | | |
 | 1d | knee blend | pending | | | | | |
@@ -64,8 +64,19 @@ None.
 
 ## Conclusions
 
-None yet: no run is done.
+2026-11-19 17:55 UTC, covering run 1a; runs 1b to 10 and 6 pending.
+
+- μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
+  TTFT does.
+- The rule gives `thresholdWork = 0.70 × 1.752 × (8192 + 3.3 × 256) = 11,086`
+  work tok/s, 24 % below the shipped 14,619. It is patched into the live
+  ScaledObject before run 2.
+- The trigger read 0.90 to 1.07 × the offered ν while requests completed. With
+  no completions in its 1 m window it read about 4,000 × the offered ν, the
+  inflation the step 1 verdict predicted (P8).
 
 ## Log
 
 - 2026-11-19: standup; ScaledObject `READY=True`, HPA reads `0/14619 (avg)`.
+  Smoke load (`sanity_random.yaml`): the trigger left 0 (max 283 work tok/s).
+- 2026-11-19: run 1a done.
