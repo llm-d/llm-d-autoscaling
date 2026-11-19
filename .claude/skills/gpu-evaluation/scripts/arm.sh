@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Put the plant in a run's starting state (benchmark/protocol/5-gpu-evaluation.md §5.4).
+# Put the plant in a run's starting state (benchmark/protocol/5-gpu-evaluation.md §5.2).
 #
 #   arm.sh <namespace> <scaledobject> pin <replicas>    pause autoscaling at <replicas>, wait Ready
 #   arm.sh <namespace> <scaledobject> active [<window>] pin at minReplicaCount, wait <window> s

@@ -16,8 +16,8 @@ as a Claude Code plugin marketplace:
 /plugin install llm-d-autoscaling@llm-d-autoscaling
 ```
 
-It provides `run-benchmark`, `scenario-sanity-check`, `static-signal-analysis`
-and `simulator-verification`.
+It provides `run-benchmark`, `scenario-sanity-check`, `static-signal-analysis`,
+`simulator-verification`, `blis-evaluation` and `gpu-evaluation`.
 
 ## 1. The Workload-Variant-Autoscaler (WVA) is deprecated
 

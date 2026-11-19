@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 class Run:
     """Raw series of one run, each with where it came from. Times are seconds since t = 0."""
     t_end: float
-    requests: list                  # [{t (scheduled), in, out, ok, ttft, tpot, e2e}] client records
+    requests: list                  # [{t (scheduled), in, out, ok, err, ttft, tpot, e2e}] client records
     load_source: str                # where the records came from
     ready: list                     # [(t, replicas)]
     ready_source: str
@@ -255,8 +255,11 @@ class LlmdBenchmark:
                 info = e.get("info") or {}
                 rm = (info.get("request_metrics") or {}).get("text") or {}
                 sm = info.get("response_metrics") or {}
+                err = e.get("error")
                 r = {"t": s - p0, "in": rm.get("input_tokens") or 0,
-                     "out": sm.get("output_tokens") or 0, "ok": e.get("error") is None}
+                     "out": sm.get("output_tokens") or 0, "ok": err is None,
+                     "err": None if err is None else
+                     (err.get("type") if isinstance(err, dict) else None) or "error"}
                 r.update(inference_perf_latency(e, sm))
                 derived += r.pop("derived")
                 reqs.append(r)
