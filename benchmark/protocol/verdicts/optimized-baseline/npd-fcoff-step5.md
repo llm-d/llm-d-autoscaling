@@ -45,8 +45,8 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 |---|---|---|---|---|---|---|---|
 | 1a | knee 8192:256 | done | as expected; μ_SLO 1.75 req/s | 0.222 (whole run) | 3,449 timeout, 2 without latency | 1,800 | [report](npd-fcoff-step5/knee-8192x256/report.md) |
 | 1b | knee 2048:2048 | done | as expected; μ_SLO 1.74 req/s | 0.569 (whole run) | 380 timeout | 1,800 | [report](npd-fcoff-step5/knee-2048x2048/report.md) |
-| 1c | knee 256:4096 | running | | | | | |
-| 1d | knee blend | pending | | | | | |
+| 1c | knee 256:4096 | pending (rerun, see Discarded attempts) | | | | | |
+| 1d | knee blend | running | | | | | |
 | 2 | SO-active staircase | pending | | | | | |
 | 3 | mix-shift | pending | | | | | |
 | 4a | overload under the cap | pending | | | | | |
@@ -60,7 +60,9 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 
 ## Discarded attempts
 
-None.
+| Run | Session | Reason | Rerun |
+|---|---|---|---|
+| 1c, knee 256:4096 at an estimate of 0.7 req/s | `villardl-20261119-134008-873` | A = 1.000 through stage 5 (1.33 req/s) and 0.170 at stage 6 (1.75 req/s): the crossing is not between stages 2 and 5 (§5.3). The data otherwise passed the gate; the `llm-d-prism` pod, not a serving pod, was evicted for node ephemeral storage during the run | `knee-256x4096-r2`, estimate 1.2 req/s |
 
 ## Conclusions
 
