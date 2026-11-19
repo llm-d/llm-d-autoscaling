@@ -35,7 +35,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | Mix | μ_SLO (req/s) | Source |
 |---|---|---|
 | 8192:256 | 1.75 | [run 1a](npd-fcoff-step5/knee-8192x256/report.md): A 0.980 at 1.68 req/s, 0.681 at 2.40 req/s |
-| 2048:2048 | pending | run 1 |
+| 2048:2048 | 1.74 | [run 1b](npd-fcoff-step5/knee-2048x2048/report.md): A 1.000 at 1.68 req/s, 0.535 at 2.28 req/s |
 | 256:4096 | pending | run 1 |
 | blend | pending | run 1 |
 
@@ -44,8 +44,8 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | # | Run | Status | Outcome | A | Errors | GPU-s | Report |
 |---|---|---|---|---|---|---|---|
 | 1a | knee 8192:256 | done | as expected; μ_SLO 1.75 req/s | 0.222 (whole run) | 3,449 timeout, 2 without latency | 1,800 | [report](npd-fcoff-step5/knee-8192x256/report.md) |
-| 1b | knee 2048:2048 | pending | | | | | |
-| 1c | knee 256:4096 | pending | | | | | |
+| 1b | knee 2048:2048 | done | as expected; μ_SLO 1.74 req/s | 0.569 (whole run) | 380 timeout | 1,800 | [report](npd-fcoff-step5/knee-2048x2048/report.md) |
+| 1c | knee 256:4096 | running | | | | | |
 | 1d | knee blend | pending | | | | | |
 | 2 | SO-active staircase | pending | | | | | |
 | 3 | mix-shift | pending | | | | | |
@@ -64,7 +64,7 @@ None.
 
 ## Conclusions
 
-2026-11-19 17:55 UTC, covering run 1a; runs 1b to 10 and 6 pending.
+2026-11-19 18:45 UTC, covering runs 1a and 1b; runs 1c to 10 and 6 pending.
 
 - μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
   TTFT does.
@@ -74,9 +74,12 @@ None.
 - The trigger read 0.90 to 1.07 × the offered ν while requests completed. With
   no completions in its 1 m window it read about 4,000 × the offered ν, the
   inflation the step 1 verdict predicted (P8).
+- μ_SLO(2048:2048) = 1.74 req/s. There TTFT binds, with vLLM at 128 running
+  sequences and a full KV cache. The work rate at that knee, 15,363 work tok/s,
+  is 3 % below the 8192:256 knee's 15,836.
 
 ## Log
 
 - 2026-11-19: standup; ScaledObject `READY=True`, HPA reads `0/14619 (avg)`.
   Smoke load (`sanity_random.yaml`): the trigger left 0 (max 283 work tok/s).
-- 2026-11-19: run 1a done.
+- 2026-11-19: runs 1a and 1b done.
