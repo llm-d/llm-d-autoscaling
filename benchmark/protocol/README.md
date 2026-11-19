@@ -9,6 +9,7 @@ list of questions to settle.
 |---|---|---|
 | [1. Static signal analysis](1-static-signal-analysis.md) | whether each trigger, and their combination, can compute the right replica count at all | no |
 | [2. Verification with a simulator](2-simulator-verification.md) | whether each failure step 1 predicted shows up on a real cluster, with `llm-d-inference-sim` or `vllm-model-sim` in place of GPUs | yes (CPU only) |
+| [5. Evaluation on GPU](5-gpu-evaluation.md) | how the pool follows a fixed run set on the target GPU plant: capacity, replicas against load, SLO attainment, and cost against a static fleet | yes (GPU) |
 
 Step 1 has three supporting documents:
 
@@ -21,5 +22,6 @@ Step 1 has three supporting documents:
 
 Step 2 is run by the [`simulator-verification` skill](../../.claude/skills/simulator-verification/SKILL.md).
 
-Later steps (benchmark runs, efficiency against an oracle) will be
-added here.
+Step 5 is run by the [`gpu-evaluation` skill](../../.claude/skills/gpu-evaluation/SKILL.md).
+
+Steps 3 and 4, and efficiency against an oracle, are not written yet.
