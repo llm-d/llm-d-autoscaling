@@ -218,7 +218,10 @@ def emit(out, name, phases, seed, limits, what, index):
 def knee(a, out, limits):
     ms = mixes(a.mixes) if a.mix == "blend" else [mix(a.mix)]
     name = a.name or f"knee-{label(ms)}"
-    factors = (0.4, 0.7, 1.0, 1.4, 1.9, 2.5)
+    # The knee is a cliff, so one failing stage brackets it and later ones only
+    # add timeouts (§5.3). Stages stay 300 s: shorter ones overestimate
+    # KV-bound capacity.
+    factors = (0.6, 0.8, 1.0, 1.25)
     phases = [(300, f * a.estimate, ms) for f in factors]
     index = {}
     emit(out, name, phases, a.seed, limits,
