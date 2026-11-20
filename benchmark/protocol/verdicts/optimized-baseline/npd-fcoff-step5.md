@@ -51,8 +51,8 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 1b | knee 2048:2048 | done | as expected; μ_SLO 1.74 req/s | 0.569 (whole run) | 380 timeout | 1,800 | [report](npd-fcoff-step5/knee-2048x2048/report.md) |
 | 1c | knee 256:4096 | done (second attempt) | as expected; μ_SLO 1.26 req/s | 0.367 (whole run) | 870 timeout, 2 without latency | 1,800 | [report](npd-fcoff-step5/knee-256x4096/report.md) |
 | 1d | knee blend | done | as expected; μ_SLO 1.59 req/s | 0.561 (whole run) | 1 without latency | 1,800 | [report](npd-fcoff-step5/knee-blend/report.md) |
-| 2 | SO-active staircase | running (third attempt) | | | | | |
-| 3 | mix-shift | pending | | | | | |
+| 2 | SO-active staircase | done (third attempt) | problem shown: A 0.444 at 0.9 × C with 6 Ready (the need); Envoy CPU-throttled, vLLM not saturated | 0.800 | 69 `ClientConnectorError`, 19 HTTP 503, 8 without latency | 14,210 | [report](npd-fcoff-step5/stair/report.md) |
+| 3 | mix-shift | running | | | | | |
 | 4a | overload under the cap | pending | | | | | |
 | 4b | overload over the cap | pending | | | | | |
 | 5 | agentic | pending | | | | | |
@@ -72,7 +72,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 
 ## Conclusions
 
-2026-11-19 21:20 UTC, covering run 1 (all knees); runs 2 to 10 and 6 pending.
+2026-11-20 02:35 UTC, covering runs 1 and 2; runs 3 to 5, 8 to 10 and 6 pending.
 
 - μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
   TTFT does.
@@ -88,6 +88,12 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 - μ_SLO(256:4096) = 1.26 req/s, the lowest of the three mixes; TTFT binds.
 - μ_SLO(B) = 1.59 req/s, so C = 9.55 req/s of the blend at 6 replicas. The
   trigger read 0.98 to 1.15 × the blend's offered ν through the knee.
+- Run 2: the pool followed the staircase, one replica per 180 s, to the cap
+  of 6 at 0.7 × C, and held A ≥ 0.992 through 0.7 × C. It ran 1 to 2 replicas
+  above `ceil(q / μ_SLO(B))`: the threshold comes from the 8192:256 knee,
+  whose ν per request is below the blend's. At 0.9 × C, A fell to 0.444 with
+  6 replicas Ready and vLLM at most 72 of 128 running per pod: the router's
+  Envoy was CPU-throttled at the scenario's 500m limit.
 
 ## Log
 
@@ -110,3 +116,4 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   0.39 core, throttled in at most 16 % of periods. The scenario sets that
   limit (`router.proxy.resources.limits.cpu: 500m`); the evaluation keeps it
   (no answer to the question whether to raise it). 00:53 UTC: run 2 restarted.
+- 2026-11-20: run 2 done.

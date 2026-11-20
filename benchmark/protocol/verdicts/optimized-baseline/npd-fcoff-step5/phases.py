@@ -76,6 +76,7 @@ def main():
     epoch0 = run_start + 1.0  # first-row offset is 0 by construction (o0 subtracted)
     ready = series(trig / "replicas-ready.json")
     spec_r = series(trig / "replicas-spec.json")
+    hpa = series(trig / "hpa-desired.json") if (trig / "hpa-desired.json").exists() else []
 
     edges, t = [], 0.0
     for p in phases:
@@ -88,12 +89,13 @@ def main():
                 return k
         return len(edges) - 1
 
-    out = [dict(sent=0, good=0, errors={}, ttft=[], tpot=[], lin=0, lout=0) for _ in edges]
+    out = [dict(sent=0, good=0, errors={}, ttft=[], tpot=[], lin=0, lout=0, offs=[]) for _ in edges]
     delays = []
     for rec, (off, isl, osl) in zip(recs, rows):
         k = phase_of(off)
         o = out[k]
         o["sent"] += 1
+        o["offs"].append([off, False])
         o["lin"] += isl
         o["lout"] += osl
         delays.append((off, (rec["start_time"] - s0) - off))
@@ -118,6 +120,7 @@ def main():
         o["tpot"].append(b)
         if a <= slo["ttft"] and b <= slo["tpot"]:
             o["good"] += 1
+            o["offs"][-1][1] = True
 
     def integ(s, lo, hi):
         tot, vals = 0.0, []
@@ -141,6 +144,16 @@ def main():
         elif mixes in mu:
             need = math.ceil(q / mu[mixes])
         d = [dl for off, dl in delays if lo <= off < hi]
+        inph = [(t_ - epoch0, v) for t_, v in ready if epoch0 + lo <= t_ < epoch0 + hi]
+        end_ready = inph[-1][1] if inph else None
+        settle = None
+        if inph:
+            for k in range(len(inph)):
+                if all(v == end_ready for _, v in inph[k:]):
+                    settle = inph[k][0]
+                    break
+        late = [g for off, g in o["offs"] if settle is not None and off >= settle]
+        hv = [v for t_, v in hpa if epoch0 + lo <= t_ < epoch0 + hi]
         table.append({
             "phase_s": [lo, hi], "mix": mixes, "scheduled_rps": q, "sent": o["sent"],
             "sent_rps": o["sent"] / dur, "lambda_in": o["lin"] / dur, "lambda_out": o["lout"] / dur,
@@ -151,6 +164,11 @@ def main():
             "requested_min_max": [min(sv), max(sv)] if sv else None,
             "requested_replica_s": ss, "ready_replica_s": rs, "gpu_s": ss * gpus,
             "need": need,
+            "ready_at_end": end_ready,
+            "settled_at_s": settle,
+            "A_settled": (sum(late) / len(late)) if late else None,
+            "sent_settled": len(late),
+            "hpa_desired_min_max": [min(hv), max(hv)] if hv else None,
             "schedule_delay_s": {"p50": pct(d, .5), "max": max(d) if d else None,
                                  "last": d[-1] if d else None},
         })
