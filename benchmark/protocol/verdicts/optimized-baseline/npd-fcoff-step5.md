@@ -59,8 +59,8 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 8 | bursty | done | problem shown: each of 3 scale-downs cut in-flight streams (18 in total); quiet phases A ≥ 0.985; each spike's replica Ready after the spike | 0.961 | 18 `ClientPayloadError`, 1 HTTP 503, 1 `ClientConnectorError`, 3 without latency | 11,142 | [report](npd-fcoff-step5/bursty/report.md) |
 | 9 | short spikes | done | problem shown: A 0.843 in the first gap; the pool ratcheted to the cap of 6 (need 5 in spikes, 2 in gaps); 11 streams cut at 2 scale-downs | 0.976 | 11 `ClientPayloadError`, 2 without latency | 10,053 | [report](npd-fcoff-step5/short-spikes/report.md) |
 | 10 | scale-down | done (second attempt) | problem shown: no step ended at its need (6/4, 4/2, 2/1); 25 streams cut at 4 scale-downs; A ≥ 0.990 after each step; Envoy killed in the 0.9 × C hold | 0.560 | 1,528 timeout, 1,435 `ClientPayloadError`, 608 `ClientConnectorError`, 102 `ServerDisconnectedError`, 41 `ClientOSError`, 6 HTTP 503, 7 without latency | 19,080 | [report](npd-fcoff-step5/scale-down/report.md) |
-| 6 | static-replica baseline | running | | | | | |
-| 7 | scale from zero | not run | `minReplicaCount` is 1 | | | | |
+| 6 | static-replica baseline | done | cost reference: 23,040 GPU-s at 6 replicas, A 0.999 | 0.999 | 5 without latency | 23,040 | [report](npd-fcoff-step5/baseline/report.md) |
+| 7 | scale from zero | not run | `minReplicaCount` is 1 (§5.3: only with `minReplicaCount: 0`) | | | | |
 
 ## Discarded attempts
 
@@ -72,9 +72,56 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 4b, overload over the cap | `villardl-20261120-000706-273` | The load generator fell behind: from about 1,960 s into the run (phase 2, 14.3 req/s) the send delay reached 122 s, and no request was sent between 2,140 and 2,200 s. The harness pod ran at its 2-CPU limit, throttled in 46 to 80 % of CFS periods from 05:37 to 05:49 UTC. The run was not open loop (§5.6). A tool limit, outside the configuration | rerun from 06:08 UTC with `--set harness.resources.cpu=8 --set harness.resources.memory=32Gi` |
 | 10, scale-down | `villardl-20261120-110530-312` | The token KEDA uses for Thanos, minted at standup with a 24 h lifetime, expired at 16:56:44 UTC, about 2,730 s into the run: from then KEDA got HTTP 401, the ScaledObject was `Ready=False` and the HPA read `<unknown>` with the pool frozen at 4. At 16:59 UTC the workstation's copy of the cluster credentials also expired; `llmdbenchmark` could not list the results and deleted the harness pod about 3,400 s into the 4,238 s schedule. A fault outside the configuration | rerun after a new 72 h token was written to the `prometheus-auth` Secret at 17:17 UTC |
 
+## Run 3 against run 6
+
+The same trace (`mixshift.csv`, byte-identical), autoscaled from 1 replica
+(run 3) and pinned at run 3's peak of 6 (run 6). GPU-seconds are requested
+replica-seconds × 1 GPU.
+
+| Phase | Mix | A, run 3 | A after settling, run 3 | A, run 6 | GPU-s, run 3 | GPU-s, run 6 | Run 3 / run 6 |
+|---|---|---|---|---|---|---|---|
+| 1 | 8192:256 | 0.852 | 0.998 | 0.999 | 4,352 | 7,680 | 0.57 |
+| 2 | 2048:2048 | 0.999 | 0.999 | 1.000 | 5,120 | 7,680 | 0.67 |
+| 3 | 256:4096 | 0.983 | 0.997 | 0.997 | 7,228 | 7,680 | 0.94 |
+| all | | 0.945 | | 0.999 | 16,699 | 23,040 | 0.72 |
+
+Run 3 used 28 % fewer GPU-seconds. Its attainment cost was the ramp from one
+replica in phase 1 (A 0.852 against 0.999). Once settled, the two runs differ
+by at most 0.001 in A (n = 1 each).
+
 ## Conclusions
 
-2026-11-20 19:00 UTC, covering runs 1 to 5 and 8 to 10; run 6 pending.
+2026-11-20 20:45 UTC, final: covering every run; run 7 not run
+(`minReplicaCount` is 1).
+
+**Verdict.** On one H100 per replica, the npd-fcoff work-rate trigger
+measures the offered load and sizes the pool to it, with the configured
+headroom. Under every load the GPU pool can serve, attainment holds once the
+pool has settled. Run 3 used 28 % fewer GPU-seconds than a static fleet at its
+peak, and lost attainment only during its ramp. Three properties of the
+evaluated stack cost requests:
+
+1. **Scale-downs cut in-flight requests.** All 11 scale-downs observed under
+   load (runs 4a, 4b, 8, 9, 10) failed the streams the removed pod was serving,
+   1 to 14 per removal (80 in total).
+2. **The scenario's router is the bottleneck above about 0.7 × C.** Envoy is
+   CPU-throttled at its 500m limit from 6.7 req/s (runs 2, 4a, 10); at
+   1.5 × C the EPP is OOMKilled at its 1 Gi limit (run 4b). Run 2's and run
+   4a's high-load phases failed the SLO with the GPU pool at the need and
+   vLLM unsaturated.
+3. **The HPA behavior is slow both ways for this load.** +1 pod per 180 s
+   needs about 1,000 s to reach the cap; spikes shorter than that are missed
+   (run 8), and short spikes ratchet the pool to the cap because the gaps are
+   shorter than the 300 s scale-down window (run 9). −1 pod per 300 s leaves
+   2,000 to 3,000 replica-seconds above the need per load step (run 10).
+
+**Against step 1** ([`npd-fcoff.md`](npd-fcoff.md)): the threshold needed
+re-measuring on this plant (P3; 11,086 against 14,619); the ratio terms
+inflate by about 4,000 × with no completions in the window (P8; run 1a, and
+one sample after the idle arm in run 3). A trigger reading 0 during router
+restarts (P7) was seen only in a discarded attempt of run 4b.
+
+Detail by run:
 
 - μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
   TTFT does.
@@ -125,8 +172,10 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   against needs of 4, 2 and 1, about 2,000 to 3,000 replica-seconds above the
   need per step. A held at 0.990 or more. All four scale-downs cut in-flight
   streams (25 in total). Envoy was killed once in the 0.9 × C hold.
-- Across runs 4a, 4b, 8, 9 and 10, every scale-down observed under load (13)
+- Across runs 4a, 4b, 8, 9 and 10, every scale-down observed under load (11)
   cut the streams the removed pod was serving.
+- Run 6: the static fleet of 6 held A 0.999 on run 3's trace for 23,040
+  GPU-seconds, against run 3's 16,699.
 
 ## Log
 
@@ -171,3 +220,5 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   the same ServiceAccount (`keda-prometheus-auth`, 72 h) was written to the
   `prometheus-auth` Secret at 17:17 UTC; the ScaledObject was `Ready=True` and
   the HPA read `0/11086` 75 s later. Runs 1 to 9 ended before the expiry.
+- 2026-11-20: run 10 (second attempt) and run 6 done. 20:43 UTC: the plant
+  pinned at 1 replica. Evaluation closed.
