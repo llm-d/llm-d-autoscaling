@@ -50,6 +50,7 @@ import re
 import shutil
 import signal
 import ssl
+import stat
 import subprocess
 import sys
 import threading
@@ -134,6 +135,58 @@ def _load_yaml(path):
     if not os.path.isfile(path):
         return {}
     with open(path) as f:
+        return yaml.safe_load(f) or {}
+
+
+def _open_workspace_file(workspace_root, relative_path, mode="r"):
+    """Open a workspace file without allowing symlinks in its path components."""
+    root = Path(workspace_root).resolve()
+    relative = Path(relative_path)
+    if relative.is_absolute() or not relative.parts or any(part in (".", "..") for part in relative.parts):
+        raise ValueError(f"expected a relative path beneath the workspace: {relative_path!s}")
+    if (
+        not hasattr(os, "O_DIRECTORY")
+        or not hasattr(os, "O_NOFOLLOW")
+        or os.open not in os.supports_dir_fd
+    ):
+        raise OSError("safe workspace file access is not supported on this platform")
+
+    if mode == "r":
+        flags = os.O_RDONLY
+    elif mode == "w":
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    else:
+        raise ValueError(f"unsupported workspace file mode: {mode!r}")
+
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    root_fd = os.open(root, directory_flags)
+    current_fd = root_fd
+    try:
+        for part in relative.parts[:-1]:
+            child_fd = os.open(part, directory_flags, dir_fd=current_fd)
+            if current_fd != root_fd:
+                os.close(current_fd)
+            current_fd = child_fd
+        file_fd = os.open(
+            relative.parts[-1], flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o666, dir_fd=current_fd
+        )
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            os.close(file_fd)
+            raise OSError(f"workspace path is not a regular file: {relative_path!s}")
+    finally:
+        if current_fd != root_fd:
+            os.close(current_fd)
+        os.close(root_fd)
+
+    try:
+        return os.fdopen(file_fd, mode)
+    except Exception:
+        os.close(file_fd)
+        raise
+
+
+def _load_workspace_yaml(workspace_root, relative_path):
+    with _open_workspace_file(workspace_root, relative_path) as f:
         return yaml.safe_load(f) or {}
 
 
@@ -317,9 +370,18 @@ def _run_window_epochs(meta):
     return meta.get("namespace", ".*"), start_s, stop_s
 
 
-def _run_window(experiment_dir):
+def _run_window(experiment_dir, workspace_root=None):
     """Return (namespace, from_epoch_s, to_epoch_s, experiment_id) for an experiment's run window."""
-    meta = _load_yaml(os.path.join(experiment_dir, "run_metadata.yaml"))
+    if workspace_root is None:
+        meta = _load_yaml(os.path.join(experiment_dir, "run_metadata.yaml"))
+    else:
+        root = Path(workspace_root).resolve()
+        experiment = Path(experiment_dir).resolve()
+        try:
+            relative_dir = experiment.relative_to(root)
+        except ValueError as e:
+            raise ValueError(f"experiment directory is outside the workspace: {experiment_dir}") from e
+        meta = _load_workspace_yaml(root, relative_dir / "run_metadata.yaml")
     window = _run_window_epochs(meta)
     if window is None:
         raise ValueError(f"no harness_start/harness_stop in {experiment_dir}/run_metadata.yaml")
@@ -421,12 +483,12 @@ def _prometheus_series_to_frame(refid, expr, step_s, labels, times_s, values):
     }
 
 
-def _capture_snapshot(experiment_dir, grafana_url, user, password, dashboard_uid):
+def _capture_snapshot(experiment_dir, grafana_url, user, password, dashboard_uid, workspace_root=None):
     """Freeze the benchmark dashboard's panels for one experiment's run window into a
     Grafana snapshot, write grafana_snapshot.yaml next to the results, and return the
     written metadata dict. Raises ConnectionError/RuntimeError/ValueError on failure."""
     grafana_url = grafana_url.rstrip("/")
-    namespace, start_s, stop_s, experiment_id = _run_window(experiment_dir)
+    namespace, start_s, stop_s, experiment_id = _run_window(experiment_dir, workspace_root)
     session_id = _session_id_from_experiment_dir(experiment_dir)
     ds_uid = _prometheus_datasource_uid(grafana_url, user, password)
     status, dashboard_resp = _http(
@@ -499,8 +561,18 @@ def _capture_snapshot(experiment_dir, grafana_url, user, password, dashboard_uid
         "live_dashboard_url": _live_dashboard_url(grafana_url, dashboard_uid, namespace, start_s, stop_s),
     }
     out_path = os.path.join(experiment_dir, "grafana_snapshot.yaml")
-    with open(out_path, "w") as f:
-        yaml.safe_dump(out, f, sort_keys=False)
+    if workspace_root is None:
+        with open(out_path, "w") as f:
+            yaml.safe_dump(out, f, sort_keys=False)
+    else:
+        root = Path(workspace_root).resolve()
+        experiment = Path(experiment_dir).resolve()
+        try:
+            relative_out_path = experiment.relative_to(root) / "grafana_snapshot.yaml"
+        except ValueError as e:
+            raise ValueError(f"experiment directory is outside the workspace: {experiment_dir}") from e
+        with _open_workspace_file(root, relative_out_path, mode="w") as f:
+            yaml.safe_dump(out, f, sort_keys=False)
     return out
 
 
@@ -1671,7 +1743,10 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(400, {"error": "Invalid JSON body"})
             return
 
-        rel = body.get("dir") or ""
+        rel = body.get("dir")
+        if not isinstance(rel, str) or not rel:
+            self._send_json(400, {"error": "dir must be a non-empty path relative to the workspace"})
+            return
         root = Path(self.workspace).resolve()
         target = (root / rel).resolve()
         if root not in target.parents or not (target / "run_metadata.yaml").is_file():
@@ -1680,13 +1755,17 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
 
         try:
             out = _capture_snapshot(
-                str(target), self.grafana_url, self.grafana_user, self.grafana_password, self.dashboard_uid
+                str(target), self.grafana_url, self.grafana_user, self.grafana_password,
+                self.dashboard_uid, workspace_root=root,
             )
-        except (ConnectionError, RuntimeError, ValueError) as e:
+        except (ConnectionError, RuntimeError) as e:
             self._send_json(502, {
                 "error": f"{e}. Is Grafana reachable at {self.grafana_url} (run `configure` once) and the "
                          "cluster's Prometheus (via Thanos Querier) still holding this run's data?",
             })
+            return
+        except (OSError, ValueError) as e:
+            self._send_json(400, {"error": f"Invalid or unsafe experiment path: {e}"})
             return
         self._send_json(200, {
             "snapshot_url": out.get("snapshot_url"),
