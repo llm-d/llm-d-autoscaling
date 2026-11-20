@@ -58,8 +58,8 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 5 | agentic | done | as expected: A ≥ 0.997, 0 errors, no context overflow; prompts lighter than planned | 0.997 | 0 | 5,215 | [report](npd-fcoff-step5/agentic/report.md) |
 | 8 | bursty | done | problem shown: each of 3 scale-downs cut in-flight streams (18 in total); quiet phases A ≥ 0.985; each spike's replica Ready after the spike | 0.961 | 18 `ClientPayloadError`, 1 HTTP 503, 1 `ClientConnectorError`, 3 without latency | 11,142 | [report](npd-fcoff-step5/bursty/report.md) |
 | 9 | short spikes | done | problem shown: A 0.843 in the first gap; the pool ratcheted to the cap of 6 (need 5 in spikes, 2 in gaps); 11 streams cut at 2 scale-downs | 0.976 | 11 `ClientPayloadError`, 2 without latency | 10,053 | [report](npd-fcoff-step5/short-spikes/report.md) |
-| 10 | scale-down | running (second attempt) | | | | | |
-| 6 | static-replica baseline | pending | | | | | |
+| 10 | scale-down | done (second attempt) | problem shown: no step ended at its need (6/4, 4/2, 2/1); 25 streams cut at 4 scale-downs; A ≥ 0.990 after each step; Envoy killed in the 0.9 × C hold | 0.560 | 1,528 timeout, 1,435 `ClientPayloadError`, 608 `ClientConnectorError`, 102 `ServerDisconnectedError`, 41 `ClientOSError`, 6 HTTP 503, 7 without latency | 19,080 | [report](npd-fcoff-step5/scale-down/report.md) |
+| 6 | static-replica baseline | running | | | | | |
 | 7 | scale from zero | not run | `minReplicaCount` is 1 | | | | |
 
 ## Discarded attempts
@@ -74,7 +74,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 
 ## Conclusions
 
-2026-11-20 16:03 UTC, covering runs 1 to 5, 8 and 9; runs 10 and 6 pending.
+2026-11-20 19:00 UTC, covering runs 1 to 5 and 8 to 10; run 6 pending.
 
 - μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
   TTFT does.
@@ -120,6 +120,13 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   spikes that need 5 and gaps that need 2, and held 6 for 337 s after the
   last spike. A fell to 0.843 in the first gap; the two scale-downs that
   followed cut 11 streams.
+- Run 10: capacity is released one pod per 300 s after a 300 s window, slower
+  than the 1,020 s steps: the pool ended the steps at 6, 4 and 2 replicas
+  against needs of 4, 2 and 1, about 2,000 to 3,000 replica-seconds above the
+  need per step. A held at 0.990 or more. All four scale-downs cut in-flight
+  streams (25 in total). Envoy was killed once in the 0.9 × C hold.
+- Across runs 4a, 4b, 8, 9 and 10, every scale-down observed under load (13)
+  cut the streams the removed pod was serving.
 
 ## Log
 
