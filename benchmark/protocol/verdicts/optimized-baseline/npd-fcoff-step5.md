@@ -57,8 +57,8 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 4b | overload over the cap | done (second attempt) | problem shown: trigger and HPA held the cap, but the router's EPP was OOMKilled 4 times and Envoy killed once; A 0.026 in the 1.5 × C phase | 0.141 | 2,372 timeout, 2,037 `ClientPayloadError`, 1,632 HTTP 400, 435 `ClientConnectorError`, 6 HTTP 503, 11 without latency | 10,104 | [report](npd-fcoff-step5/overload-over/report.md) |
 | 5 | agentic | done | as expected: A ≥ 0.997, 0 errors, no context overflow; prompts lighter than planned | 0.997 | 0 | 5,215 | [report](npd-fcoff-step5/agentic/report.md) |
 | 8 | bursty | done | problem shown: each of 3 scale-downs cut in-flight streams (18 in total); quiet phases A ≥ 0.985; each spike's replica Ready after the spike | 0.961 | 18 `ClientPayloadError`, 1 HTTP 503, 1 `ClientConnectorError`, 3 without latency | 11,142 | [report](npd-fcoff-step5/bursty/report.md) |
-| 9 | short spikes | running | | | | | |
-| 10 | scale-down | pending | | | | | |
+| 9 | short spikes | done | problem shown: A 0.843 in the first gap; the pool ratcheted to the cap of 6 (need 5 in spikes, 2 in gaps); 11 streams cut at 2 scale-downs | 0.976 | 11 `ClientPayloadError`, 2 without latency | 10,053 | [report](npd-fcoff-step5/short-spikes/report.md) |
+| 10 | scale-down | running | | | | | |
 | 6 | static-replica baseline | pending | | | | | |
 | 7 | scale from zero | not run | `minReplicaCount` is 1 | | | | |
 
@@ -73,7 +73,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 
 ## Conclusions
 
-2026-11-20 15:20 UTC, covering runs 1 to 5 and 8; runs 9, 10 and 6 pending.
+2026-11-20 16:15 UTC, covering runs 1 to 5, 8 and 9; runs 10 and 6 pending.
 
 - μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
   TTFT does.
@@ -114,6 +114,11 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   (4, 8 and 6), as in runs 4a and 4b. Each spike's added replica was Ready
   only after the spike ended. Quiet phases held A ≥ 0.985, one replica above
   `ceil(ν / threshold)`.
+- Run 9: with gaps shorter than the 300 s scale-down window, each short spike
+  added a replica and none was released: the pool reached its cap of 6 for
+  spikes that need 5 and gaps that need 2, and held 6 for 337 s after the
+  last spike. A fell to 0.843 in the first gap; the two scale-downs that
+  followed cut 11 streams.
 
 ## Log
 
