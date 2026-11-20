@@ -1,0 +1,22 @@
+{
+ "overload-under": {
+  "what": "overload under the cap, blend: 1.909 then 0.8 x C = 7.637 req/s",
+  "seed": 104,
+  "duration_s": 2560,
+  "requests": 12377,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 1280,
+    "rate": 1.9092,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 1280,
+    "rate": 7.6368,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ }
+}

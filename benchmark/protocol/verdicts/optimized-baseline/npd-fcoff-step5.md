@@ -53,8 +53,8 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 1d | knee blend | done | as expected; μ_SLO 1.59 req/s | 0.561 (whole run) | 1 without latency | 1,800 | [report](npd-fcoff-step5/knee-blend/report.md) |
 | 2 | SO-active staircase | done (third attempt) | problem shown: A 0.444 at 0.9 × C with 6 Ready (the need); Envoy CPU-throttled, vLLM not saturated | 0.800 | 69 `ClientConnectorError`, 19 HTTP 503, 8 without latency | 14,210 | [report](npd-fcoff-step5/stair/report.md) |
 | 3 | mix-shift | done | problem shown: phase 3 settled at 6 against a headroom need of 5; A ≥ 0.997 once settled | 0.945 | 1 `ClientConnectorError`, 10 without latency | 16,699 | [report](npd-fcoff-step5/mixshift/report.md) |
-| 4a | overload under the cap | running | | | | | |
-| 4b | overload over the cap | pending | | | | | |
+| 4a | overload under the cap | done | problem shown: A 0.824 at 6 Ready in the 0.8 × C phase, Envoy CPU-throttled; a scale-down and scale-up 30 s apart failed 12 requests | 0.651 | 108 `ClientConnectorError`, 12 `ClientPayloadError`, 11 HTTP 503, 4 without latency | 10,440 | [report](npd-fcoff-step5/overload-under/report.md) |
+| 4b | overload over the cap | running | | | | | |
 | 5 | agentic | pending | | | | | |
 | 8 | bursty | pending | | | | | |
 | 9 | short spikes | pending | | | | | |
@@ -72,7 +72,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 
 ## Conclusions
 
-2026-11-20 04:00 UTC, covering runs 1 to 3; runs 4a, 4b, 5, 8 to 10 and 6 pending.
+2026-11-20 05:15 UTC, covering runs 1 to 4a; runs 4b, 5, 8 to 10 and 6 pending.
 
 - μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
   TTFT does.
@@ -98,6 +98,10 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   in each mix, and the pool held 4, 4, then 6 replicas, against 4, 4 and 5
   with the configuration's 0.70 headroom. A once settled was 0.997 or more in
   every phase. A one-sample spike to 4.3 × 10⁶ followed the idle arm (P8).
+- Run 4a: at 0.8 × C the pool reached its cap and A after settling was 0.824,
+  with Envoy throttled as in run 2. At 1.91 req/s the trigger hovered around
+  the 2-replica boundary; one scale-down was undone 30 s later, and the
+  removed pod's 12 in-flight streams failed.
 
 ## Log
 
@@ -120,4 +124,4 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   0.39 core, throttled in at most 16 % of periods. The scenario sets that
   limit (`router.proxy.resources.limits.cpu: 500m`); the evaluation keeps it
   (no answer to the question whether to raise it). 00:53 UTC: run 2 restarted.
-- 2026-11-20: runs 2 and 3 done.
+- 2026-11-20: runs 2, 3 and 4a done.
