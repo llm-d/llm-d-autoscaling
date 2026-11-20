@@ -46,7 +46,7 @@ Nothing here touches a cluster. Every write is local: the lab checkout,
 ```bash
 LAB=${LAB:-$TMPDIR/src/blis-signal-lab}
 [ -d $LAB ] || git clone https://github.com/vishakha-ramani/blis-signal-lab $LAB
-git -C $LAB fetch -q origin && git -C $LAB checkout 34b8b14   # the commit §3.2 describes
+git -C $LAB fetch -q origin && git -C $LAB checkout 25f2dfb   # the commit §3.2 describes
 (cd $LAB && GOTOOLCHAIN=auto go build -o blis main.go)
 ```
 

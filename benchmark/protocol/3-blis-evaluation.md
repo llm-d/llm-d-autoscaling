@@ -28,7 +28,7 @@ summary links them, and a run that shows a failure they predicted says so.
 
 | What | Why | How to check |
 |---|---|---|
-| blis-signal-lab at `34b8b14` (branch `signals-hpa`), built | KEDA's scale loop, the HPA per pool or per role, the signal recorder; §3.2 describes this commit | `git -C <lab> rev-parse HEAD`; `GOTOOLCHAIN=auto go build -o blis main.go` in the checkout (go.mod pins Go 1.27.2) |
+| blis-signal-lab at `25f2dfb` (branch `signals-hpa`), built | KEDA's scale loop, the HPA per pool or per role, the signal recorder; §3.2 describes this commit | `git -C <lab> rev-parse HEAD`; `GOTOOLCHAIN=auto go build -o blis main.go` in the checkout (go.mod pins Go 1.27.2) |
 | llm-d-benchmark, as for step 5 | `standup --dry-run` renders the ScaledObjects the policy is translated from, and the PodMonitor's scrape interval; no cluster is used | the `run-benchmark` skill's setup |
 | a single-pool or P/D scenario | blis-signal-lab runs no HPA on E/P/D, on shared prefill-decode pods, or on a data-parallel P/D pool | the scenario's `keda` block scales one Deployment, or one prefill and one decode Deployment |
 | blis has the scenario's model | the model is never changed (§3.3); without it, step 3 reports missing model and stops | `<lab>/blis catalog resolve --model <Hugging Face id> --json` gives an `identity` |
@@ -36,7 +36,7 @@ summary links them, and a run that shows a failure they predicted says so.
 
 ## 3.2 What the simulator models
 
-From the fork's `autoscaling-kit/README.md` and code at `34b8b14`, and
+From the fork's `autoscaling-kit/README.md` and code at `25f2dfb`, and
 `llm-d-autoscaling-research`'s description of the fork
 (`findings/raw/blis-signal-lab/blis-signal-lab.md`) and sanity check
 (`findings/derived/blis-signal-lab/blis-signal-lab-sanity.md`), which
@@ -76,7 +76,7 @@ cover the HPA at `727e998`.
 
 | Gap | Effect on step 3 |
 |---|---|
-| a signal is a linear sum of terms (`coef × function(aggregation(metric))`) over the recorder's metrics, not PromQL; counters and latencies are pool-wide, only per-pod gauges and pod counts take a `role` | each trigger is translated by hand (§3.4); a product or ratio of series is exact only through a formula, and a role-filtered counter is approximated |
+| a signal is a linear sum of terms (`coef × function(aggregation(metric))`) over the recorder's metrics, not PromQL; counters and latencies are pool-wide (except `prefill_prompt_tokens`), only per-pod gauges and pod counts take a `role` | each trigger is translated by hand (§3.4); a product or ratio of series is exact only through a formula, and a role-filtered counter is approximated |
 | `rate()` is the slope between the first and last scrape in the window, with no extrapolation; quantiles are exact over the window's samples, and TTFT counts from gateway arrival | a trigger near its threshold can propose differently from Prometheus's value |
 | scrapes and syncs fall on the same instants unless `sync_offset_s` is set | the dead time after a load change is the shortest the scrape and sync phases allow; research E2 puts the cluster's median at `S/2 + H/2 + 0.5 s` |
 | at 0 pods the router rejects every request until a pod is Ready; llm-d with flow control holds them for `noEndpointRequestTTL` (60 s) | in a scale from zero (run 7, and any active run with `minReplicaCount: 0`) every request of the cold start fails as `routing_rejected` |
@@ -171,6 +171,7 @@ trigger's threshold, `metricType`, `activationThreshold` and
 | `rate(vllm:request_success_total)` | `completions`, `function: rate` | exact for a single pool; pool-wide for P/D |
 | `rate(vllm:generation_tokens_total)` | `generated_tokens`, `function: rate` | approximated: blis counts a request's tokens when it completes, vLLM at each step |
 | `rate(vllm:prompt_tokens_total)`, `rate(vllm:prefix_cache_queries_total)` | `completed_prompt_tokens` (carried), or `arrived_prompt_tokens` (offered) | approximated: vLLM counts at admission to the engine |
+| the same series filtered to the prefill role (`{role="prefill"}`) | `prefill_prompt_tokens`, `function: rate`: the prompt tokens of requests dispatched to a prefill pod; a request the decider keeps on decode adds nothing | approximated: counted at dispatch, not at admission, and cached tokens are not subtracted |
 | `rate(vllm:num_preemptions_total)` | `preemptions`, `function: rate` | exact for a single pool; pool-wide for P/D |
 | `histogram_quantile` of TTFT, ITL, e2e | `ttft`, `itl`, `e2e`, `function: quantile` | approximated: exact quantile over the window, not over buckets |
 | `kube_deployment_status_replicas_ready` | `ready_pods` (with `role` for P/D) | exact |
