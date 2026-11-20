@@ -56,8 +56,8 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 4a | overload under the cap | done | problem shown: A 0.824 at 6 Ready in the 0.8 × C phase, Envoy CPU-throttled; a scale-down and scale-up 30 s apart failed 12 requests | 0.651 | 108 `ClientConnectorError`, 12 `ClientPayloadError`, 11 HTTP 503, 4 without latency | 10,440 | [report](npd-fcoff-step5/overload-under/report.md) |
 | 4b | overload over the cap | done (second attempt) | problem shown: trigger and HPA held the cap, but the router's EPP was OOMKilled 4 times and Envoy killed once; A 0.026 in the 1.5 × C phase | 0.141 | 2,372 timeout, 2,037 `ClientPayloadError`, 1,632 HTTP 400, 435 `ClientConnectorError`, 6 HTTP 503, 11 without latency | 10,104 | [report](npd-fcoff-step5/overload-over/report.md) |
 | 5 | agentic | done | as expected: A ≥ 0.997, 0 errors, no context overflow; prompts lighter than planned | 0.997 | 0 | 5,215 | [report](npd-fcoff-step5/agentic/report.md) |
-| 8 | bursty | running | | | | | |
-| 9 | short spikes | pending | | | | | |
+| 8 | bursty | done | problem shown: each of 3 scale-downs cut in-flight streams (18 in total); quiet phases A ≥ 0.985; each spike's replica Ready after the spike | 0.961 | 18 `ClientPayloadError`, 1 HTTP 503, 1 `ClientConnectorError`, 3 without latency | 11,142 | [report](npd-fcoff-step5/bursty/report.md) |
+| 9 | short spikes | running | | | | | |
 | 10 | scale-down | pending | | | | | |
 | 6 | static-replica baseline | pending | | | | | |
 | 7 | scale from zero | not run | `minReplicaCount` is 1 | | | | |
@@ -73,7 +73,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 
 ## Conclusions
 
-2026-11-20 13:55 UTC, covering runs 1 to 5; runs 8 to 10 and 6 pending.
+2026-11-20 15:20 UTC, covering runs 1 to 5 and 8; runs 9, 10 and 6 pending.
 
 - μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
   TTFT does.
@@ -110,6 +110,10 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 - Run 5: multi-turn sessions up to 32,391-token prompts completed without an
   error, A ≥ 0.997, on 1 to 2 replicas; the trigger read 0.91 to 1.02 × the
   offered work rate.
+- Run 8: every scale-down under load cut the removed pod's in-flight streams
+  (4, 8 and 6), as in runs 4a and 4b. Each spike's added replica was Ready
+  only after the spike ended. Quiet phases held A ≥ 0.985, one replica above
+  `ceil(ν / threshold)`.
 
 ## Log
 
