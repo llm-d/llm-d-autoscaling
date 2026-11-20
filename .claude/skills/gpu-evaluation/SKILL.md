@@ -36,7 +36,7 @@ The shell scripts take `--context` through `KUBECTL="kubectl --context <ctx>"`.
 
 Stop and ask before any cluster write. Name the context and where it came
 from, the GPUs the runs hold (`maxReplicaCount` × GPUs per replica, for about
-9.5 h plus standup), the §5.2 inputs (SLO and X, the mix set, the replica
+8.8 h plus standup), the §5.2 inputs (SLO and X, the mix set, the replica
 unit) and the run list. If nobody answers,
 do Step 1 only and say what is needed. Never switch the user's context.
 
@@ -45,9 +45,9 @@ do Step 1 only and say what is needed. Never switch the user's context.
 1. Check §5.1: the llm-d-benchmark commit, the overlay, Prometheus access.
 2. Fix the §5.2 inputs, from the scenario and its guide: the SLO, the mix
    set M (the three `random_*` mixes, plus the guide's own workload if it
-   names one), the replica unit, and an estimate of μ_SLO for each mix and
-   the blend (a simulator profile, an earlier run, or a short probe). Write
-   one knee load per mix and one for the blend:
+   names one), the replica unit, and an estimate of μ_SLO for each mix (a
+   simulator profile, an earlier run, or a short probe). Write one knee load
+   per mix:
 
    ```bash
    S=.claude/skills/gpu-evaluation/scripts
@@ -55,10 +55,10 @@ do Step 1 only and say what is needed. Never switch the user's context.
    python3 -I $S/gen_load.py knee --mix 8192:256 --estimate <req/s> --slo $SLO --out $LOAD
    python3 -I $S/gen_load.py knee --mix 2048:2048 --estimate <req/s> --slo $SLO --out $LOAD
    python3 -I $S/gen_load.py knee --mix 256:4096 --estimate <req/s> --slo $SLO --out $LOAD
-   python3 -I $S/gen_load.py knee --mix blend --estimate <req/s> --slo $SLO --out $LOAD
    ```
 
-   Each writes `knee-<mix>.csv` and `.yaml` (`knee-blend` for the blend).
+   Each writes `knee-<ISL>x<OSL>.csv` and `.yaml`. The blend's knee is
+   written in Step 3, from the measured per-mix knees.
    With a mix set other than the default, pass `--mixes` to every command.
 
    `$LOAD` is a working directory outside the repository; the profile of each
@@ -106,11 +106,19 @@ llmdbenchmark ... run -l inference-perf --monitoring \
   --wait-timeout 3600
 ```
 
-Then the same with each other knee, reporting each one (Step 5) before the
-next. Read A per stage from the benchmark
+Then the same with each other mix's knee, reporting each one (Step 5)
+before the next. The blend's knee runs last, with its estimate from the
+measured per-mix knees (`1 / mean over M of 1 / μ_SLO(m)`, §5.3):
+
+```bash
+python3 -I $S/gen_load.py knee --mix blend --estimate <req/s> --slo $SLO --out $LOAD
+$S/stage.sh $NS $LOAD
+```
+
+Read A per stage from the benchmark
 report's per-stage results (or the figure's CSV) and interpolate μ_SLO at
-A = X. If the crossing is not between stages 2 and 5, regenerate the knee with
-a new estimate and rerun (§5.3). If the configuration derives its threshold
+A = X. If stage 1 fails or stage 4 passes, the crossing is outside the stages:
+regenerate the knee with a new estimate and rerun (§5.3). If the configuration derives its threshold
 from capacity, compute it from the knee its rule names (the blend's if it
 names none), apply it with
 `kubectl patch scaledobject`, and record the value. With several pools, repeat

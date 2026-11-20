@@ -58,7 +58,12 @@ The knee runs (run 1) give the numbers every other rate follows from:
 - **μ_SLO(m)**: the highest request rate one replica serves at A ≥ X for
   mix m. It is measured for every mix in M and for B.
 - **C = maxReplicaCount × μ_SLO(B)**: what the pool serves at its cap, in
-  requests per second of the blend.
+  requests per second of the blend, if capacity grows linearly with the
+  replica count. Step 5 does not measure that: the router's scorers and,
+  with flow control on, its saturation gate can make a pool of N replicas
+  serve less than N × μ_SLO. When a run misses X near the cap with every
+  replica Ready, the report lists the miss as unexplained, not as a fault
+  of the configuration.
 
 With several pools (P/D), each scaled pool has its own μ_SLO, measured with the
 other pools pinned large enough that they cannot be the bottleneck, and C is
@@ -108,7 +113,7 @@ need after).
 
 | # | Run | Arm | Load | Read from the run | Shows a problem when |
 |---|---|---|---|---|---|
-| 1 | Knees | 1 replica, autoscaling paused | one run per mix in M and one for B; six 300 s stages at 0.4, 0.7, 1.0, 1.4, 1.9 and 2.5 × an estimate of μ_SLO (from a simulator profile, a previous run, or a short probe) | A, TTFT and TPOT per stage; μ_SLO is the rate where A crosses X, interpolated linearly between the two stages around it | the crossing is not between stages 2 and 5: move the estimate and rerun |
+| 1 | Knees | 1 replica, autoscaling paused | one run per mix in M, then one for B; four 300 s stages at 0.6, 0.8, 1.0 and 1.25 × an estimate of μ_SLO (per mix: from a simulator profile, a previous run, or a short probe; for B: `1 / mean over M of 1 / μ_SLO(m)`, from the measured per-mix knees) | A, TTFT and TPOT per stage; μ_SLO is the rate where A crosses X, interpolated linearly between the two stages around it | stage 1 fails or stage 4 passes: the crossing is outside the stages; move the estimate and rerun |
 | 2 | SO-active staircase | ScaledObject active, `minReplicaCount` Ready | B, five stages of length T at 0.15, 0.3, 0.5, 0.7 and 0.9 × C | Ready, requested and HPA-desired replicas per stage, against the stage's need `ceil(q / μ_SLO(B))`; A per stage | replicas do not rise with the stages, or A < X once the pool settled |
 | 3 | Mix-shift at constant rate | as 2 | one request rate `q = 0.5 × maxReplicaCount × min over M of μ_SLO(m)` throughout, one phase per mix in M: prefill-heavy, symmetrical, decode-heavy | settled Ready replicas in each phase against that phase's need `ceil(q / μ_SLO(m))`; A per phase | A < X once settled, or settled replicas differ from the need by more than the configuration's stated headroom (for a target utilization U, `ceil(q / (U × μ_SLO(m)))`) |
 | 4a | Overload under the cap | as 2 | B, a phase at 1.2 × μ_SLO(B), then a phase at 0.8 × C | replicas, A and errors by type through the step | A < X after Ready replicas stop rising |
@@ -126,9 +131,27 @@ Notes on the run set:
   read in run 2), then 6 (it needs run 3's peak), then 7. For a single-pool
   scenario with the three mixes of M and T = 300 s, and `npd-fcoff`'s HPA
   behavior (R ≈ 105 s, Q = 720 s, G = 150 s, H ≈ 1,125 s, D = 1,020 s), the
-  load lasts about 7.3 h (four knees of 30 min, run 8 about 53 min, run 9
+  load lasts about 6.6 h (four knees of 20 min, run 8 about 53 min, run 9
   about 35 min, run 10 about 70 min); with the drain and the arm between runs
-  (about 10 min each), about 9.5 h, plus standup.
+  (about 10 min each), about 8.8 h, plus standup.
+- **Knee stages.** The knee is a cliff: on one H100, A fell from 0.90 to
+  0.03 within one +33 % stage (`npd-fcoff`'s knee, 8192:128), and between
+  the last passing and the first failing rate, 4 to 8 % apart, P90 TTFT or
+  ITL jumped past its limit for three mixes (research C1). One failing
+  stage therefore brackets μ_SLO, and a stage past it only adds timeouts
+  and drain time: the `npd-fcoff` knee's six stages, 1 to 6 req/s, spent
+  their last three (15 of 30 min) at A ≤ 0.025. The four stages cover an
+  estimate from 20 % below to 67 % above μ_SLO; an estimate from short stages tends to
+  be high (next note). The stages are not shorter than 300 s, because
+  short stages overestimate the capacity of KV-bound mixes: a replica
+  that passed 4 minutes at a rate tipped after about 7.5 minutes (research
+  E6), and long-out passed 120 s at 10 req/s but failed 180 s at 10.5
+  (C1). For a decode-heavy mix even 300 s is under two request lifetimes
+  at the TPOT limit, so its μ_SLO is an upper bound; the report says so.
+- **The blend's estimate** comes from the per-mix knees, so the blend's
+  knee runs last. It is the rate the blend would reach if the mixes did
+  not interfere; prefill chunks raise the decode mixes' ITL, so the
+  measured μ_SLO(B) is usually lower, within the stages' 40 %.
 - **The blend** gives every load-shape run all the mixes at once, so no run
   favors a configuration tuned to one of them. Its arrivals are one Poisson
   process; only the mix of each request is drawn.
@@ -168,7 +191,7 @@ The [`gpu-evaluation` skill](../../.claude/skills/gpu-evaluation/SKILL.md)
 runs these steps in this order, with the commands.
 
 1. **Confirm the cluster** with the user before the first write: which
-   context, and whether its GPUs may be used for the duration (about 9.5 h for
+   context, and whether its GPUs may be used for the duration (about 8.8 h for
    the runs, plus standup). Never switch the user's context.
 2. **Render and check locally.** `standup --dry-run`; read the rendered
    ScaledObject (placeholders resolved, the thresholds intended). Check §5.1.
