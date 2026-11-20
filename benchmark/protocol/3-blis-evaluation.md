@@ -30,6 +30,7 @@ summary links them, and a run that shows a failure they predicted says so.
 | blis-signal-lab at `727e998` (branch `signals-hpa`), built | the KEDA + HPA loop and the signal recorder; §3.2 describes this commit | `git -C <lab> rev-parse HEAD`; `GOTOOLCHAIN=auto go build -o blis main.go` in the checkout (go.mod pins Go 1.27.2) |
 | llm-d-benchmark, as for step 5 | `standup --dry-run` renders the ScaledObject the policy is translated from; no cluster is used | the `run-benchmark` skill's setup |
 | a single-pool scenario | blis-signal-lab runs no HPA on a P/D or E/P/D deployment | the scenario's `keda` block scales one Deployment |
+| a BLIS scenario with the scenario's model | the model is never changed (§3.3); without one, step 3 reports missing model and stops | `grep -l '^model: <name>$' <lab>/testdata/kernel/aisimulate/*.yaml`, with `<name>` the Hugging Face id without its organization, lowercased (`Qwen/Qwen3-8B` is `qwen3-8b`) |
 | a translation of every trigger (§3.4) | blis reads signals, not PromQL | one entry per trigger in `terms.json`, each classed exact or approximated |
 
 ## 3.2 What the simulator models
@@ -69,12 +70,13 @@ give byte-identical outputs.
 
 **The scenario.** A BLIS scenario
 (`<lab>/testdata/kernel/aisimulate/<model>-<gpu>-<dtype>-<engine>-tp<N>.yaml`)
-states the model, GPU, parallelism and engine. Use the one that matches the
-scenario's backend overlay. When the catalog has no such entry (it has no
-Qwen3-8B, for example), use a stand-in on the same GPU type with the fewest
-GPUs per replica, and name it in every header. The run set is expressed in
-the step's own μ_SLO, so a stand-in keeps every rate consistent; what it
-changes is which mix binds and how latency grows past the knee.
+states the model, GPU, parallelism and engine. Use the one with the
+scenario's model that matches its backend overlay. The model is never
+changed: when no BLIS scenario has the scenario's model (blis has no
+Qwen3-8B, for example), step 3 stops. The summary reports **missing model**,
+names the model, the lab commit and the catalog searched, and marks every run
+*not run*. If an entry has the model but not the overlay's GPU type or
+parallelism, every header names the difference.
 
 **The cold start** is the policy's `loading_delay`. Use the plant's measured
 one when there is one (step 5's run 2, or an earlier GPU run of the overlay),
@@ -159,19 +161,21 @@ runs these steps in this order, with the commands.
 1. **Build and check** the lab (§3.1).
 2. **Render** the scenario with `standup --dry-run` and read the
    ScaledObject: placeholders resolved, the thresholds intended.
-3. **Translate** the triggers (§3.4), choose the BLIS scenario and the cold
-   start (§3.3), write the policy, and create the summary with every run
+3. **Choose the BLIS scenario** with the scenario's model (§3.3). If there
+   is none, write the summary with **missing model** and every run *not
+   run*, commit it, and stop.
+4. **Translate** the triggers (§3.4), choose the cold start (§3.3), write the policy, and create the summary with every run
    *pending* and run 7 *not run* (run-set.md §3).
-4. **Gate the translation on the first knee.** Its HPA log shows every
+5. **Gate the translation on the first knee.** Its HPA log shows every
    trigger off 0 while load was sent, and each exact trigger at the value its
    query gives for that load (a rate trigger near the offered rate, a gauge
    within its range). Otherwise fix `terms.json` and rerun the knee.
-5. **For each run**, in the run set's order: run it with the arm (§3.3),
+6. **For each run**, in the run set's order: run it with the arm (§3.3),
    gate it (run-set.md §4 and §3.7), report it (run-set.md §3 and §3.6) and
    commit before the next. A run that fails the gate has a tool or input
    error, not an infrastructure fault: fix it, rerun, and list the failed
    attempt with its reason.
-6. **Close the summary** when the last run is reported, or when the
+7. **Close the summary** when the last run is reported, or when the
    evaluation stops early.
 
 ## 3.6 What the reports add
@@ -194,8 +198,8 @@ results (blis's Result with every request, and the llm-d-benchmark-shaped
 `terms.json` and the summary's translation table are written once, at the
 evaluation's root directory.
 
-The header table adds the blis-signal-lab commit, the BLIS scenario (and the
-plant it stands in for), the cold start and its source, the seed, and the
+The header table adds the blis-signal-lab commit, the BLIS scenario (and any
+GPU type or parallelism it does not share with the overlay), the cold start and its source, the seed, and the
 gaps of §3.2 the run is exposed to. The figure's caption says that the
 trigger panel is the HPA's own reading, not a Prometheus query.
 

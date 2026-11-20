@@ -7,8 +7,8 @@ description: Run step 3 of this repo's autoscaling evaluation protocol (benchmar
 
 **Arguments:** `$ARGUMENTS`: a single-pool scenario under
 `benchmark/config/scenarios/`, optionally a BLIS scenario file name from
-`<lab>/testdata/kernel/aisimulate/` (default: the one matching the scenario's
-GPU overlay, or a stand-in, 3-blis-evaluation.md §3.3), and optionally
+`<lab>/testdata/kernel/aisimulate/` with the scenario's model (default: the
+one matching the scenario's GPU overlay, 3-blis-evaluation.md §3.3), and optionally
 `--lab <dir>` (default: `$TMPDIR/src/blis-signal-lab`).
 
 The rules live in the protocol; this skill adds the order, the gates and the
@@ -61,8 +61,20 @@ may no longer hold, and the summary's header names the commit used.
    Read it: placeholders resolved, the thresholds intended. A ScaledObject
    with `scalingModifiers`, or a scenario with more than one scaled pool,
    stops here (§3.2): say so.
-2. Choose the BLIS scenario and the cold start (§3.3), and record both with
-   their source.
+2. Choose the BLIS scenario (§3.3). Its model must be the scenario's
+   (`model:` in the rendered `plan/<stack>/config.yaml`); never substitute
+   another model. blis names a model by its Hugging Face id without the
+   organization, lowercased (`Qwen/Qwen3-8B` is `qwen3-8b`):
+
+   ```bash
+   grep -l "^model: qwen3-8b$" $LAB/testdata/kernel/aisimulate/*.yaml
+   ```
+
+   If no file has it, write the summary
+   `benchmark/protocol/verdicts/<guide>/<scenario>-step3.md` with
+   **missing model**: the model, the lab commit, the directory searched,
+   and every run *not run*. Commit it, tell the user, and stop.
+   Otherwise choose the cold start (§3.3) and record both with their source.
 3. Write `terms.json` (§3.4), one entry per trigger, in the evaluation's
    directory `benchmark/protocol/verdicts/<guide>/<scenario>-step3/`. Class
    each trigger exact or approximated, and for an approximated one, write
@@ -80,8 +92,8 @@ may no longer hold, and the summary's header names the commit used.
    `behavior`, KEDA fields blis does not model); copy each note into the
    summary.
 5. Create the summary `benchmark/protocol/verdicts/<guide>/<scenario>-step3.md`:
-   the shared header (blis-signal-lab commit, BLIS scenario and the plant it
-   stands in for, cold start and source, the run set's inputs), the
+   the shared header (blis-signal-lab commit, BLIS scenario and any GPU type
+   or parallelism it does not share with the overlay, cold start and source, the run set's inputs), the
    translation table (§3.4), the gaps of §3.2 that apply, and the run table
    with every run *pending*, run 7 *not run* (blis does not scale from zero).
    Commit it.
