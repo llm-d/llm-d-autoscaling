@@ -10,13 +10,15 @@
     {
       "name": "llm-d-autoscaling",
       "source": "./",
-      "description": "Run benchmark scenarios and apply the autoscaling evaluation protocol (static signal analysis, simulator verification) to KEDA configurations",
+      "description": "Run benchmark scenarios and apply the autoscaling evaluation protocol (static signal analysis, simulator verification, evaluation in blis-signal-lab and on GPU) to KEDA configurations",
       "strict": false,
       "skills": [
         "./.claude/skills/run-benchmark",
         "./.claude/skills/scenario-sanity-check",
         "./.claude/skills/static-signal-analysis",
-        "./.claude/skills/simulator-verification"
+        "./.claude/skills/simulator-verification",
+        "./.claude/skills/blis-evaluation",
+        "./.claude/skills/gpu-evaluation"
       ]
     }
   ]
