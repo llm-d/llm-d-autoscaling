@@ -1,0 +1,133 @@
+{
+ "phases": [
+  {
+   "phase_s": [
+    0.0,
+    1280.0
+   ],
+   "mix": "8192:256,2048:2048,256:4096",
+   "scheduled_rps": 1.9092,
+   "sent": 2424,
+   "sent_rps": 1.89375,
+   "lambda_in": 6780.6,
+   "lambda_out": 3965.0,
+   "errors": {
+    "completed without latency": 2,
+    "ClientPayloadError": 14
+   },
+   "A": 0.9925742574257426,
+   "ttft": [
+    0.08326788013800979,
+    0.3063228130340576,
+    0.5138155668973923
+   ],
+   "tpot": [
+    0.010401268495003418,
+    0.01930621615827268,
+    0.029668398191223442
+   ],
+   "ready_min_max": [
+    1.0,
+    3.0
+   ],
+   "requested_min_max": [
+    1.0,
+    3.0
+   ],
+   "requested_replica_s": 3249.428316116333,
+   "ready_replica_s": 2924.7141580581665,
+   "gpu_s": 3249.428316116333,
+   "need": 2,
+   "ready_at_end": 2.0,
+   "settled_at_s": 1135.2858419418335,
+   "A_settled": 1.0,
+   "sent_settled": 297,
+   "hpa_desired_min_max": [
+    1.0,
+    3.0
+   ],
+   "schedule_delay_s": {
+    "p50": -0.007741060107946396,
+    "max": 0.14483845699578524,
+    "last": -0.006795434281229973
+   }
+  },
+  {
+   "phase_s": [
+    1280.0,
+    2560.0
+   ],
+   "mix": "8192:256,2048:2048,256:4096",
+   "scheduled_rps": 14.319,
+   "sent": 18082,
+   "sent_rps": 14.1265625,
+   "lambda_in": 49227.8,
+   "lambda_out": 30241.2,
+   "errors": {
+    "TimeoutError": 2372,
+    "completed without latency": 9,
+    "ClientConnectorError": 435,
+    "HTTP Error 503": 6,
+    "HTTP Error 400": 1632,
+    "ClientPayloadError": 2023
+   },
+   "A": 0.026379825240570733,
+   "ttft": [
+    167.75395059306175,
+    223.86807567905635,
+    275.7497479119338
+   ],
+   "tpot": [
+    0.031090998049891624,
+    0.04288356855292531,
+    0.08107416810889845
+   ],
+   "ready_min_max": [
+    2.0,
+    6.0
+   ],
+   "requested_min_max": [
+    3.0,
+    6.0
+   ],
+   "requested_replica_s": 6854.1424741744995,
+   "ready_replica_s": 6098.856632232666,
+   "gpu_s": 6854.1424741744995,
+   "need": 9,
+   "ready_at_end": 6.0,
+   "settled_at_s": 1975.2858419418335,
+   "A_settled": 0.0,
+   "sent_settled": 8349,
+   "hpa_desired_min_max": [
+    3.0,
+    6.0
+   ],
+   "schedule_delay_s": {
+    "p50": -0.007228345610201359,
+    "max": 0.22342274617403746,
+    "last": -0.006610880605876446
+   }
+  }
+ ],
+ "epoch0": 1795155066.714158,
+ "slo": {
+  "ttft": 2.0,
+  "tpot": 0.05
+ },
+ "x": 0.95,
+ "total": {
+  "sent": 20506,
+  "A": 0.14059299717155954,
+  "errors": {
+   "completed without latency": 11,
+   "ClientPayloadError": 2037,
+   "TimeoutError": 2372,
+   "ClientConnectorError": 435,
+   "HTTP Error 503": 6,
+   "HTTP Error 400": 1632
+  },
+  "requested_replica_s": 10103.570790290833,
+  "ready_replica_s": 9023.570790290833,
+  "gpu_s": 10103.570790290833
+ }
+}

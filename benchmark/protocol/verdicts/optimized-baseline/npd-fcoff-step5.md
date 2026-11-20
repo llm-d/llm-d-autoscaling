@@ -54,7 +54,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 2 | SO-active staircase | done (third attempt) | problem shown: A 0.444 at 0.9 × C with 6 Ready (the need); Envoy CPU-throttled, vLLM not saturated | 0.800 | 69 `ClientConnectorError`, 19 HTTP 503, 8 without latency | 14,210 | [report](npd-fcoff-step5/stair/report.md) |
 | 3 | mix-shift | done | problem shown: phase 3 settled at 6 against a headroom need of 5; A ≥ 0.997 once settled | 0.945 | 1 `ClientConnectorError`, 10 without latency | 16,699 | [report](npd-fcoff-step5/mixshift/report.md) |
 | 4a | overload under the cap | done | problem shown: A 0.824 at 6 Ready in the 0.8 × C phase, Envoy CPU-throttled; a scale-down and scale-up 30 s apart failed 12 requests | 0.651 | 108 `ClientConnectorError`, 12 `ClientPayloadError`, 11 HTTP 503, 4 without latency | 10,440 | [report](npd-fcoff-step5/overload-under/report.md) |
-| 4b | overload over the cap | running (second attempt) | | | | | |
+| 4b | overload over the cap | done (second attempt) | problem shown: trigger and HPA held the cap, but the router's EPP was OOMKilled 4 times and Envoy killed once; A 0.026 in the 1.5 × C phase | 0.141 | 2,372 timeout, 2,037 `ClientPayloadError`, 1,632 HTTP 400, 435 `ClientConnectorError`, 6 HTTP 503, 11 without latency | 10,104 | [report](npd-fcoff-step5/overload-over/report.md) |
 | 5 | agentic | pending | | | | | |
 | 8 | bursty | pending | | | | | |
 | 9 | short spikes | pending | | | | | |
@@ -73,7 +73,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 
 ## Conclusions
 
-2026-11-20 05:05 UTC, covering runs 1 to 4a; runs 4b, 5, 8 to 10 and 6 pending.
+2026-11-20 12:30 UTC, covering runs 1 to 4b; runs 5, 8 to 10 and 6 pending.
 
 - μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
   TTFT does.
@@ -103,6 +103,10 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   with Envoy throttled as in run 2. At 1.91 req/s the trigger hovered around
   the 2-replica boundary; one scale-down was undone 30 s later, and the
   removed pod's 12 in-flight streams failed.
+- Run 4b: at 1.5 × C the trigger read 1.05 × the offered work rate and the
+  pool held the cap of 6. The router did not hold: its EPP was OOMKilled at
+  the scenario's 1 Gi limit four times and Envoy was killed once, and A was
+  0.026. The phase-1 flap of run 4a recurred and cut 14 streams.
 
 ## Log
 
@@ -128,6 +132,15 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 - 2026-11-20: runs 2, 3 and 4a done. Run 4b's first attempt discarded (the
   load generator fell behind). Before it fell behind, its trigger read 0 in
   five consecutive 15 s samples, 05:40:50–05:41:50 UTC, with the EPP scrape
-  target up and `rate(llm_d_epp_request_total)` at 0: the router admitted no
-  request in that minute (trap T8). These numbers come from a discarded run
-  and are not used in any report.
+  target up and `rate(llm_d_epp_request_total)` at 0. These numbers come from
+  a discarded run and are not used in any report.
+- 2026-11-20 12:30 UTC, correction to the entry above: the router pod's `epp`
+  container was OOMKilled at 05:37 UTC and its `envoy-proxy` restarted at
+  05:40, 05:44, 05:46, 05:49 and 05:52 UTC
+  (`kube_pod_container_status_restarts_total`). The zero readings fall in
+  that window; they are not shown to be the admission undercount of trap T8.
+- 2026-11-20: run 4b's second attempt ran 06:11–06:56 UTC; `llmdbenchmark`
+  exited 1 on collection, and the results were copied from the PVC. The
+  session was then idle until 12:19 UTC. At 11:00:09 UTC the Deployment went
+  from 1 to 0 replicas and back to 1 at 11:00:28, with no run active and no
+  action from this evaluation: unexplained.
