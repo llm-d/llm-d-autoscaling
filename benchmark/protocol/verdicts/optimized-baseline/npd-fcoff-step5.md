@@ -222,3 +222,7 @@ Detail by run:
   the HPA read `0/11086` 75 s later. Runs 1 to 9 ended before the expiry.
 - 2026-11-20: run 10 (second attempt) and run 6 done. 20:43 UTC: the plant
   pinned at 1 replica. Evaluation closed.
+- 2026-11-20 20:50 UTC: the plant is kept, pinned at 1 replica
+  (`autoscaling.keda.sh/paused-replicas: "1"`, 1 H100); teardown awaits its
+  owner's decision. KEDA's Thanos token in `prometheus-auth` expires
+  2026-11-23 17:17 UTC.
