@@ -54,7 +54,7 @@ replica-seconds (10,440 GPU-seconds).
   replicas, from 640 s into the phase), A = 0.824 against X = 0.95. Over
   phase 2, the router's `envoy-proxy` is throttled in 100 % of CFS periods
   (median of 15 s samples) at its 0.50-core limit. The errors are 108
-  `ClientConnectorError` (93 sent 1,320–1,680 s into the run, 11 at
+  `ClientConnectorError` (93 sent 1,320–1,680 s into the run, 4 at 1,860–1,920 s, 11 at
   2,460–2,520 s) and 11 HTTP 503. The router pod's readiness probe
   (`/ready` on Envoy's admin port) timed out during the phase, last at
   04:33:15 UTC; that event counts 272 failures since 2026-11-19 21:57 UTC,
