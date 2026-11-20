@@ -52,8 +52,8 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 1c | knee 256:4096 | done (second attempt) | as expected; μ_SLO 1.26 req/s | 0.367 (whole run) | 870 timeout, 2 without latency | 1,800 | [report](npd-fcoff-step5/knee-256x4096/report.md) |
 | 1d | knee blend | done | as expected; μ_SLO 1.59 req/s | 0.561 (whole run) | 1 without latency | 1,800 | [report](npd-fcoff-step5/knee-blend/report.md) |
 | 2 | SO-active staircase | done (third attempt) | problem shown: A 0.444 at 0.9 × C with 6 Ready (the need); Envoy CPU-throttled, vLLM not saturated | 0.800 | 69 `ClientConnectorError`, 19 HTTP 503, 8 without latency | 14,210 | [report](npd-fcoff-step5/stair/report.md) |
-| 3 | mix-shift | running | | | | | |
-| 4a | overload under the cap | pending | | | | | |
+| 3 | mix-shift | done | problem shown: phase 3 settled at 6 against a headroom need of 5; A ≥ 0.997 once settled | 0.945 | 1 `ClientConnectorError`, 10 without latency | 16,699 | [report](npd-fcoff-step5/mixshift/report.md) |
+| 4a | overload under the cap | running | | | | | |
 | 4b | overload over the cap | pending | | | | | |
 | 5 | agentic | pending | | | | | |
 | 8 | bursty | pending | | | | | |
@@ -72,7 +72,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 
 ## Conclusions
 
-2026-11-20 02:35 UTC, covering runs 1 and 2; runs 3 to 5, 8 to 10 and 6 pending.
+2026-11-20 04:00 UTC, covering runs 1 to 3; runs 4a, 4b, 5, 8 to 10 and 6 pending.
 
 - μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
   TTFT does.
@@ -94,6 +94,10 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   whose ν per request is below the blend's. At 0.9 × C, A fell to 0.444 with
   6 replicas Ready and vLLM at most 72 of 128 running per pod: the router's
   Envoy was CPU-throttled at the scenario's 500m limit.
+- Run 3: at 3.78 req/s the trigger read 0.98 to 1.01 × the offered work rate
+  in each mix, and the pool held 4, 4, then 6 replicas, against 4, 4 and 5
+  with the configuration's 0.70 headroom. A once settled was 0.997 or more in
+  every phase. A one-sample spike to 4.3 × 10⁶ followed the idle arm (P8).
 
 ## Log
 
@@ -116,4 +120,4 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   0.39 core, throttled in at most 16 % of periods. The scenario sets that
   limit (`router.proxy.resources.limits.cpu: 500m`); the evaluation keeps it
   (no answer to the question whether to raise it). 00:53 UTC: run 2 restarted.
-- 2026-11-20: run 2 done.
+- 2026-11-20: runs 2 and 3 done.
