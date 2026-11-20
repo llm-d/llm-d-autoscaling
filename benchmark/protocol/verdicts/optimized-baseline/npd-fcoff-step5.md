@@ -55,8 +55,8 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 3 | mix-shift | done | problem shown: phase 3 settled at 6 against a headroom need of 5; A ≥ 0.997 once settled | 0.945 | 1 `ClientConnectorError`, 10 without latency | 16,699 | [report](npd-fcoff-step5/mixshift/report.md) |
 | 4a | overload under the cap | done | problem shown: A 0.824 at 6 Ready in the 0.8 × C phase, Envoy CPU-throttled; a scale-down and scale-up 30 s apart failed 12 requests | 0.651 | 108 `ClientConnectorError`, 12 `ClientPayloadError`, 11 HTTP 503, 4 without latency | 10,440 | [report](npd-fcoff-step5/overload-under/report.md) |
 | 4b | overload over the cap | done (second attempt) | problem shown: trigger and HPA held the cap, but the router's EPP was OOMKilled 4 times and Envoy killed once; A 0.026 in the 1.5 × C phase | 0.141 | 2,372 timeout, 2,037 `ClientPayloadError`, 1,632 HTTP 400, 435 `ClientConnectorError`, 6 HTTP 503, 11 without latency | 10,104 | [report](npd-fcoff-step5/overload-over/report.md) |
-| 5 | agentic | pending | | | | | |
-| 8 | bursty | pending | | | | | |
+| 5 | agentic | done | as expected: A ≥ 0.997, 0 errors, no context overflow; prompts lighter than planned | 0.997 | 0 | 5,215 | [report](npd-fcoff-step5/agentic/report.md) |
+| 8 | bursty | running | | | | | |
 | 9 | short spikes | pending | | | | | |
 | 10 | scale-down | pending | | | | | |
 | 6 | static-replica baseline | pending | | | | | |
@@ -73,7 +73,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 
 ## Conclusions
 
-2026-11-20 12:30 UTC, covering runs 1 to 4b; runs 5, 8 to 10 and 6 pending.
+2026-11-20 13:55 UTC, covering runs 1 to 5; runs 8 to 10 and 6 pending.
 
 - μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
   TTFT does.
@@ -107,6 +107,9 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   pool held the cap of 6. The router did not hold: its EPP was OOMKilled at
   the scenario's 1 Gi limit four times and Envoy was killed once, and A was
   0.026. The phase-1 flap of run 4a recurred and cut 14 streams.
+- Run 5: multi-turn sessions up to 32,391-token prompts completed without an
+  error, A ≥ 0.997, on 1 to 2 replicas; the trigger read 0.91 to 1.02 × the
+  offered work rate.
 
 ## Log
 
@@ -144,3 +147,5 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   session was then idle until 12:19 UTC. At 11:00:09 UTC the Deployment went
   from 1 to 0 replicas and back to 1 at 11:00:28, with no run active and no
   action from this evaluation: unexplained.
+- 2026-11-20: run 5 done; the question on the router limits again had no
+  answer, so runs 8 to 10 and 6 keep the scenario's limits.

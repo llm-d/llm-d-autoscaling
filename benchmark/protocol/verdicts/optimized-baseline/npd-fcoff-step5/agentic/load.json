@@ -1,0 +1,18 @@
+{
+ "agentic": {
+  "what": "agentic: 0.233 then 0.698 req/s = 0.1 and 0.3 x C x mean ISL of the blend (33398 prompt tok/s) / estimated mean prompt 14364",
+  "seed": 106,
+  "duration_s": 3840,
+  "phases": [
+   {
+    "seconds": 1280,
+    "rate": 0.233
+   },
+   {
+    "seconds": 2560,
+    "rate": 0.698
+   }
+  ],
+  "mean_prompt_estimate": 14364.0
+ }
+}
