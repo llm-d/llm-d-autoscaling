@@ -58,7 +58,7 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 5 | agentic | done | as expected: A ≥ 0.997, 0 errors, no context overflow; prompts lighter than planned | 0.997 | 0 | 5,215 | [report](npd-fcoff-step5/agentic/report.md) |
 | 8 | bursty | done | problem shown: each of 3 scale-downs cut in-flight streams (18 in total); quiet phases A ≥ 0.985; each spike's replica Ready after the spike | 0.961 | 18 `ClientPayloadError`, 1 HTTP 503, 1 `ClientConnectorError`, 3 without latency | 11,142 | [report](npd-fcoff-step5/bursty/report.md) |
 | 9 | short spikes | done | problem shown: A 0.843 in the first gap; the pool ratcheted to the cap of 6 (need 5 in spikes, 2 in gaps); 11 streams cut at 2 scale-downs | 0.976 | 11 `ClientPayloadError`, 2 without latency | 10,053 | [report](npd-fcoff-step5/short-spikes/report.md) |
-| 10 | scale-down | running | | | | | |
+| 10 | scale-down | running (second attempt) | | | | | |
 | 6 | static-replica baseline | pending | | | | | |
 | 7 | scale from zero | not run | `minReplicaCount` is 1 | | | | |
 
@@ -70,10 +70,11 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
 | 2, SO-active staircase | `villardl-20261119-162317-913` | No per-request records: inference-perf was still writing its reports 43 min after the load ended (22:18 UTC) when `llmdbenchmark`'s 4,800 s wait expired, and the harness pod was deleted with `per_request_lifecycle_metrics.json` at 0 bytes. A tool fault, outside the configuration | the same trace, with the profile changes below |
 | 2, SO-active staircase, second attempt | `villardl-20261119-180813-648` | The 3 Gi workload PVC filled with the earlier runs' results: `per_request_lifecycle_metrics.json` stopped at 583,008,256 bytes with `Disk quota exceeded`. The harness then relaunched inference-perf, which replayed part of the trace from 00:19 to 00:49 UTC until its pod was deleted. The PVC was grown to 30 Gi. A tool fault, outside the configuration | third attempt, from 00:53 UTC |
 | 4b, overload over the cap | `villardl-20261120-000706-273` | The load generator fell behind: from about 1,960 s into the run (phase 2, 14.3 req/s) the send delay reached 122 s, and no request was sent between 2,140 and 2,200 s. The harness pod ran at its 2-CPU limit, throttled in 46 to 80 % of CFS periods from 05:37 to 05:49 UTC. The run was not open loop (§5.6). A tool limit, outside the configuration | rerun from 06:08 UTC with `--set harness.resources.cpu=8 --set harness.resources.memory=32Gi` |
+| 10, scale-down | `villardl-20261120-110530-312` | The token KEDA uses for Thanos, minted at standup with a 24 h lifetime, expired at 16:56:44 UTC, about 2,730 s into the run: from then KEDA got HTTP 401, the ScaledObject was `Ready=False` and the HPA read `<unknown>` with the pool frozen at 4. At 16:59 UTC the workstation's copy of the cluster credentials also expired; `llmdbenchmark` could not list the results and deleted the harness pod about 3,400 s into the 4,238 s schedule. A fault outside the configuration | rerun after a new 72 h token was written to the `prometheus-auth` Secret at 17:17 UTC |
 
 ## Conclusions
 
-2026-11-20 16:15 UTC, covering runs 1 to 5, 8 and 9; runs 10 and 6 pending.
+2026-11-20 16:03 UTC, covering runs 1 to 5, 8 and 9; runs 10 and 6 pending.
 
 - μ_SLO(8192:256) = 1.75 req/s on one H100. TPOT reaches its limit before
   TTFT does.
@@ -158,3 +159,8 @@ Knee estimates (inputs to run 1, not measurements): 8192:256 2.4 req/s,
   action from this evaluation: unexplained.
 - 2026-11-20: run 5 done; the question on the router limits again had no
   answer, so runs 8 to 10 and 6 keep the scenario's limits.
+- 2026-11-20: runs 8 and 9 done. Run 10's first attempt discarded: KEDA's
+  Thanos token expired at 16:56:44 UTC (24 h after standup). A new token for
+  the same ServiceAccount (`keda-prometheus-auth`, 72 h) was written to the
+  `prometheus-auth` Secret at 17:17 UTC; the ScaledObject was `Ready=True` and
+  the HPA read `0/11086` 75 s later. Runs 1 to 9 ended before the expiry.
