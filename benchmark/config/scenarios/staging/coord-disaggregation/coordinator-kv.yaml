@@ -14,7 +14,7 @@
 # Requires llm-d/llm-d#3111 (PD-only router values and Coordinator overlay) and
 # llm-d/llm-d#3114 (model-server PodMonitors). Thresholds come from blis-signal-lab
 # knees (Qwen3-VL-32B, H100, TP2); re-measure them on the target plant (step 5).
-# The guide pins Qwen/Qwen3-VL-32B-Instruct, TP2 per role, vLLM v0.30.0.
+# The guide pins Qwen/Qwen3-VL-32B-Instruct, TP2 per role, vLLM v0.31.0.
 
 scenario:
   - name: "coord-disaggregation"

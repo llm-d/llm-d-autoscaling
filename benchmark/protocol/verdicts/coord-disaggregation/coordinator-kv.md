@@ -13,8 +13,9 @@ Source references used below:
   the guide runs from the floating `main` tag.
 - **G** = `llm-d/llm-d@a0f3cb6c` (`main`), the guide, plus the PD-only overlays
   of llm-d/llm-d#3111 (open).
-- **V** = `vllm-project/vllm` tag `v0.30.0`, the image the guide's model servers
-  run.
+- **V** = `vllm-project/vllm` tag `v0.31.0`, the image the guide's model servers
+  run (the shared recipe image component; the guide README's prose still says
+  v0.30.0).
 - **W** = `kubernetes-sigs/lws@588881ca` (`v1.0.0`).
 - **K** = `kedacore/keda@3f88d60a` (`v2.19.0`).
 - **S** = blis-signal-lab `25f2dfb` with the step 3 tooling of
@@ -73,7 +74,7 @@ current count.
 |---|---|---|
 | Coordinator | `ghcr.io/llm-d/llm-d-router-coordinator:v1.0.0` | G `guides/recipes/modelserver/components/images/coordinator/release/kustomization.yaml:5-6` |
 | EPP | `ghcr.io/llm-d/llm-d-router-endpoint-picker:main`, **floating** | G `router/coord-disaggregation.values.yaml:40-43`. Every EPP finding is tied to E; the deployed digest must be read from the running pod |
-| vLLM | `docker.io/vllm/vllm-openai:v0.30.0` | G `modelserver/gpu/vllm/base` patches |
+| vLLM | `docker.io/vllm/vllm-openai:v0.31.0` | G, a kustomize build of `modelserver/gpu/vllm/base` (all three roles); the README's v0.30.0 is stale |
 | LWS (DisaggregatedSet) | `v1.0.0` | G `guides/env.sh` `LWS_VERSION` |
 | KEDA | target cluster: 2.19 (OpenShift Custom Metrics Autoscaler) | `kubectl` on the target cluster, 2026-11-19 |
 | Scrape | EPP 10 s (`guides/recipes/router/features/monitoring.values.yaml:6`); encode, prefill and decode vLLM 30 s (`coord-disaggregation/modelserver/monitoring`, llm-d/llm-d#3114, from `recipes/modelserver/components/monitoring-epd`) | G |
@@ -171,11 +172,11 @@ knee (0.782), the protocol's usual rule, gives 0.55, which the convexity (P1)
 turns into 76 to 87 % of knee load.
 
 - **What it counts:** `vllm:kv_cache_usage_perc` is `1 - free / total` over the
-  GPU block pool (V `vllm/v1/core/block_pool.py:869-880`, exported from
-  `vllm/v1/metrics/loggers.py:567`). A block returns to the free queue when its
+  GPU block pool (V `vllm/v1/core/block_pool.py:880-891`, exported from
+  `vllm/v1/metrics/loggers.py:577`). A block returns to the free queue when its
   reference count reaches 0, including prefix-cached blocks, which become
   eviction candidates (V `block_pool.py` `free_blocks`,
-  `get_num_free_blocks:861-867`). So the gauge counts the KV that live requests
+  `get_num_free_blocks:871-878`; `free_blocks:777`). So the gauge counts the KV that live requests
   hold; an idle prefix cache reads as free. On a decode pod that is the context
   of the requests it is decoding plus KV being received from prefill.
 - **Selecting decode pods:** vLLM series carry no role label (trap T14).
@@ -202,7 +203,7 @@ turns into 76 to 87 % of knee load.
 | P6 defined at zero | pass | `minReplicaCount: 1`. At zero decode pods the series are absent, the query is empty and the scaler errors: decode cannot scale from zero on this trigger | source |
 | P7 fails visibly | pass | No `or vector(0)`, `ignoreNullValues: "false"`, fallback holds. Without the decode PodMonitor the query is empty from the start (visible, but the pool never scales); with it, a scrape outage errors and holds | config |
 | P8 lag and noise | fail on long outputs | **Lag:** `30 + 60 + 15 = 105 s`, plus the time the load takes to appear in KV: a request's context grows as it decodes, so a shift to 4,096-token outputs reaches steady occupancy after about one decode duration (2 to 3 minutes). That exceeds the 120 s cold start. **Noise:** instant, one pod: CV 21 to 38 % on 8192:256 (each request is about 2.8 % of the pool); with `[2m]`, 8 to 10 % (`sim`) | config / sim |
-| P9 measures what it claims | pass | Reads the KV decode's requests hold, its binding resource here. **Conditions:** (1) the model-server PodMonitors are applied (llm-d/llm-d#3114, port `modelserver`; the scenario's monitoring step does it); (2) pod names follow the DisaggregatedSet pattern above; (3) vLLM v0.34 sizes the KV pool after warm-up by default (`vllm-extensible-kv-cache`), which changes what 1.0 means; the guide pins v0.30.0. No listed trap applies beyond T14, handled by `max by (pod)` and the name selector | source |
+| P9 measures what it claims | pass | Reads the KV decode's requests hold, its binding resource here. **Conditions:** (1) the model-server PodMonitors are applied (llm-d/llm-d#3114, port `modelserver`; the scenario's monitoring step does it); (2) pod names follow the DisaggregatedSet pattern above; (3) vLLM v0.34 sizes the KV pool after warm-up by default (`vllm-extensible-kv-cache`), which changes what 1.0 means; the guide runs v0.31.0. No listed trap applies beyond T14, handled by `max by (pod)` and the name selector | source |
 
 **Failure case (P8):** decode right-sized at 1 pod for 8192:256 at 1.6 req/s;
 traffic switches to 256:4096 at the same rate. KV fills over about two minutes
@@ -223,7 +224,7 @@ sum(max by (pod) (vllm:num_requests_waiting{namespace="${NAMESPACE}",pod=~"pd-di
   KV is full, new requests wait there. On vLLM before v0.32, a decode request
   whose KV is still being fetched from prefill also counts as waiting (the
   reason llm-d-router#4016 subtracts `vllm:num_requests_kv_fetch_by_stage`,
-  which v0.30.0 does not export), so disaggregated traffic adds about arrivals x
+  which v0.31.0 does not export), so disaggregated traffic adds about arrivals x
   fetch time per pod in steady state.
 - **Kind:** queue backlog. **Role:** alarm.
 
@@ -284,7 +285,7 @@ gate.
    decode's binding resource there (decode P3, P5).
 3. The cold start of a prefill and a decode replica (P8 on both).
 4. `vllm:num_requests_waiting` on decode pods in steady state with disaggregated
-   traffic on vLLM v0.30.0 (alarm P9).
+   traffic on vLLM v0.31.0 (alarm P9).
 5. Whether `decode-prefix-producer` and the default producer predict the same
    cached tokens on prefill calls, and the effect of `indexCompletions` on the
    floating EPP (prefill P9).
