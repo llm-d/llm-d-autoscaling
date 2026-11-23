@@ -1,0 +1,95 @@
+# blend staircase 0.25/0.5/0.75/0.5/0.25 x C
+version: '2'
+aggregate_rate: 0
+seed: 3
+clients:
+- id: 8192x256
+  rate_fraction: 1.0
+  arrival:
+    process: poisson
+  input_distribution:
+    type: constant
+    params:
+      value: 8192
+  output_distribution:
+    type: constant
+    params:
+      value: 256
+  timeout: 311000000
+  lifecycle:
+    windows:
+    - start_us: 0
+      end_us: 600000000
+      trace_rate: 0.3883
+    - start_us: 600000000
+      end_us: 1200000000
+      trace_rate: 0.7767
+    - start_us: 1200000000
+      end_us: 1800000000
+      trace_rate: 1.165
+    - start_us: 1800000000
+      end_us: 2400000000
+      trace_rate: 0.7767
+    - start_us: 2400000000
+      end_us: 3000000000
+      trace_rate: 0.3883
+- id: 2048x2048
+  rate_fraction: 1.0
+  arrival:
+    process: poisson
+  input_distribution:
+    type: constant
+    params:
+      value: 2048
+  output_distribution:
+    type: constant
+    params:
+      value: 2048
+  timeout: 311000000
+  lifecycle:
+    windows:
+    - start_us: 0
+      end_us: 600000000
+      trace_rate: 0.3883
+    - start_us: 600000000
+      end_us: 1200000000
+      trace_rate: 0.7767
+    - start_us: 1200000000
+      end_us: 1800000000
+      trace_rate: 1.165
+    - start_us: 1800000000
+      end_us: 2400000000
+      trace_rate: 0.7767
+    - start_us: 2400000000
+      end_us: 3000000000
+      trace_rate: 0.3883
+- id: 256x4096
+  rate_fraction: 1.0
+  arrival:
+    process: poisson
+  input_distribution:
+    type: constant
+    params:
+      value: 256
+  output_distribution:
+    type: constant
+    params:
+      value: 4096
+  timeout: 311000000
+  lifecycle:
+    windows:
+    - start_us: 0
+      end_us: 600000000
+      trace_rate: 0.3883
+    - start_us: 600000000
+      end_us: 1200000000
+      trace_rate: 0.7767
+    - start_us: 1200000000
+      end_us: 1800000000
+      trace_rate: 1.165
+    - start_us: 1800000000
+      end_us: 2400000000
+      trace_rate: 0.7767
+    - start_us: 2400000000
+      end_us: 3000000000
+      trace_rate: 0.3883

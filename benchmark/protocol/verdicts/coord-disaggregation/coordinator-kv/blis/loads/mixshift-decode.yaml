@@ -1,0 +1,44 @@
+# decode mix shift at the 4-pod cap: 8192:256 -> 256:4096 -> 8192:256 at 2.4 req/s
+version: '2'
+aggregate_rate: 0
+seed: 1
+clients:
+- id: 8192x256
+  rate_fraction: 1.0
+  arrival:
+    process: poisson
+  input_distribution:
+    type: constant
+    params:
+      value: 8192
+  output_distribution:
+    type: constant
+    params:
+      value: 256
+  timeout: 311000000
+  lifecycle:
+    windows:
+    - start_us: 0
+      end_us: 600000000
+      trace_rate: 2.4
+    - start_us: 1500000000
+      end_us: 2100000000
+      trace_rate: 2.4
+- id: 256x4096
+  rate_fraction: 1.0
+  arrival:
+    process: poisson
+  input_distribution:
+    type: constant
+    params:
+      value: 256
+  output_distribution:
+    type: constant
+    params:
+      value: 4096
+  timeout: 311000000
+  lifecycle:
+    windows:
+    - start_us: 600000000
+      end_us: 1500000000
+      trace_rate: 2.4

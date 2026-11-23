@@ -1,0 +1,20 @@
+{
+ "coord-pd-prefill": {
+  "prefill-uncached-prompt-tokens": [
+   {
+    "metric": "prefill_prompt_tokens",
+    "function": "rate",
+    "window_s": 120
+   }
+  ]
+ },
+ "coord-pd-decode": {
+  "coordinator-arrival-rate": [
+   {
+    "metric": "arrivals",
+    "function": "rate",
+    "window_s": 120
+   }
+  ]
+ }
+}
