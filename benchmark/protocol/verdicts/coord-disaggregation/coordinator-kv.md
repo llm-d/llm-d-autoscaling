@@ -62,6 +62,12 @@ conditions:
 - The decode triggers need the model-server PodMonitors (llm-d/llm-d#3114), and
   the prefill query works only on the single-EPP topology (P9).
 
+Step 2 ([`coordinator-kv-step2.md`](coordinator-kv-step2.md)) ran this
+configuration on a CPU simulator: the decode selector, the model-server
+PodMonitors, KEDA's actuation through the `DisaggregatedSetRoleScaler`, the
+fallback on a metrics outage (P7, detected in about 5 minutes on the test
+cluster), the producers and the Coordinator's 412 path all hold.
+
 Predicted: each pool settles at `ceil(signal / threshold)` and holds at constant
 load. A mix shift toward long outputs is seen by decode about one decode
 duration late; the alarm then takes decode to the cap within one cold start.
@@ -294,9 +300,12 @@ gate.
 3. The cold start of a prefill and a decode replica (P8 on both).
 4. `vllm:num_requests_waiting` on decode pods in steady state with disaggregated
    traffic on vLLM v0.31.0 (alarm P9).
-5. Whether `decode-prefix-producer` and the default producer predict the same
-   cached tokens on prefill calls, and the effect of `indexCompletions` on the
-   floating EPP (prefill P9).
+5. ~~Whether `decode-prefix-producer` and the default producer predict the
+   same cached tokens on prefill calls.~~ Settled in step 2
+   ([`coordinator-kv-step2.md`](coordinator-kv-step2.md), S4): identical on
+   the floating EPP; pinning `plugin_name` is required and sufficient.
+   Still open: the effect of `indexCompletions` on the floating EPP for
+   multi-turn traffic (prefill P9), which step 2's prompts did not exercise.
 6. The EPP image digest the guide deploys.
 
 ## Fixes and open decisions

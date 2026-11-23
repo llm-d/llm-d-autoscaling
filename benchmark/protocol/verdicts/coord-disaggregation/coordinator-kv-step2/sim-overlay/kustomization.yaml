@@ -1,0 +1,228 @@
+# Step 2 only: swaps the prefill and decode vLLM containers for vllm-model-sim
+# (vLLM v0.31.0 on CPU, Qwen3-32B H100 physics profile). Used as the scenario's
+# kustomize.overlayPath. nixl_sim.py is the KV-leak fix from
+# llm-d-extensions/vllm-model-sim@71f74c4 (src/vllm_simulated/nixl_sim.py), not
+# yet in the vllm-sim-deps v0.3.0 image; fetch it into this directory first.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+configMapGenerator:
+  - name: vllm-sim-model-config
+    files:
+      - config.json
+    options:
+      disableNameSuffixHash: true
+  - name: nixl-sim-patched
+    files:
+      - nixl_sim.py
+    options:
+      disableNameSuffixHash: true
+patches:
+  - target:
+      group: disaggregatedset.x-k8s.io
+      version: v1
+      kind: DisaggregatedSet
+      name: pd-disagg-coord
+    patch: |
+      - op: replace
+        path: /spec/roles/1/spec/leaderWorkerTemplate/workerTemplate/spec/containers/0
+        value:
+          name: modelserver
+          image: docker.io/vllm/vllm-openai-cpu:v0.31.0
+          command:
+            - sh
+            - -c
+          args:
+            - 'vllm serve /model --tokenizer=Qwen/Qwen3-32B --load-format=dummy --max-model-len=8192
+              --max-num-batched-tokens=8192 --host=0.0.0.0 --port=8000 --served-model-name
+              Qwen/Qwen3-VL-32B-Instruct Qwen/Qwen3-32B --gpu-memory-utilization=0.5 --enforce-eager
+              --enable-scale-out --shutdown-timeout=45 --disable-access-log-for-endpoints=/health,/metrics,/v1/models
+              --kv-transfer-config ''{"kv_connector": "SimulatedNixlConnector", "kv_role":
+              "kv_producer", "kv_connector_extra_config": {"bandwidth_gbps": 100, "handshake_ms":
+              2}}'''
+          env:
+            - name: MODEL_NAME
+              value: Qwen/Qwen3-VL-32B-Instruct
+            - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: PYTHONPATH
+              value: /plugins
+            - name: VLLM_CPU_KVCACHE_SPACE
+              value: '15'
+            - name: VLLM_CPU_OMP_THREADS_BIND
+              value: 0-3
+            - name: HF_HOME
+              value: /tmp/huggingface
+          ports:
+            - name: modelserver
+              containerPort: 8000
+              protocol: TCP
+            - name: nixl
+              containerPort: 5600
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /v1/models
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 120
+          readinessProbe:
+            httpGet:
+              path: /v1/models
+              port: 8000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: '4'
+              memory: 20Gi
+            limits:
+              cpu: '4'
+              memory: 20Gi
+          volumeMounts:
+            - name: plugins
+              mountPath: /plugins
+            - name: vllm-sim-model-config
+              mountPath: /model
+              readOnly: true
+            - name: nixl-sim-patched
+              mountPath: /plugins/vllm_simulated/nixl_sim.py
+              subPath: nixl_sim.py
+              readOnly: true
+            - name: shm
+              mountPath: /dev/shm
+            - name: torch-compile-cache
+              mountPath: /.cache
+            - name: config-cache
+              mountPath: /.config
+            - name: triton-cache
+              mountPath: /.triton
+      - op: add
+        path: /spec/roles/1/spec/leaderWorkerTemplate/workerTemplate/spec/initContainers
+        value:
+          - &id001
+            name: install-plugin
+            image: ghcr.io/lionelvillard/vllm-sim-deps:v0.3.0
+            command:
+              - sh
+              - -c
+              - cp -r /plugins/* /mnt/plugins/
+            volumeMounts:
+              - name: plugins
+                mountPath: /mnt/plugins
+      - op: add
+        path: /spec/roles/1/spec/leaderWorkerTemplate/workerTemplate/spec/volumes/-
+        value: &id002
+          name: plugins
+          emptyDir: {}
+      - op: add
+        path: /spec/roles/1/spec/leaderWorkerTemplate/workerTemplate/spec/volumes/-
+        value: &id003
+          name: vllm-sim-model-config
+          configMap:
+            name: vllm-sim-model-config
+      - op: add
+        path: /spec/roles/1/spec/leaderWorkerTemplate/workerTemplate/spec/volumes/-
+        value: &id004
+          name: nixl-sim-patched
+          configMap:
+            name: nixl-sim-patched
+      - op: replace
+        path: /spec/roles/2/spec/leaderWorkerTemplate/workerTemplate/spec/containers/0
+        value:
+          name: modelserver
+          image: docker.io/vllm/vllm-openai-cpu:v0.31.0
+          command:
+            - sh
+            - -c
+          args:
+            - 'vllm serve /model --tokenizer=Qwen/Qwen3-32B --load-format=dummy --max-model-len=8192
+              --max-num-batched-tokens=8192 --host=0.0.0.0 --port=8000 --served-model-name
+              Qwen/Qwen3-VL-32B-Instruct Qwen/Qwen3-32B --gpu-memory-utilization=0.5 --enforce-eager
+              --enable-scale-out --shutdown-timeout=45 --disable-access-log-for-endpoints=/health,/metrics,/v1/models
+              --kv-transfer-config ''{"kv_connector": "SimulatedNixlConnector", "kv_role":
+              "kv_consumer", "kv_connector_extra_config": {"bandwidth_gbps": 100, "handshake_ms":
+              2}}'''
+          env:
+            - name: MODEL_NAME
+              value: Qwen/Qwen3-VL-32B-Instruct
+            - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: PYTHONPATH
+              value: /plugins
+            - name: VLLM_CPU_KVCACHE_SPACE
+              value: '15'
+            - name: VLLM_CPU_OMP_THREADS_BIND
+              value: 0-3
+            - name: HF_HOME
+              value: /tmp/huggingface
+          ports:
+            - name: modelserver
+              containerPort: 8000
+              protocol: TCP
+            - name: nixl
+              containerPort: 5600
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /v1/models
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 120
+          readinessProbe:
+            httpGet:
+              path: /v1/models
+              port: 8000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: '4'
+              memory: 20Gi
+            limits:
+              cpu: '4'
+              memory: 20Gi
+          volumeMounts:
+            - name: plugins
+              mountPath: /plugins
+            - name: vllm-sim-model-config
+              mountPath: /model
+              readOnly: true
+            - name: nixl-sim-patched
+              mountPath: /plugins/vllm_simulated/nixl_sim.py
+              subPath: nixl_sim.py
+              readOnly: true
+            - name: shm
+              mountPath: /dev/shm
+            - name: torch-compile-cache
+              mountPath: /.cache
+            - name: config-cache
+              mountPath: /.config
+            - name: triton-cache
+              mountPath: /.triton
+      - op: add
+        path: /spec/roles/2/spec/leaderWorkerTemplate/workerTemplate/spec/initContainers
+        value:
+          - *id001
+      - op: add
+        path: /spec/roles/2/spec/leaderWorkerTemplate/workerTemplate/spec/volumes/-
+        value: *id002
+      - op: add
+        path: /spec/roles/2/spec/leaderWorkerTemplate/workerTemplate/spec/volumes/-
+        value: *id003
+      - op: add
+        path: /spec/roles/2/spec/leaderWorkerTemplate/workerTemplate/spec/volumes/-
+        value: *id004
