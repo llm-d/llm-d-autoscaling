@@ -1,0 +1,126 @@
+{
+    "apiVersion": "keda.sh/v1alpha1",
+    "kind": "ScaledObject",
+    "metadata": {
+        "annotations": {
+            "autoscaling.keda.sh/paused-replicas": "6",
+            "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"keda.sh/v1alpha1\",\"kind\":\"ScaledObject\",\"metadata\":{\"annotations\":{\"llm-d.ai/managed\":\"true\",\"llm-d.ai/model-id\":\"Qwen/Qwen3-8B\"},\"name\":\"npd-fcoff\",\"namespace\":\"step5-npd-fcoff-20261119\"},\"spec\":{\"advanced\":{\"horizontalPodAutoscalerConfig\":{\"behavior\":{\"scaleDown\":{\"policies\":[{\"periodSeconds\":300,\"type\":\"Pods\",\"value\":1}],\"stabilizationWindowSeconds\":300},\"scaleUp\":{\"policies\":[{\"periodSeconds\":180,\"type\":\"Pods\",\"value\":1}],\"stabilizationWindowSeconds\":0}}}},\"maxReplicaCount\":6,\"minReplicaCount\":1,\"scaleTargetRef\":{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"name\":\"qwen-qwe-5e3849cf-qwen3-8b-decode\"},\"triggers\":[{\"authenticationRef\":{\"name\":\"keda-prometheus-auth\"},\"metadata\":{\"activationThreshold\":\"0\",\"authModes\":\"bearer\",\"query\":\"(\\n  (sum(rate(llm_d_epp_request_total{namespace=\\\"step5-npd-fcoff-20261119\\\"}[1m])) or vector(0))\\n  + (sum(rate(llm_d_epp_request_error_total{namespace=\\\"step5-npd-fcoff-20261119\\\",\\n                                           error_code=\\\"ServiceUnavailable\\\"}[1m])) or vector(0))\\n)\\n*\\n(\\n  ((sum(rate(vllm:prefix_cache_queries_total{namespace=\\\"step5-npd-fcoff-20261119\\\"}[1m]))\\n    / clamp_min(sum(rate(vllm:request_success_total{namespace=\\\"step5-npd-fcoff-20261119\\\"}[1m])), 0.001)\\n   ) or vector(8192))\\n  + 3.3 *\\n  ((sum(rate(vllm:generation_tokens_total{namespace=\\\"step5-npd-fcoff-20261119\\\"}[1m]))\\n    / clamp_min(sum(rate(vllm:request_success_total{namespace=\\\"step5-npd-fcoff-20261119\\\"}[1m])), 0.001)\\n   ) or vector(128))\\n)\\n\",\"serverAddress\":\"https://thanos-querier.openshift-monitoring.svc.cluster.local:9091\",\"threshold\":\"14619\"},\"metricType\":\"AverageValue\",\"name\":\"epp-offered-work-rate\",\"type\":\"prometheus\"}]}}\n",
+            "llm-d.ai/managed": "true",
+            "llm-d.ai/model-id": "Qwen/Qwen3-8B"
+        },
+        "creationTimestamp": "2026-11-19T16:53:40Z",
+        "finalizers": [
+            "finalizer.keda.sh"
+        ],
+        "generation": 3,
+        "labels": {
+            "scaledobject.keda.sh/name": "npd-fcoff"
+        },
+        "name": "npd-fcoff",
+        "namespace": "step5-npd-fcoff-20261119",
+        "resourceVersion": "3174163315",
+        "uid": "9e0a11c1-72ed-46ac-aaa2-d9ffd82a9052"
+    },
+    "spec": {
+        "advanced": {
+            "horizontalPodAutoscalerConfig": {
+                "behavior": {
+                    "scaleDown": {
+                        "policies": [
+                            {
+                                "periodSeconds": 300,
+                                "type": "Pods",
+                                "value": 1
+                            }
+                        ],
+                        "stabilizationWindowSeconds": 300
+                    },
+                    "scaleUp": {
+                        "policies": [
+                            {
+                                "periodSeconds": 180,
+                                "type": "Pods",
+                                "value": 1
+                            }
+                        ],
+                        "stabilizationWindowSeconds": 0
+                    }
+                }
+            },
+            "scalingModifiers": {}
+        },
+        "maxReplicaCount": 6,
+        "minReplicaCount": 1,
+        "scaleTargetRef": {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "name": "qwen-qwe-5e3849cf-qwen3-8b-decode"
+        },
+        "triggers": [
+            {
+                "authenticationRef": {
+                    "name": "keda-prometheus-auth"
+                },
+                "metadata": {
+                    "activationThreshold": "0",
+                    "authModes": "bearer",
+                    "query": "(\n  (sum(rate(llm_d_epp_request_total{namespace=\"step5-npd-fcoff-20261119\"}[1m])) or vector(0))\n  + (sum(rate(llm_d_epp_request_error_total{namespace=\"step5-npd-fcoff-20261119\",\n                                           error_code=\"ServiceUnavailable\"}[1m])) or vector(0))\n)\n*\n(\n  ((sum(rate(vllm:prefix_cache_queries_total{namespace=\"step5-npd-fcoff-20261119\"}[1m]))\n    / clamp_min(sum(rate(vllm:request_success_total{namespace=\"step5-npd-fcoff-20261119\"}[1m])), 0.001)\n   ) or vector(8192))\n  + 3.3 *\n  ((sum(rate(vllm:generation_tokens_total{namespace=\"step5-npd-fcoff-20261119\"}[1m]))\n    / clamp_min(sum(rate(vllm:request_success_total{namespace=\"step5-npd-fcoff-20261119\"}[1m])), 0.001)\n   ) or vector(128))\n)\n",
+                    "serverAddress": "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091",
+                    "threshold": "11086"
+                },
+                "metricType": "AverageValue",
+                "name": "epp-offered-work-rate",
+                "type": "prometheus"
+            }
+        ]
+    },
+    "status": {
+        "authenticationsTypes": "keda-prometheus-auth",
+        "conditions": [
+            {
+                "message": "ScaledObject is paused",
+                "reason": "ScaledObjectReady",
+                "status": "True",
+                "type": "Ready"
+            },
+            {
+                "message": "Scaling is not performed because triggers are not active",
+                "reason": "ScalerNotActive",
+                "status": "False",
+                "type": "Active"
+            },
+            {
+                "message": "No fallbacks are active on this scaled object",
+                "reason": "NoFallbackFound",
+                "status": "False",
+                "type": "Fallback"
+            },
+            {
+                "message": "ScaledObject is paused",
+                "reason": "ScaledObjectPaused",
+                "status": "True",
+                "type": "Paused"
+            }
+        ],
+        "externalMetricNames": [
+            "s0-prometheus"
+        ],
+        "hpaName": "keda-hpa-npd-fcoff",
+        "lastActiveTime": "2026-11-20T18:32:53Z",
+        "originalReplicaCount": 1,
+        "pausedReplicaCount": 6,
+        "scaleTargetGVKR": {
+            "group": "apps",
+            "kind": "Deployment",
+            "resource": "deployments",
+            "version": "v1"
+        },
+        "scaleTargetKind": "apps/v1.Deployment",
+        "triggersActivity": {
+            "s0-prometheus": {
+                "isActive": false
+            }
+        },
+        "triggersTypes": "prometheus"
+    }
+}

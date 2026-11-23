@@ -1,0 +1,32 @@
+{
+ "scale-down": {
+  "what": "scale-down, blend: 1178 s at 0.9 x C = 8.591 req/s, then 1020 s steps at 0.6, 0.3, 0.1 x C; needs 6, 4, 2, 1 replicas",
+  "seed": 110,
+  "duration_s": 4238,
+  "requests": 20036,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 1178,
+    "rate": 8.5914,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 1020,
+    "rate": 5.7276,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 1020,
+    "rate": 2.8638,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 1020,
+    "rate": 0.9546,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ }
+}

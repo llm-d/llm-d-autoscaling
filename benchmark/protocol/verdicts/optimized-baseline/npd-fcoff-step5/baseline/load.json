@@ -1,0 +1,27 @@
+{
+ "mixshift": {
+  "what": "mix-shift at 3.777 req/s, one phase per mix: 8192:256 needs 3, 2048:2048 needs 3, 256:4096 needs 3 replicas",
+  "seed": 103,
+  "duration_s": 3840,
+  "requests": 14519,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 1280,
+    "rate": 3.777,
+    "mix": "8192:256"
+   },
+   {
+    "seconds": 1280,
+    "rate": 3.777,
+    "mix": "2048:2048"
+   },
+   {
+    "seconds": 1280,
+    "rate": 3.777,
+    "mix": "256:4096"
+   }
+  ]
+ }
+}

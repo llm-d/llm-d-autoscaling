@@ -1,0 +1,48 @@
+# step 5 run bursty, written by gen_load.py; do not edit by hand.
+# bursty, blend: 720 s at 0.2 x C = 1.909 req/s, then 3 x (158 s at 0.7 x C = 6.682 req/s, 720 s quiet)
+# Run with --workload-file-path <this file> --dataset /requests/datasets/bursty.csv
+load:
+  type: trace_replay
+  trace:
+    file: REPLACE_ENV_LLMDBENCH_RUN_DATASET_DIR/REPLACE_ENV_LLMDBENCH_RUN_DATASET_FILE
+    format: AzurePublicDataset
+  stages:
+    - rate: 1
+      duration: 3354
+  request_timeout: 311
+  stage_teardown_grace_seconds: 311
+  num_workers: 4
+  worker_max_concurrency: 780
+api:
+  type: completion
+  streaming: true
+server:
+  type: vllm
+  model_name: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+  base_url: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+  ignore_eos: true
+tokenizer:
+  pretrained_model_name_or_path: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_TOKENIZER
+data:
+  type: random
+  trace:
+    file: REPLACE_ENV_LLMDBENCH_RUN_DATASET_DIR/REPLACE_ENV_LLMDBENCH_RUN_DATASET_FILE
+    format: AzurePublicDataset
+report:
+  request_lifecycle:
+    summary: false
+    per_stage: true
+    per_request: true
+    per_request_fields:
+      request: false
+      response: false
+      info: true
+      response_chunks: false
+      computed_metrics: false
+  goodput:
+    constraints:
+      ttft: 2
+      tpot: 0.05
+storage:
+  local_storage:
+    path: /workspace

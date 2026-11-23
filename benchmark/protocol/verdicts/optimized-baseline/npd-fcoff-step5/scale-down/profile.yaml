@@ -1,0 +1,48 @@
+# step 5 run scale-down, written by gen_load.py; do not edit by hand.
+# scale-down, blend: 1178 s at 0.9 x C = 8.591 req/s, then 1020 s steps at 0.6, 0.3, 0.1 x C; needs 6, 4, 2, 1 replicas
+# Run with --workload-file-path <this file> --dataset /requests/datasets/scale-down.csv
+load:
+  type: trace_replay
+  trace:
+    file: REPLACE_ENV_LLMDBENCH_RUN_DATASET_DIR/REPLACE_ENV_LLMDBENCH_RUN_DATASET_FILE
+    format: AzurePublicDataset
+  stages:
+    - rate: 1
+      duration: 4238
+  request_timeout: 311
+  stage_teardown_grace_seconds: 311
+  num_workers: 4
+  worker_max_concurrency: 1002
+api:
+  type: completion
+  streaming: true
+server:
+  type: vllm
+  model_name: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+  base_url: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+  ignore_eos: true
+tokenizer:
+  pretrained_model_name_or_path: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_TOKENIZER
+data:
+  type: random
+  trace:
+    file: REPLACE_ENV_LLMDBENCH_RUN_DATASET_DIR/REPLACE_ENV_LLMDBENCH_RUN_DATASET_FILE
+    format: AzurePublicDataset
+report:
+  request_lifecycle:
+    summary: false
+    per_stage: true
+    per_request: true
+    per_request_fields:
+      request: false
+      response: false
+      info: true
+      response_chunks: false
+      computed_metrics: false
+  goodput:
+    constraints:
+      ttft: 2
+      tpot: 0.05
+storage:
+  local_storage:
+    path: /workspace

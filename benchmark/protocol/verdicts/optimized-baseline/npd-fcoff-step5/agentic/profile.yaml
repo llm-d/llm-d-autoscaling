@@ -1,0 +1,56 @@
+# step 5 run agentic, written by gen_load.py; do not edit by hand.
+# agentic: 0.233 then 0.698 req/s = 0.1 and 0.3 x C x mean ISL of the blend (33398 prompt tok/s) / estimated mean prompt 14364
+# Run with --workload-file-path <this file> (no --dataset: content is generated).
+load:
+  type: poisson
+  interval: 0
+  stages:
+    - rate: 0.233
+      duration: 1280
+    - rate: 0.698
+      duration: 2560
+  request_timeout: 311
+  stage_teardown_grace_seconds: 311
+  num_workers: 4
+  worker_max_concurrency: 512
+api:
+  type: completion
+  streaming: true
+server:
+  type: vllm
+  model_name: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+  base_url: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+  ignore_eos: true
+tokenizer:
+  pretrained_model_name_or_path: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_TOKENIZER
+data:
+  type: conversation_replay
+  conversation_replay:
+    seed: 106
+    # enough slots that a slot's serial turns never cap the offered rate
+    num_conversations: 64
+    max_model_len: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MAX_MODEL_LEN
+    shared_system_prompt_len: 4096
+    dynamic_system_prompt_len: {type: lognormal, min: 256, max: 8192, mean: 2048, std_dev: 1500}
+    turns_per_conversation: {type: lognormal, min: 2, max: 30, mean: 10, std_dev: 6}
+    input_tokens_per_turn: {type: lognormal, min: 64, max: 6000, mean: 1200, std_dev: 1000}
+    output_tokens_per_turn: {type: lognormal, min: 16, max: 4096, mean: 360, std_dev: 500}
+    tool_call_latency_sec: {type: lognormal, min: 0, max: 30, mean: 2, std_dev: 3}
+report:
+  request_lifecycle:
+    summary: false
+    per_stage: true
+    per_request: true
+    per_request_fields:
+      request: false
+      response: false
+      info: true
+      response_chunks: false
+      computed_metrics: false
+  goodput:
+    constraints:
+      ttft: 2
+      tpot: 0.05
+storage:
+  local_storage:
+    path: /workspace

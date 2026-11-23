@@ -1,0 +1,77 @@
+[
+ {
+  "t_s": 76,
+  "from": 1.0,
+  "to": 2.0,
+  "phase": 1,
+  "ready_at_s": 196,
+  "ready_after_phase_end": false
+ },
+ {
+  "t_s": 256,
+  "from": 2.0,
+  "to": 3.0,
+  "phase": 1,
+  "ready_at_s": 436,
+  "ready_after_phase_end": false
+ },
+ {
+  "t_s": 436,
+  "from": 3.0,
+  "to": 4.0,
+  "phase": 1,
+  "ready_at_s": 556,
+  "ready_after_phase_end": false
+ },
+ {
+  "t_s": 616,
+  "from": 4.0,
+  "to": 5.0,
+  "phase": 1,
+  "ready_at_s": 736,
+  "ready_after_phase_end": false
+ },
+ {
+  "t_s": 796,
+  "from": 5.0,
+  "to": 6.0,
+  "phase": 1,
+  "ready_at_s": 1036,
+  "ready_after_phase_end": false
+ },
+ {
+  "t_s": 2536,
+  "from": 6.0,
+  "to": 5.0,
+  "phase": 3,
+  "failed_ending_within_30s": 0
+ },
+ {
+  "t_s": 2836,
+  "from": 5.0,
+  "to": 4.0,
+  "phase": 3,
+  "failed_ending_within_30s": 0
+ },
+ {
+  "t_s": 3556,
+  "from": 4.0,
+  "to": 3.0,
+  "phase": 4,
+  "failed_ending_within_30s": 0
+ },
+ {
+  "t_s": 3856,
+  "from": 3.0,
+  "to": 2.0,
+  "phase": 4,
+  "failed_ending_within_30s": 0
+ },
+ {
+  "t_s": 4516,
+  "from": 2.0,
+  "to": 1.0,
+  "phase": null,
+  "failed_ending_within_30s": 0
+ }
+]

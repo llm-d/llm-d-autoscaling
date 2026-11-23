@@ -1,0 +1,77 @@
+[
+ {
+  "t_s": 60,
+  "from": 1.0,
+  "to": 2.0,
+  "phase": 1,
+  "ready_at_s": 180,
+  "ready_after_phase_end": false
+ },
+ {
+  "t_s": 300,
+  "from": 2.0,
+  "to": 3.0,
+  "phase": 1,
+  "ready_at_s": 480,
+  "ready_after_phase_end": false
+ },
+ {
+  "t_s": 750,
+  "from": 3.0,
+  "to": 4.0,
+  "phase": 2,
+  "ready_at_s": 990,
+  "ready_after_phase_end": true
+ },
+ {
+  "t_s": 1230,
+  "from": 4.0,
+  "to": 3.0,
+  "phase": 3,
+  "failed_ending_within_30s": 4
+ },
+ {
+  "t_s": 1650,
+  "from": 3.0,
+  "to": 4.0,
+  "phase": 4,
+  "ready_at_s": 1770,
+  "ready_after_phase_end": true
+ },
+ {
+  "t_s": 2130,
+  "from": 4.0,
+  "to": 3.0,
+  "phase": 5,
+  "failed_ending_within_30s": 0
+ },
+ {
+  "t_s": 2550,
+  "from": 3.0,
+  "to": 4.0,
+  "phase": 6,
+  "ready_at_s": 2730,
+  "ready_after_phase_end": true
+ },
+ {
+  "t_s": 3030,
+  "from": 4.0,
+  "to": 3.0,
+  "phase": 7,
+  "failed_ending_within_30s": 0
+ },
+ {
+  "t_s": 3450,
+  "from": 3.0,
+  "to": 2.0,
+  "phase": null,
+  "failed_ending_within_30s": 0
+ },
+ {
+  "t_s": 3750,
+  "from": 2.0,
+  "to": 1.0,
+  "phase": null,
+  "failed_ending_within_30s": 0
+ }
+]
