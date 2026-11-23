@@ -174,9 +174,10 @@ scenario:
               type: prometheus
               metricType: AverageValue
               # KV held by live requests on the decode pods (idle prefix-cache blocks count as
-              # free), averaged over 2m and summed; max by (pod) drops a duplicate scrape.
+              # free), averaged over 2m and summed; max by (pod, engine) drops a duplicate
+              # scrape of the same engine and keeps every data-parallel engine of a pod.
               query: |
-                sum(max by (pod) (avg_over_time(vllm:kv_cache_usage_perc{namespace="${namespace.name}",pod=~"pd-disagg-coord-.+-decode-.+"}[2m])))
+                sum(max by (pod, engine) (avg_over_time(vllm:kv_cache_usage_perc{namespace="${namespace.name}",pod=~"pd-disagg-coord-.+-decode-.+"}[2m])))
               threshold: "0.45"   # KV usage at 70 % of the decode knee load across the run set's mixes (blis; re-measure on the plant)
               activationThreshold: "0"
               ignoreNullValues: false
@@ -186,7 +187,7 @@ scenario:
               # Backlog alarm: requests vLLM queues on the decode pods once KV is full. Near 0 in
               # steady state, so it wins only when decode saturates.
               query: |
-                sum(max by (pod) (vllm:num_requests_waiting{namespace="${namespace.name}",pod=~"pd-disagg-coord-.+-decode-.+"}))
+                sum(max by (pod, engine) (vllm:num_requests_waiting{namespace="${namespace.name}",pod=~"pd-disagg-coord-.+-decode-.+"}))
               threshold: "5"
               activationThreshold: "0"
               ignoreNullValues: false

@@ -161,7 +161,7 @@ tokens/s against a 6,648 tokens/s capacity at the SLO (117 %).
 ### Trigger `decode-kv-usage-2m`
 
 ```promql
-sum(max by (pod) (avg_over_time(vllm:kv_cache_usage_perc{namespace="${NAMESPACE}",pod=~"pd-disagg-coord-.+-decode-.+"}[2m])))
+sum(max by (pod, engine) (avg_over_time(vllm:kv_cache_usage_perc{namespace="${NAMESPACE}",pod=~"pd-disagg-coord-.+-decode-.+"}[2m])))
 ```
 
 `metricType: AverageValue`, `threshold: "0.45"`, `activationThreshold: "0"`,
@@ -176,16 +176,24 @@ turns into 76 to 87 % of knee load.
   `vllm/v1/metrics/loggers.py:577`). A block returns to the free queue when its
   reference count reaches 0, including prefix-cached blocks, which become
   eviction candidates (V `block_pool.py` `free_blocks`,
-  `get_num_free_blocks:871-878`; `free_blocks:777`). So the gauge counts the KV that live requests
+  `get_num_free_blocks:871-878`; `free_blocks:777`). So the gauge counts the KV
+  that live requests
   hold; an idle prefix cache reads as free. On a decode pod that is the context
   of the requests it is decoding plus KV being received from prefill.
 - **Selecting decode pods:** vLLM series carry no role label (trap T14).
   DisaggregatedSet pods are named `<set>-<slice>-<revision>-<role>-<group>` (W
   `pkg/utils/disaggregatedset/utils.go:96-98`, LWS pod suffix `-<groupIndex>`),
-  so `pod=~"pd-disagg-coord-.+-decode-.+"` selects decode. `max by (pod)`
-  removes a second scrape of the same pod (T14). `avg_over_time([2m])` averages
-  four 30 s samples per pod; averaging and summing commute while the pod set is
-  fixed.
+  so `pod=~"pd-disagg-coord-.+-decode-.+"` selects decode. `max by (pod,
+  engine)` removes a second scrape of the same engine (two jobs or endpoints on
+  one pod give series that differ only in `job`, `endpoint` or `instance`, T14)
+  and keeps each data-parallel engine of a pod, which has its own `engine`
+  label; the series carry `container, endpoint, engine, instance, job,
+  model_name, namespace, pod`. `avg_over_time([2m])` averages four 30 s samples
+  per engine; averaging and summing commute while the pod set is fixed. With
+  data parallelism (DP > 1) each engine reports a fraction of its own KV pool,
+  so
+  the sum counts a DP-2 pod twice and the threshold is per engine, not per pod;
+  the guide runs DP = 1.
 - **Kind:** capped saturation (a ratio with a ceiling of 1 per pod). **Role it
   can play:** guard, or a driver if the cap is the binding resource. **Role it
   plays here:** driver. No offered decode work rate is available: output length
@@ -203,7 +211,7 @@ turns into 76 to 87 % of knee load.
 | P6 defined at zero | pass | `minReplicaCount: 1`. At zero decode pods the series are absent, the query is empty and the scaler errors: decode cannot scale from zero on this trigger | source |
 | P7 fails visibly | pass | No `or vector(0)`, `ignoreNullValues: "false"`, fallback holds. Without the decode PodMonitor the query is empty from the start (visible, but the pool never scales); with it, a scrape outage errors and holds | config |
 | P8 lag and noise | fail on long outputs | **Lag:** `30 + 60 + 15 = 105 s`, plus the time the load takes to appear in KV: a request's context grows as it decodes, so a shift to 4,096-token outputs reaches steady occupancy after about one decode duration (2 to 3 minutes). That exceeds the 120 s cold start. **Noise:** instant, one pod: CV 21 to 38 % on 8192:256 (each request is about 2.8 % of the pool); with `[2m]`, 8 to 10 % (`sim`) | config / sim |
-| P9 measures what it claims | pass | Reads the KV decode's requests hold, its binding resource here. **Conditions:** (1) the model-server PodMonitors are applied (llm-d/llm-d#3114, port `modelserver`; the scenario's monitoring step does it); (2) pod names follow the DisaggregatedSet pattern above; (3) vLLM v0.34 sizes the KV pool after warm-up by default (`vllm-extensible-kv-cache`), which changes what 1.0 means; the guide runs v0.31.0. No listed trap applies beyond T14, handled by `max by (pod)` and the name selector | source |
+| P9 measures what it claims | pass | Reads the KV decode's requests hold, its binding resource here. **Conditions:** (1) the model-server PodMonitors are applied (llm-d/llm-d#3114, port `modelserver`; the scenario's monitoring step does it); (2) pod names follow the DisaggregatedSet pattern above; (3) vLLM v0.34 sizes the KV pool after warm-up by default (`vllm-extensible-kv-cache`), which changes what 1.0 means; the guide runs v0.31.0. No listed trap applies beyond T14, handled by `max by (pod, engine)` and the name selector | source |
 
 **Failure case (P8):** decode right-sized at 1 pod for 8192:256 at 1.6 req/s;
 traffic switches to 256:4096 at the same rate. KV fills over about two minutes
@@ -214,7 +222,7 @@ then 100 % at 4 pods.
 ### Trigger `decode-waiting-alarm`
 
 ```promql
-sum(max by (pod) (vllm:num_requests_waiting{namespace="${NAMESPACE}",pod=~"pd-disagg-coord-.+-decode-.+"}))
+sum(max by (pod, engine) (vllm:num_requests_waiting{namespace="${NAMESPACE}",pod=~"pd-disagg-coord-.+-decode-.+"}))
 ```
 
 `metricType: AverageValue`, `threshold: "5"`, `activationThreshold: "0"`,
