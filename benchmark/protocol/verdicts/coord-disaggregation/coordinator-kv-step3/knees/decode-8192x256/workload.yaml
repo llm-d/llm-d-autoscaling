@@ -1,0 +1,19 @@
+# step 3 run knee-8192x256, written by gen_load.py; do not edit by hand.
+# knee, 8192x256 (8192:256), stages at (0.6, 0.8, 1.0, 1.25) x estimate 3.0 req/s
+# Absolute-rate mode (aggregate_rate: 0): each window's trace_rate is that client's req/s.
+version: "2"
+aggregate_rate: 0
+seed: 1
+clients:
+  - id: "8192x256"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 8192 } }
+    output_distribution: { type: constant, params: { value: 256 } }
+    timeout: 60000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 300000000, trace_rate: 1.8 }
+        - { start_us: 300000000, end_us: 600000000, trace_rate: 2.4 }
+        - { start_us: 600000000, end_us: 900000000, trace_rate: 3 }
+        - { start_us: 900000000, end_us: 1200000000, trace_rate: 3.75 }

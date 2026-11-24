@@ -1,0 +1,11 @@
+stair: 5355 requests in the records; schedule aligned by blis-run.json (first request at offset 0.460 s)
+| stage | s | set req/s | offered req/s | λ_in tok/s | λ_out tok/s | sent | errors | A | TTFT p50/p90/p99 s | TPOT p50/p90/p99 ms | Ready | need | requested replica-s | Ready replica-s |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 450 | 0.699 | 0.700 | 2,449 | 1,493 | 315 | 0 | 100.0 % | 0.21/0.59/0.92 | 29.8/33.9/39.8 | 1–1 | 1 | 450 | 450 |
+| 2 | 450 | 1.398 | 1.400 | 4,898 | 2,987 | 630 | 0 | 95.1 % | 0.23/0.74/9.36 | 33.2/44.0/47.4 | 1–1 | 1 | 450 | 450 |
+| 3 | 450 | 2.330 | 2.333 | 8,164 | 4,978 | 1,050 | 0 | 100.0 % | 0.22/0.68/1.41 | 32.2/34.9/36.5 | 1–1 | 1 | 450 | 450 |
+| 4 | 450 | 3.262 | 3.267 | 11,429 | 6,969 | 1,470 | 0 | 99.9 % | 0.23/0.73/1.36 | 36.9/39.3/40.6 | 1–2 | 1 | 810 | 690 |
+| 5 | 450 | 4.194 | 4.200 | 14,694 | 8,960 | 1,890 | 0 | 100.0 % | 0.23/0.67/1.05 | 38.8/40.4/41.9 | 2–2 | 2 | 900 | 900 |
+
+run: 5,355 sent, A 99.4 %, errors 0, requested 3,060 replica-s = 6,120 GPU-s at 2 GPU per replica
+placement: 0 request(s) before the first stage, 0 after the last; stages more than 3 sd off their set rate: none: ok

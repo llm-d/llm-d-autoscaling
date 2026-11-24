@@ -1,0 +1,78 @@
+{
+ "run": "stair",
+ "epoch0": 1767225600.0,
+ "first_arrival_s": 0.460468,
+ "horizon_s": 2561.0,
+ "lead_in_s": 0.0,
+ "ready_at_load_start": {
+  "prefill": 1,
+  "decode": 1
+ },
+ "arm": {
+  "pin": null,
+  "static": null,
+  "start": {
+   "prefill": 1,
+   "decode": 1
+  }
+ },
+ "lab": "<lab>",
+ "lab_commit": "25f2dfb6259853e784ee9e85911c8e4fa63770c6",
+ "scenario": "coord-pd-qwen3-vl-32b-h100-bf16-tp2.yaml",
+ "seed": null,
+ "memory": {
+  "available_at_start_gib": 11.83,
+  "reserve_gib": 6.4,
+  "max_rss_gib": 5.43,
+  "peak_rss_gib": 3.28,
+  "killed": null
+ },
+ "fates": {
+  "generated": 5355,
+  "completed": 5355,
+  "timed_out": 0,
+  "in_flight_at_horizon": 0,
+  "queued_at_horizon": 0,
+  "not_started": 0,
+  "length_capped": 0
+ },
+ "hpa_log_sha256": {
+  "signals-hpa-decode.csv": "ddb8cb2a5cca7595fb93b5c93a85a5ef1d369132917e45e03161060aac91fbd7",
+  "signals-hpa-prefill.csv": "4c4071f0846c8482372ec4a43560aa4de22ec3532522e89835652b39d350481d"
+ },
+ "schedule": {
+  "what": "SO-active staircase, blend, stages at (0.15, 0.3, 0.5, 0.7, 0.9) x C (C = 4.660 req/s)",
+  "seed": 102,
+  "duration_s": 2250,
+  "expected_requests": 5347,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 450,
+    "rate": 0.699,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 450,
+    "rate": 1.398,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 450,
+    "rate": 2.33,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 450,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 450,
+    "rate": 4.194,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ }
+}

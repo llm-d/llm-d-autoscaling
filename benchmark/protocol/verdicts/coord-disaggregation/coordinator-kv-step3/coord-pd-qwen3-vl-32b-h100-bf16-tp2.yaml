@@ -1,0 +1,46 @@
+# BLIS plant for the coordinator-kv verdict (step 1 supporting runs): the
+# coord-disaggregation guide's model and engine (Qwen/Qwen3-VL-32B-Instruct, bf16,
+# TP2 per pod, max-model-len 32000) as a prefill pool and a decode pool of up to 4
+# pods each, with the guide's prefix-based-pd-decider (router/pd-prefix-8192.yaml).
+# The model needs a catalog entry the pinned blis-substrate release lacks
+# (inference-sim/blis-substrate#415); run with BLIS_CATALOG naming a catalog that has it.
+kind: Scenario
+name: coord-pd-qwen3-vl-32b-h100-bf16-tp2
+engine_version: "0.32.0"
+
+model: qwen3-vl-32b-instruct
+coefficients: [cost-model-primitives, cost-model-collectives, cost-model-host-overheads, cost-model-attention, cost-model-recurrent, cost-model-memory, cost-model-fabric]
+
+cluster:
+  hardware: h100
+  fabric: ib-400g
+  nodes: 2
+  gpus_per_node: 8
+---
+kind: Deployment
+name: coord-pd-qwen3-vl-32b-h100-bf16-tp2
+pools:
+  - role: prefill
+    nodes: 1
+    parallel:
+      tp: 2
+      pp: 1
+      dp: 1
+      enable_expert_parallel: false
+    engine:
+      max_model_len: 32000
+      block_size: 16
+  - role: decode
+    nodes: 1
+    parallel:
+      tp: 2
+      pp: 1
+      dp: 1
+      enable_expert_parallel: false
+    engine:
+      max_model_len: 32000
+      block_size: 16
+pd_transfer:
+  connector: NixlConnector
+router:
+  endpoint_picker_config: router/pd-prefix-8192.yaml

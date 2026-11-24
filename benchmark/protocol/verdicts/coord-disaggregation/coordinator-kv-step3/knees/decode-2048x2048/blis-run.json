@@ -1,0 +1,73 @@
+{
+ "run": "knee-2048x2048",
+ "epoch0": 1767225600.0,
+ "first_arrival_s": 0.53578,
+ "horizon_s": 1440.0,
+ "lead_in_s": 0.0,
+ "ready_at_load_start": {
+  "prefill": 4,
+  "decode": 1
+ },
+ "arm": {
+  "pin": "prefill=4,decode=1",
+  "static": null,
+  "start": {
+   "prefill": 4,
+   "decode": 1
+  }
+ },
+ "lab": "<lab>",
+ "lab_commit": "25f2dfb6259853e784ee9e85911c8e4fa63770c6",
+ "scenario": "coord-pd-qwen3-vl-32b-h100-bf16-tp2.yaml",
+ "seed": null,
+ "memory": {
+  "available_at_start_gib": 11.54,
+  "reserve_gib": 6.4,
+  "max_rss_gib": 5.14,
+  "peak_rss_gib": 0.89,
+  "killed": null
+ },
+ "fates": {
+  "generated": 1095,
+  "completed": 1095,
+  "timed_out": 0,
+  "in_flight_at_horizon": 0,
+  "queued_at_horizon": 0,
+  "not_started": 0,
+  "length_capped": 0
+ },
+ "hpa_log_sha256": {
+  "signals-hpa-decode.csv": "de2eefa5cf99704da1a98d3ea8f516870afbc90e36fcd0a6d07df96c4508826d",
+  "signals-hpa-prefill.csv": "d0a0a8ff77b3ff3a9e7d6afa396eec61f8956149d095900294855200ae149451"
+ },
+ "schedule": {
+  "what": "knee, 2048x2048 (2048:2048), stages at (0.6, 0.8, 1.0, 1.25) x estimate 1.0 req/s",
+  "seed": 1,
+  "duration_s": 1200,
+  "expected_requests": 1095,
+  "timeout_s": 157,
+  "drain_s": 240,
+  "phases": [
+   {
+    "seconds": 300,
+    "rate": 0.6,
+    "mix": "2048:2048"
+   },
+   {
+    "seconds": 300,
+    "rate": 0.8,
+    "mix": "2048:2048"
+   },
+   {
+    "seconds": 300,
+    "rate": 1.0,
+    "mix": "2048:2048"
+   },
+   {
+    "seconds": 300,
+    "rate": 1.25,
+    "mix": "2048:2048"
+   }
+  ]
+ }
+}

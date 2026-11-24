@@ -1,0 +1,25 @@
+[
+  {
+    "role": "prefill",
+    "name": "coord-pd-prefill",
+    "target": "pd-disagg-coord-prefill",
+    "triggers": [
+      "prefill-uncached-prompt-tokens"
+    ],
+    "composite": false,
+    "min_replicas": 1,
+    "max_replicas": 4
+  },
+  {
+    "role": "decode",
+    "name": "coord-pd-decode",
+    "target": "pd-disagg-coord-decode",
+    "triggers": [
+      "decode-kv-usage-2m",
+      "decode-waiting-alarm"
+    ],
+    "composite": false,
+    "min_replicas": 1,
+    "max_replicas": 4
+  }
+]

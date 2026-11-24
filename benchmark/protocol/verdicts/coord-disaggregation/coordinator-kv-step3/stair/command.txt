@@ -1,0 +1,2 @@
+# run in the run's sim/ directory; <lab> is the blis-signal-lab checkout
+<lab>/blis run --scenario coord-pd-qwen3-vl-32b-h100-bf16-tp2.yaml --scenarios <repo>/benchmark/protocol/verdicts/coord-disaggregation/coordinator-kv-step3 --workload-spec workload.yaml --policy-config policy.json --num-instances 2 --prefill-instances 1 --decode-instances 1 --horizon 2561000000 --timeout 311 --signals-output signals --output result.json

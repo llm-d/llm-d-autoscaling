@@ -1,0 +1,64 @@
+{
+ "run": "overload-over",
+ "epoch0": 1767225600.0,
+ "first_arrival_s": 0.122376,
+ "horizon_s": 2111.0,
+ "lead_in_s": 0.0,
+ "ready_at_load_start": {
+  "prefill": 1,
+  "decode": 1
+ },
+ "arm": {
+  "pin": null,
+  "static": null,
+  "start": {
+   "prefill": 1,
+   "decode": 1
+  }
+ },
+ "lab": "<lab>",
+ "lab_commit": "25f2dfb6259853e784ee9e85911c8e4fa63770c6",
+ "scenario": "coord-pd-qwen3-vl-32b-h100-bf16-tp2.yaml",
+ "seed": null,
+ "memory": {
+  "available_at_start_gib": 12.31,
+  "reserve_gib": 6.4,
+  "max_rss_gib": 5.91,
+  "peak_rss_gib": 5.4,
+  "killed": null
+ },
+ "fates": {
+  "generated": 7551,
+  "completed": 5041,
+  "timed_out": 0,
+  "in_flight_at_horizon": 525,
+  "queued_at_horizon": 1985,
+  "not_started": 0,
+  "length_capped": 0
+ },
+ "hpa_log_sha256": {
+  "signals-hpa-decode.csv": "0d9e0defa7468df783ce63a5d61c9c043ebde963780dc70377e6608f0770b9a7",
+  "signals-hpa-prefill.csv": "86e17b4438ce6fd7ebc2b87e7e2ec01fa6d42a43700232ddf6cd4bc6449a2ad9"
+ },
+ "schedule": {
+  "what": "overload over the cap, blend: 1.398 then 1.5 x C = 6.990 req/s",
+  "seed": 105,
+  "duration_s": 1800,
+  "expected_requests": 7549,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 900,
+    "rate": 1.398,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 900,
+    "rate": 6.99,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "lab_patch": "lab-patch.diff: upstream inference-sim dfa8987 (#2237) TTFT projection for preempted P/D decode sub-requests"
+}

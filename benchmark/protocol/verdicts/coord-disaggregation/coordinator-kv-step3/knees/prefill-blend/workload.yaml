@@ -1,0 +1,43 @@
+# step 3 run knee-blend, written by gen_load.py; do not edit by hand.
+# knee, blend (8192:256,2048:2048,256:4096), stages at (0.6, 0.8, 1.0, 1.25) x estimate 4.0 req/s
+# Absolute-rate mode (aggregate_rate: 0): each window's trace_rate is that client's req/s.
+version: "2"
+aggregate_rate: 0
+seed: 1
+clients:
+  - id: "8192x256"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 8192 } }
+    output_distribution: { type: constant, params: { value: 256 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 300000000, trace_rate: 0.8 }
+        - { start_us: 300000000, end_us: 600000000, trace_rate: 1.06667 }
+        - { start_us: 600000000, end_us: 900000000, trace_rate: 1.33333 }
+        - { start_us: 900000000, end_us: 1200000000, trace_rate: 1.66667 }
+  - id: "2048x2048"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 2048 } }
+    output_distribution: { type: constant, params: { value: 2048 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 300000000, trace_rate: 0.8 }
+        - { start_us: 300000000, end_us: 600000000, trace_rate: 1.06667 }
+        - { start_us: 600000000, end_us: 900000000, trace_rate: 1.33333 }
+        - { start_us: 900000000, end_us: 1200000000, trace_rate: 1.66667 }
+  - id: "256x4096"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 256 } }
+    output_distribution: { type: constant, params: { value: 4096 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 300000000, trace_rate: 0.8 }
+        - { start_us: 300000000, end_us: 600000000, trace_rate: 1.06667 }
+        - { start_us: 600000000, end_us: 900000000, trace_rate: 1.33333 }
+        - { start_us: 900000000, end_us: 1200000000, trace_rate: 1.66667 }

@@ -1,0 +1,17 @@
+diff --git a/sim/cluster/cluster.go b/sim/cluster/cluster.go
+index 110f0ee..a5ebc27 100644
+--- a/sim/cluster/cluster.go
++++ b/sim/cluster/cluster.go
+@@ -2191,7 +2191,11 @@ func (c *ClusterSimulator) projectPDMetrics() {
+ 			// the user did receive the token). The primary branch additionally needs the
+ 			// recorded decode scheduling delay; without it, fall back to the prefill-only
+ 			// TTFT (defensive — decode data partially unavailable).
+-			if hasPrefillTTFT && hasDecodeDelay {
++			if parent.DecodeSubReq.FirstTokenTime != 0 {
++				// upstream inference-sim dfa8987 (#2237): a decode sub-request preempted after its first token
++				// re-stamps its scheduling delay on re-admission; use the engine's arrival-relative first-token time.
++				m.RequestTTFTs[pid] = float64(parent.DecodeSubReq.FirstTokenTime)
++			} else if hasPrefillTTFT && hasDecodeDelay {
+ 				firstDecodeStep := float64(parent.DecodeSubReq.ITL[0])
+ 				newTTFT := float64(decodeDelay) + firstDecodeStep
+ 				if newTTFT < 0 {

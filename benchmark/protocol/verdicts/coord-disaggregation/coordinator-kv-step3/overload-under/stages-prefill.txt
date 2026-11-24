@@ -1,0 +1,8 @@
+overload-under: 4617 requests in the records; schedule aligned by blis-run.json (first request at offset 2.186 s)
+| stage | s | set req/s | offered req/s | λ_in tok/s | λ_out tok/s | sent | errors | A | TTFT p50/p90/p99 s | TPOT p50/p90/p99 ms | Ready | need | requested replica-s | Ready replica-s |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 900 | 1.398 | 1.400 | 4,898 | 2,987 | 1,260 | 0 | 96.8 % | 0.21/0.69/7.10 | 30.0/42.1/46.2 | 1–1 | 1 | 900 | 900 |
+| 2 | 900 | 3.728 | 3.730 | 13,050 | 7,957 | 3,357 | 0 | 86.2 % | 0.24/24.61/86.45 | 39.1/47.0/50.5 | 1–2 | 1 | 1,710 | 1,590 |
+
+run: 4,617 sent, A 89.1 %, errors 0, requested 2,610 replica-s = 5,220 GPU-s at 2 GPU per replica
+placement: 0 request(s) before the first stage, 0 after the last; stages more than 3 sd off their set rate: none: ok

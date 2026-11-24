@@ -1,0 +1,22 @@
+# step 3 run agentic, written by gen_load.py; do not edit by hand.
+# agentic: 0.114 then 0.341 req/s = 0.1 and 0.3 x C x mean ISL of the blend (16304 prompt tok/s) / estimated mean prompt 14364; 10 rounds per session
+version: "2"
+aggregate_rate: 0
+seed: 106
+category: reasoning
+clients:
+  - id: "agentic"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    prefix_group: system
+    prefix_length: 4096
+    input_distribution: { type: gaussian, params: { mean: 1200, std_dev: 1000, min: 64, max: 2400 } }
+    output_distribution: { type: gaussian, params: { mean: 360, std_dev: 500, min: 16, max: 640 } }
+    timeout: 311000000
+    reasoning:
+      reason_ratio_distribution: { type: constant, params: { value: 0 } }
+      multi_turn: { max_rounds: 10, think_time_us: 2000000, context_growth: accumulate }
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 900000000, trace_rate: 0.0113505 }
+        - { start_us: 900000000, end_us: 2700000000, trace_rate: 0.0340514 }
