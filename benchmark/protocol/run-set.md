@@ -58,6 +58,18 @@ other pools pinned large enough that they cannot be the bottleneck, and C is
 the smallest of the pools' `maxReplicaCount × μ_SLO(B)`. The report names the
 pool that sets C.
 
+A pool that serves only part of the load, as prefill behind a decider that
+keeps short prompts on decode, is measured on the requests it serves. Its A
+counts those requests only, at the request rate of the whole load, so its
+μ_SLO stays in requests per second of the load; its knee is not run for a mix
+it never serves, and a phase of such mixes needs `minReplicaCount`. Counted
+over every request, the knee is overstated by the requests the pool never
+sees: in `coordinator-kv`'s step 3 the prefill pool's blend knee was 4.37 req/s
+over all requests and 3.96 req/s over the 8192-token requests it served (a
+third of the blend), within 2 % of 3 × its 8192:256 knee (1.34 req/s). With
+random prompts the requests a prefix-length decider sends to the pool are those
+at or over its threshold, which `stage_table.py --min-input-tokens` selects.
+
 The knees have two uses. If the configuration derives its threshold from
 capacity (as `npd-fcoff`'s `thresholdWork = 0.70 × ν_max`), the knee its rule
 names sets that threshold once, before run 2, and it stays fixed; a rule that
@@ -310,6 +322,7 @@ python3 -I $S/stage_table.py <results dir> --index $LOAD/knee-<mix>.json --run k
   --slo $SLO --knee X --json $RUN/stages.json [--trace $LOAD/knee-<mix>.csv]
 ```
 
+For a pool that serves part of the load (§1), add `--min-input-tokens N`.
 It prints the per-stage table and μ_SLO, and says when the crossing is
 outside the stages (stage 1 fails or the last stage passes). Then regenerate the knee with a new estimate and
 rerun. If the configuration derives its threshold from capacity, compute it
@@ -342,6 +355,10 @@ When it ends, in `verdicts/<guide>/<scenario>-step<N>/<run>/`:
    python3 -I $S/stage_table.py <results dir> --index $LOAD/index.json --run <run> \
      --slo $SLO --gpus-per-replica <G> --json stages.json [--trace $LOAD/<run>.csv]
    ```
+
+   For a pool that serves part of the load (§1), add `--min-input-tokens N`
+   and its own knees, `--mu <mix>=<μ_SLO>` per mix it serves and
+   `--mu-blend <μ_SLO(B)>`, so its `need` column uses its capacity.
 
 3. Draw the figure with the `load-vs-supply` skill:
 
