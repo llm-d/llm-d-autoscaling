@@ -136,10 +136,12 @@ scenario:
               metricType: AverageValue
               # Uncached prompt tokens the EPP dispatched to the prefill pool, per second (one
               # producer only: both approx-prefix-cache-producers record on every call).
+              # job is this guide's EPP scrape (Service coord-disaggregation-epp, the chart's
+              # jobLabel app.kubernetes.io/name): another model's EPP in the namespace is excluded.
               query: |
-                sum(rate(llm_d_epp_prefix_prompt_tokens_sum{namespace="${namespace.name}",endpoint_role="prefill",plugin_name="decode-prefix-producer"}[2m]))
+                sum(rate(llm_d_epp_prefix_prompt_tokens_sum{namespace="${namespace.name}",job="coord-disaggregation-epp",endpoint_role="prefill",plugin_name="decode-prefix-producer"}[2m]))
                 -
-                sum(rate(llm_d_epp_prefix_predicted_cached_tokens_sum{namespace="${namespace.name}",endpoint_role="prefill",plugin_name="decode-prefix-producer"}[2m]))
+                sum(rate(llm_d_epp_prefix_predicted_cached_tokens_sum{namespace="${namespace.name}",job="coord-disaggregation-epp",endpoint_role="prefill",plugin_name="decode-prefix-producer"}[2m]))
               threshold: "7782"   # 0.7 x 11,117 computed prompt tokens/s, the 8192:256 prefill knee (blis; re-measure on the plant)
               activationThreshold: "0"
               ignoreNullValues: false
@@ -176,8 +178,11 @@ scenario:
               # KV held by live requests on the decode pods (idle prefix-cache blocks count as
               # free), averaged over 2m and summed; max by (pod, engine) drops a duplicate
               # scrape of the same engine and keeps every data-parallel engine of a pod.
+              # Decode pods are <set>-<slice>-<revision>-<role>-<group>[-<worker>] (LWS v1.0.0
+              # GenerateName; revision is 8 hex digits), so another set named pd-disagg-coord-*
+              # in the namespace does not match.
               query: |
-                sum(max by (pod, engine) (avg_over_time(vllm:kv_cache_usage_perc{namespace="${namespace.name}",pod=~"pd-disagg-coord-.+-decode-.+"}[2m])))
+                sum(max by (pod, engine) (avg_over_time(vllm:kv_cache_usage_perc{namespace="${namespace.name}",pod=~"pd-disagg-coord-[0-9]+-[0-9a-f]{8}-decode-[0-9]+(-[0-9]+)?"}[2m])))
               threshold: "0.45"   # KV usage at 70 % of the decode knee load across the run set's mixes (blis; re-measure on the plant)
               activationThreshold: "0"
               ignoreNullValues: false
@@ -187,7 +192,7 @@ scenario:
               # Backlog alarm: requests vLLM queues on the decode pods once KV is full. Near 0 in
               # steady state, so it wins only when decode saturates.
               query: |
-                sum(max by (pod, engine) (vllm:num_requests_waiting{namespace="${namespace.name}",pod=~"pd-disagg-coord-.+-decode-.+"}))
+                sum(max by (pod, engine) (vllm:num_requests_waiting{namespace="${namespace.name}",pod=~"pd-disagg-coord-[0-9]+-[0-9a-f]{8}-decode-[0-9]+(-[0-9]+)?"}))
               threshold: "5"
               activationThreshold: "0"
               ignoreNullValues: false
