@@ -243,6 +243,32 @@ and check the backend-specific values match the chosen overlay — image,
 each overlay's lists should appear in full and the scenario's `keda` block should
 be unchanged.
 
+### Per-band benchmark runs (flow control)
+
+When a scenario enables EPP flow control, `llmdbenchmark run --per-band-traffic`
+launches one inference-perf instance per priority band instead of one instance
+with a single hand-written class profile. The harness discovers the bands from
+the stack's EPP plugins config and the targetable class names from the
+InferenceObjective CRs in the namespace, then runs the instances concurrently —
+one pod and one result set per class, each sending the
+`x-llm-d-inference-objective` header that selects its band:
+
+```bash
+llmdbenchmark run \
+  --spec <spec> --workspace benchmark/results -p <namespace> \
+  -l inference-perf --workload-file-path <base profile> \
+  --per-band-traffic
+```
+
+This is the natural shape for evaluating how a KEDA scaling strategy reacts to
+mixed-priority load (e.g. queue-based vs rate-based triggers under a
+supply-side degradation): every class contributes load at the same time, and
+per-class signals — `llm_d_epp_flow_control_queue_size` by priority, TTFT
+attainment by class — separate cleanly in the report. Use
+`--per-band-overrides <yaml>` to split the offered rate across classes. See the
+[llm-d-benchmark run docs](https://github.com/llm-d/llm-d-benchmark/blob/main/docs/run.md#per-band-traffic-flow-control)
+for the discovery semantics and warnings.
+
 ## Status
 
 | Spec | Maturity | Verified |
