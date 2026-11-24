@@ -1,0 +1,46 @@
+# step 3 run stair, written by gen_load.py; do not edit by hand.
+# SO-active staircase, blend, stages at (0.15, 0.3, 0.5, 0.7, 0.9) x C (C = 4.660 req/s)
+# Absolute-rate mode (aggregate_rate: 0): each window's trace_rate is that client's req/s.
+version: "2"
+aggregate_rate: 0
+seed: 102
+clients:
+  - id: "8192x256"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 8192 } }
+    output_distribution: { type: constant, params: { value: 256 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 450000000, trace_rate: 0.233 }
+        - { start_us: 450000000, end_us: 900000000, trace_rate: 0.466 }
+        - { start_us: 900000000, end_us: 1350000000, trace_rate: 0.776667 }
+        - { start_us: 1350000000, end_us: 1800000000, trace_rate: 1.08733 }
+        - { start_us: 1800000000, end_us: 2250000000, trace_rate: 1.398 }
+  - id: "2048x2048"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 2048 } }
+    output_distribution: { type: constant, params: { value: 2048 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 450000000, trace_rate: 0.233 }
+        - { start_us: 450000000, end_us: 900000000, trace_rate: 0.466 }
+        - { start_us: 900000000, end_us: 1350000000, trace_rate: 0.776667 }
+        - { start_us: 1350000000, end_us: 1800000000, trace_rate: 1.08733 }
+        - { start_us: 1800000000, end_us: 2250000000, trace_rate: 1.398 }
+  - id: "256x4096"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 256 } }
+    output_distribution: { type: constant, params: { value: 4096 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 450000000, trace_rate: 0.233 }
+        - { start_us: 450000000, end_us: 900000000, trace_rate: 0.466 }
+        - { start_us: 900000000, end_us: 1350000000, trace_rate: 0.776667 }
+        - { start_us: 1350000000, end_us: 1800000000, trace_rate: 1.08733 }
+        - { start_us: 1800000000, end_us: 2250000000, trace_rate: 1.398 }

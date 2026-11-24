@@ -1,0 +1,43 @@
+# step 3 run scale-down, written by gen_load.py; do not edit by hand.
+# scale-down, blend: 795 s at 0.9 x C = 4.194 req/s, then 1020 s steps at 0.6, 0.3, 0.1 x C; needs 4, 3, 2, 1 replicas
+# Absolute-rate mode (aggregate_rate: 0): each window's trace_rate is that client's req/s.
+version: "2"
+aggregate_rate: 0
+seed: 110
+clients:
+  - id: "8192x256"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 8192 } }
+    output_distribution: { type: constant, params: { value: 256 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 795000000, trace_rate: 1.398 }
+        - { start_us: 795000000, end_us: 1815000000, trace_rate: 0.932 }
+        - { start_us: 1815000000, end_us: 2835000000, trace_rate: 0.466 }
+        - { start_us: 2835000000, end_us: 3855000000, trace_rate: 0.155333 }
+  - id: "2048x2048"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 2048 } }
+    output_distribution: { type: constant, params: { value: 2048 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 795000000, trace_rate: 1.398 }
+        - { start_us: 795000000, end_us: 1815000000, trace_rate: 0.932 }
+        - { start_us: 1815000000, end_us: 2835000000, trace_rate: 0.466 }
+        - { start_us: 2835000000, end_us: 3855000000, trace_rate: 0.155333 }
+  - id: "256x4096"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 256 } }
+    output_distribution: { type: constant, params: { value: 4096 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 795000000, trace_rate: 1.398 }
+        - { start_us: 795000000, end_us: 1815000000, trace_rate: 0.932 }
+        - { start_us: 1815000000, end_us: 2835000000, trace_rate: 0.466 }
+        - { start_us: 2835000000, end_us: 3855000000, trace_rate: 0.155333 }

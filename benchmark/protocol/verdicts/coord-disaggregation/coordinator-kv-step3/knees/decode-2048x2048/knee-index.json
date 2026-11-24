@@ -1,0 +1,32 @@
+{
+ "knee-2048x2048": {
+  "what": "knee, 2048x2048 (2048:2048), stages at (0.6, 0.8, 1.0, 1.25) x estimate 1.0 req/s",
+  "seed": 1,
+  "duration_s": 1200,
+  "expected_requests": 1095,
+  "timeout_s": 157,
+  "drain_s": 240,
+  "phases": [
+   {
+    "seconds": 300,
+    "rate": 0.6,
+    "mix": "2048:2048"
+   },
+   {
+    "seconds": 300,
+    "rate": 0.8,
+    "mix": "2048:2048"
+   },
+   {
+    "seconds": 300,
+    "rate": 1.0,
+    "mix": "2048:2048"
+   },
+   {
+    "seconds": 300,
+    "rate": 1.25,
+    "mix": "2048:2048"
+   }
+  ]
+ }
+}

@@ -1,0 +1,293 @@
+{
+ "inputs": {
+  "mixes": "8192:256,2048:2048,256:4096",
+  "mu": {
+   "8192:256": 1.341,
+   "2048:2048": 1000000000.0,
+   "256:4096": 1000000000.0
+  },
+  "mu_blend": 3.972,
+  "max_replicas": 4,
+  "min_replicas": 1,
+  "stage_s": 450,
+  "phase_s": 900,
+  "C_req_s": 4.66,
+  "slo": {
+   "ttft": 2.0,
+   "tpot": 0.05
+  },
+  "target": "blis",
+  "_prefill_need": "prefill pool's own capacity: 8192:256 knee 1.341 req/s; blend 3.972 req/s = 3 x 1.324, the rate of 8192-token requests where their A crosses 0.95 in the prefill blend knee (only those reach prefill). 2048:2048 and 256:4096 never reach prefill (decider nonCachedTokens 8192): 1e9 makes their need minReplicaCount"
+ },
+ "stair": {
+  "what": "SO-active staircase, blend, stages at (0.15, 0.3, 0.5, 0.7, 0.9) x C (C = 4.660 req/s)",
+  "seed": 102,
+  "duration_s": 2250,
+  "expected_requests": 5347,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 450,
+    "rate": 0.699,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 450,
+    "rate": 1.398,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 450,
+    "rate": 2.33,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 450,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 450,
+    "rate": 4.194,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "mixshift": {
+  "what": "mix-shift at 1.356 req/s, one phase per mix: 8192:256 needs 1, 2048:2048 needs 2, 256:4096 needs 2 replicas",
+  "seed": 103,
+  "duration_s": 2700,
+  "expected_requests": 3661,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 900,
+    "rate": 1.356,
+    "mix": "8192:256"
+   },
+   {
+    "seconds": 900,
+    "rate": 1.356,
+    "mix": "2048:2048"
+   },
+   {
+    "seconds": 900,
+    "rate": 1.356,
+    "mix": "256:4096"
+   }
+  ]
+ },
+ "overload-under": {
+  "what": "overload under the cap, blend: 1.398 then 0.8 x C = 3.728 req/s",
+  "seed": 104,
+  "duration_s": 1800,
+  "expected_requests": 4613,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 900,
+    "rate": 1.398,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 900,
+    "rate": 3.728,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "overload-over": {
+  "what": "overload over the cap, blend: 1.398 then 1.5 x C = 6.990 req/s",
+  "seed": 105,
+  "duration_s": 1800,
+  "expected_requests": 7549,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 900,
+    "rate": 1.398,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 900,
+    "rate": 6.99,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "bursty": {
+  "what": "bursty, blend: 720 s at 0.2 x C = 0.932 req/s, then 3 x (135 s at 0.7 x C = 3.262 req/s, 720 s quiet)",
+  "seed": 108,
+  "duration_s": 3285,
+  "expected_requests": 4005,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 720,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 135,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 720,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 135,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 720,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 135,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 720,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "short-spikes": {
+  "what": "short spikes, blend: 300 s at 0.2 x C, then 6 x (67 s at 0.7 x C = 3.262 req/s, 150 s gap at 0.932 req/s), last gap 720 s",
+  "seed": 109,
+  "duration_s": 2172,
+  "expected_requests": 2961,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 300,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 67,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 150,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 67,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 150,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 67,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 150,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 67,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 150,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 67,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 150,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 67,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 720,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "scale-down": {
+  "what": "scale-down, blend: 795 s at 0.9 x C = 4.194 req/s, then 1020 s steps at 0.6, 0.3, 0.1 x C; needs 4, 3, 2, 1 replicas",
+  "seed": 110,
+  "duration_s": 3855,
+  "expected_requests": 8087,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 795,
+    "rate": 4.194,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 1020,
+    "rate": 2.796,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 1020,
+    "rate": 1.398,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 1020,
+    "rate": 0.466,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ },
+ "agentic": {
+  "what": "agentic: 0.114 then 0.341 req/s = 0.1 and 0.3 x C x mean ISL of the blend (16304 prompt tok/s) / estimated mean prompt 14364",
+  "seed": 106,
+  "duration_s": 2700,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 900,
+    "rate": 0.114
+   },
+   {
+    "seconds": 1800,
+    "rate": 0.341
+   }
+  ],
+  "mean_prompt_estimate": 14364.0
+ },
+ "baseline": {
+  "what": "static baseline: reruns mixshift.yaml with the autoscaler off"
+ }
+}

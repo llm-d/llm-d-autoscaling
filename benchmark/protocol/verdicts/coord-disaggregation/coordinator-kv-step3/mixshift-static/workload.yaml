@@ -1,0 +1,34 @@
+# step 3 run mixshift, written by gen_load.py; do not edit by hand.
+# mix-shift at 1.356 req/s, one phase per mix: 8192:256 needs 1, 2048:2048 needs 2, 256:4096 needs 2 replicas
+# Absolute-rate mode (aggregate_rate: 0): each window's trace_rate is that client's req/s.
+version: "2"
+aggregate_rate: 0
+seed: 103
+clients:
+  - id: "8192x256"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 8192 } }
+    output_distribution: { type: constant, params: { value: 256 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 900000000, trace_rate: 1.356 }
+  - id: "2048x2048"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 2048 } }
+    output_distribution: { type: constant, params: { value: 2048 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 900000000, end_us: 1800000000, trace_rate: 1.356 }
+  - id: "256x4096"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 256 } }
+    output_distribution: { type: constant, params: { value: 4096 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 1800000000, end_us: 2700000000, trace_rate: 1.356 }

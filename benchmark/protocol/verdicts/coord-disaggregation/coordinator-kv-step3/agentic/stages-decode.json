@@ -1,0 +1,76 @@
+{
+ "run": "agentic",
+ "aligned_by": "blis-run.json",
+ "rows": [
+  {
+   "stage": 1,
+   "seconds": 900,
+   "rate": 0.114,
+   "mix": "",
+   "offered_req_s": 0.12222222222222222,
+   "lambda_in": 1339.4144444444444,
+   "lambda_out": 38.66888888888889,
+   "sent": 110,
+   "errors": {},
+   "A": 1.0,
+   "ttft": [
+    0.175276,
+    0.255445,
+    0.310656
+   ],
+   "tpot": [
+    0.022048,
+    0.023236066666666666,
+    0.02387652112676056
+   ],
+   "ready": [
+    1,
+    1
+   ],
+   "need": null,
+   "requested_replica_s": 900.0,
+   "ready_replica_s": 900.0
+  },
+  {
+   "stage": 2,
+   "seconds": 1800,
+   "rate": 0.341,
+   "mix": "",
+   "offered_req_s": 0.32722222222222225,
+   "lambda_in": 4038.557222222222,
+   "lambda_out": 115.9161111111111,
+   "sent": 589,
+   "errors": {},
+   "A": 0.99830220713073,
+   "ttft": [
+    0.205222,
+    0.300694,
+    0.45316
+   ],
+   "tpot": [
+    0.024500589984350545,
+    0.027552729264475745,
+    0.0315226
+   ],
+   "ready": [
+    1,
+    1
+   ],
+   "need": null,
+   "requested_replica_s": 1800.0,
+   "ready_replica_s": 1800.0
+  }
+ ],
+ "summary": {
+  "sent": 699,
+  "A": 0.9985693848354793,
+  "errors": {},
+  "requested_replica_s": 2700.0,
+  "gpu_s": 5400.0,
+  "placement": {
+   "before_first_stage": 0,
+   "after_last_stage": 31,
+   "stages_off_rate": []
+  }
+ }
+}

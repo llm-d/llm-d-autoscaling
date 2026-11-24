@@ -1,0 +1,37 @@
+# step 3 run overload-under, written by gen_load.py; do not edit by hand.
+# overload under the cap, blend: 1.398 then 0.8 x C = 3.728 req/s
+# Absolute-rate mode (aggregate_rate: 0): each window's trace_rate is that client's req/s.
+version: "2"
+aggregate_rate: 0
+seed: 104
+clients:
+  - id: "8192x256"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 8192 } }
+    output_distribution: { type: constant, params: { value: 256 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 900000000, trace_rate: 0.466 }
+        - { start_us: 900000000, end_us: 1800000000, trace_rate: 1.24267 }
+  - id: "2048x2048"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 2048 } }
+    output_distribution: { type: constant, params: { value: 2048 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 900000000, trace_rate: 0.466 }
+        - { start_us: 900000000, end_us: 1800000000, trace_rate: 1.24267 }
+  - id: "256x4096"
+    rate_fraction: 1.0
+    arrival: { process: poisson }
+    input_distribution: { type: constant, params: { value: 256 } }
+    output_distribution: { type: constant, params: { value: 4096 } }
+    timeout: 311000000
+    lifecycle:
+      windows:
+        - { start_us: 0, end_us: 900000000, trace_rate: 0.466 }
+        - { start_us: 900000000, end_us: 1800000000, trace_rate: 1.24267 }

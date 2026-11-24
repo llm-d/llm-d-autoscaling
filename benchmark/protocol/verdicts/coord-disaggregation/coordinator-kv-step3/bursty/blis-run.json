@@ -1,0 +1,88 @@
+{
+ "run": "bursty",
+ "epoch0": 1767225600.0,
+ "first_arrival_s": 1.328147,
+ "horizon_s": 3596.0,
+ "lead_in_s": 0.0,
+ "ready_at_load_start": {
+  "prefill": 1,
+  "decode": 1
+ },
+ "arm": {
+  "pin": null,
+  "static": null,
+  "start": {
+   "prefill": 1,
+   "decode": 1
+  }
+ },
+ "lab": "<lab>",
+ "lab_commit": "25f2dfb6259853e784ee9e85911c8e4fa63770c6",
+ "scenario": "coord-pd-qwen3-vl-32b-h100-bf16-tp2.yaml",
+ "seed": null,
+ "memory": {
+  "available_at_start_gib": 13.2,
+  "reserve_gib": 6.4,
+  "max_rss_gib": 6.8,
+  "peak_rss_gib": 2.93,
+  "killed": null
+ },
+ "fates": {
+  "generated": 4011,
+  "completed": 4011,
+  "timed_out": 0,
+  "in_flight_at_horizon": 0,
+  "queued_at_horizon": 0,
+  "not_started": 0,
+  "length_capped": 0
+ },
+ "hpa_log_sha256": {
+  "signals-hpa-decode.csv": "f16e69f9a1a6a757a87a22cdaaeb94f89229c14170ade3340b2e4994834dacaf",
+  "signals-hpa-prefill.csv": "44cca15603781b2538458e04d81c2cd5b7ecfe5148483d49f2aaeb13dbc27c25"
+ },
+ "schedule": {
+  "what": "bursty, blend: 720 s at 0.2 x C = 0.932 req/s, then 3 x (135 s at 0.7 x C = 3.262 req/s, 720 s quiet)",
+  "seed": 108,
+  "duration_s": 3285,
+  "expected_requests": 4005,
+  "timeout_s": 311,
+  "drain_s": 311,
+  "phases": [
+   {
+    "seconds": 720,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 135,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 720,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 135,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 720,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 135,
+    "rate": 3.262,
+    "mix": "8192:256,2048:2048,256:4096"
+   },
+   {
+    "seconds": 720,
+    "rate": 0.932,
+    "mix": "8192:256,2048:2048,256:4096"
+   }
+  ]
+ }
+}
