@@ -3,6 +3,8 @@
 
     blis_run.py --lab DIR --scenario FILE --load DIR --run NAME --policy policy.json \
         (--pin N|ROLE=N,... | --active) [--static ROLE=N] --out RUNDIR [--scenarios DIR] [--seed N]
+        [--max-rss GiB] [--reserve GiB]
+    blis_run.py --rerun DIR [--out SIMDIR] [--lab DIR] [--max-rss GiB] [--reserve GiB]
 
 NAME is a load gen_load.py --target blis wrote: its workload is DIR/NAME.yaml
 and its schedule is the entry NAME of DIR/index.json (or DIR/NAME.json for a
@@ -36,23 +38,121 @@ RUNDIR gets:
                 read at each sync; composite.json with scalingModifiers), the format
                 load-vs-supply takes with --trigger; for P/D, one directory per role
 
+Memory: blis holds every request of the run in memory, so a long or heavy load can take
+many GiB. One blis runs at a time (a lock in $TMPDIR; a second run waits). Before it
+starts, the system must have --reserve GiB available on top of a minimum for blis; while
+it runs, blis is killed when its RSS passes --max-rss (default: what was available at the
+start, less the reserve) or when the system's available memory falls under the reserve.
+The run then fails with "out of memory budget", and nothing is converted. blis-run.json
+records blis's peak RSS and the budget; sim/memory.json holds the same for a killed run.
+--rerun reruns a run's command.txt under the same guard (the repeatability gate, §3.7, or
+rebuilding a run's sim/ from its report directory with --out) and prints the decision
+logs' sha256 next to the ones in blis-run.json.
+
 Load time t s is placed at epoch EPOCH + t. Standard library only.
 """
 
 import argparse
 import csv
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
 import re
+import resource
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 EPOCH = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc).timestamp()
 PERF0 = 1000.0           # perf_counter of load time 0 in the per-request records
 READY = ("Active", "WarmingUp")
+GiB = 1 << 30
+MIN_START = 1 * GiB      # what blis must be able to take on top of the reserve
+POLL_S = 1.0
+
+
+def available():
+    """Bytes the system can hand out without swapping: MemAvailable on Linux; on macOS,
+    physical memory less what Activity Monitor calls used (app memory, wired, compressed).
+    Inactive pages are no measure there: a process's fresh pages land on that queue."""
+    if os.path.exists("/proc/meminfo"):
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+    out = subprocess.run(["vm_stat"], capture_output=True, text=True).stdout
+    page = int(re.search(r"page size of (\d+) bytes", out).group(1))
+    pages = {k.strip().strip('"'): int(v.strip(" .")) for k, v in
+             (l.split(":", 1) for l in out.splitlines()[1:] if ":" in l)}
+    used = (pages["Anonymous pages"] - pages["Pages purgeable"] + pages["Pages wired down"]
+            + pages["Pages occupied by compressor"])
+    return physical() - page * used
+
+
+def physical():
+    if os.path.exists("/proc/meminfo"):
+        return int(open("/proc/meminfo").readline().split()[1]) * 1024
+    return int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True,
+                              text=True).stdout)
+
+
+def rss(pid):
+    """The process's resident set in bytes, or 0 once it is gone."""
+    out = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True,
+                         text=True).stdout.strip()
+    return int(out) * 1024 if out else 0
+
+
+def peak_children():
+    """Peak RSS of the waited-for children, in bytes (ru_maxrss is KiB on Linux)."""
+    m = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    return m if sys.platform == "darwin" else m * 1024
+
+
+def guarded(cmd, cwd, err, a):
+    """Run blis under the memory budget, one at a time. -> (returncode, memory record);
+    exits with "out of memory budget" when the guard kills it."""
+    lock = open(Path(tempfile.gettempdir()) / "blis_run.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("waiting for another blis run to finish", file=sys.stderr)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    reserve = int((a.reserve if a.reserve is not None else
+                   max(2.0, physical() / GiB / 10)) * GiB)
+    free0 = available()
+    budget = int(a.max_rss * GiB) if a.max_rss is not None else free0 - reserve
+    mem = {"available_at_start_gib": round(free0 / GiB, 2), "reserve_gib": round(reserve / GiB, 2),
+           "max_rss_gib": round(budget / GiB, 2)}
+    if free0 - reserve < MIN_START or budget < MIN_START:
+        sys.exit(f"not enough memory to start blis: {free0 / GiB:.1f} GiB available, "
+                 f"{reserve / GiB:.1f} GiB reserved, budget {budget / GiB:.1f} GiB; "
+                 "close what holds memory, or pass a smaller --reserve or a larger --max-rss")
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.DEVNULL, stderr=err)
+    peak, why = 0, None
+    while proc.poll() is None:
+        peak = max(peak, rss(proc.pid))
+        if peak > budget:
+            why = f"blis RSS {peak / GiB:.1f} GiB passed the {budget / GiB:.1f} GiB budget"
+        elif available() < reserve:
+            why = (f"system available memory fell under the {reserve / GiB:.1f} GiB reserve "
+                   f"(blis RSS {peak / GiB:.1f} GiB)")
+        if why:
+            proc.kill()
+            proc.wait()
+            break
+        time.sleep(POLL_S)
+    mem["peak_rss_gib"] = round(max(peak, peak_children()) / GiB, 2)
+    mem["killed"] = why
+    (Path(cwd) / "memory.json").write_text(json.dumps(mem, indent=1) + "\n")
+    lock.close()
+    if why:
+        sys.exit(f"out of memory budget: {why}; blis killed, nothing converted. Free memory "
+                 f"and rerun, or run on a machine with more memory (see {Path(cwd) / 'memory.json'})")
+    return proc.returncode, mem
 
 
 def iso(t):
@@ -133,10 +233,10 @@ def simulate(a, entry, rundir, sos):
     (sim / "command.txt").write_text("# run in the run's sim/ directory; <lab> is the "
                                      f"blis-signal-lab checkout\n{shown}\n")
     with open(sim / "stderr.txt", "w") as err:
-        rc = subprocess.run(cmd, cwd=sim, stdout=subprocess.DEVNULL, stderr=err).returncode
+        rc, mem = guarded(cmd, sim, err, a)
     if rc:
         sys.exit(f"blis exited {rc}; see {sim / 'stderr.txt'}")
-    return start, lead, horizon
+    return start, lead, horizon, mem
 
 
 def error_of(row, timeout_s):
@@ -165,7 +265,42 @@ def prom(name, points):
         "values": [[EPOCH + t, v] for t, v in points]}]}}
 
 
-def convert(a, entry, rundir, sos, start, lead, horizon):
+def rerun(a):
+    """Rerun a run's command.txt under the memory guard and compare the decision logs with
+    blis-run.json. DIR is the run's sim/ or its report directory (both hold command.txt,
+    workload.yaml, policy.json and, there or in ../results, blis-run.json). blis's output
+    goes to --out, or to a scratch directory."""
+    src = a.rerun.resolve()
+    meta = next((json.load(open(p)) for p in (src / "blis-run.json",
+                                              src.parent / "results" / "blis-run.json")
+                 if p.exists()), None)
+    if meta is None:
+        sys.exit(f"no blis-run.json in {src} or {src.parent / 'results'}")
+    shown = [l for l in (src / "command.txt").read_text().splitlines() if not l.startswith("#")][0]
+    if "<lab>" in shown and not (a.lab or meta.get("lab")):
+        sys.exit("blis-run.json names no lab: pass --lab")
+    cmd = shown.replace("<lab>", str(Path(a.lab).resolve()) if a.lab else meta["lab"]).split()
+    with tempfile.TemporaryDirectory() as tmp:
+        out = a.out.resolve() if a.out else Path(tmp)
+        out.mkdir(parents=True, exist_ok=True)
+        for f in ("workload.yaml", "policy.json", "command.txt"):
+            if (src / f).resolve() != (out / f).resolve():
+                (out / f).write_bytes((src / f).read_bytes())
+        with open(out / "stderr.txt", "w") as err:
+            rc, mem = guarded(cmd, out, err, a)
+        if rc:
+            sys.exit(f"blis exited {rc}; see {out / 'stderr.txt'}")
+        got = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+               for p in sorted(out.glob("signals-hpa*.csv"))}
+    want = meta["hpa_log_sha256"]
+    for name in sorted(set(got) | set(want)):
+        print(f"{name}: {'same' if got.get(name) == want.get(name) else 'DIFFERENT'} "
+              f"{got.get(name)} (was {want.get(name)})")
+    print(f"peak RSS {mem['peak_rss_gib']} GiB")
+    sys.exit(0 if got == want else 1)
+
+
+def convert(a, entry, rundir, sos, start, lead, horizon, mem):
     sim, res, trig = rundir / "sim", rundir / "results", rundir / "triggers"
     (res / "metrics" / "processed").mkdir(parents=True, exist_ok=True)
     trig.mkdir(exist_ok=True)
@@ -281,7 +416,8 @@ def convert(a, entry, rundir, sos, start, lead, horizon):
     meta = {"run": a.run, "epoch0": EPOCH, "first_arrival_s": a0, "horizon_s": horizon,
             "lead_in_s": lead, "ready_at_load_start": at_start,
             "arm": {"pin": a.pin, "static": a.static, "start": {(k or "pool"): v for k, v in start.items()}},
-            "lab_commit": lab_commit, "scenario": a.scenario, "seed": a.seed,
+            "lab": a.lab, "lab_commit": lab_commit, "scenario": a.scenario, "seed": a.seed,
+            "memory": mem,
             "fates": result["requests"], "hpa_log_sha256": hashes, "schedule": entry}
     (res / "blis-run.json").write_text(json.dumps(meta, indent=1) + "\n")
     return meta, written
@@ -290,20 +426,33 @@ def convert(a, entry, rundir, sos, start, lead, horizon):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--lab", required=True, help="blis-signal-lab checkout with a built ./blis")
-    ap.add_argument("--scenario", required=True, help="scenario file name within --scenarios")
+    ap.add_argument("--rerun", type=Path, metavar="DIR",
+                    help="rerun the command.txt in DIR (a run's sim/ or report directory) under "
+                         "the memory guard and compare sha256; --out keeps blis's output there")
+    ap.add_argument("--max-rss", type=float, metavar="GiB",
+                    help="kill blis past this RSS (default: available at start less the reserve)")
+    ap.add_argument("--reserve", type=float, metavar="GiB",
+                    help="memory the system keeps free (default: max(2, 10%% of physical))")
+    ap.add_argument("--lab", help="blis-signal-lab checkout with a built ./blis")
+    ap.add_argument("--scenario", help="scenario file name within --scenarios")
     ap.add_argument("--scenarios", default=None, help="default <lab>/testdata/kernel/aisimulate")
-    ap.add_argument("--load", required=True, type=Path, help="gen_load.py --target blis output")
-    ap.add_argument("--run", required=True)
-    ap.add_argument("--policy", required=True, help="so_to_policy.py output")
+    ap.add_argument("--load", type=Path, help="gen_load.py --target blis output")
+    ap.add_argument("--run")
+    ap.add_argument("--policy", help="so_to_policy.py output")
     ap.add_argument("--scaledobjects", help="default: scaledobjects.json next to the policy")
-    arm = ap.add_mutually_exclusive_group(required=True)
+    arm = ap.add_mutually_exclusive_group()
     arm.add_argument("--pin", metavar="N|ROLE=N,...")
     arm.add_argument("--active", action="store_true")
     ap.add_argument("--static", metavar="ROLE=N", help="a P/D role no ScaledObject scales")
     ap.add_argument("--seed", type=int, help="overrides the workload's seed")
-    ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--out", type=Path)
     a = ap.parse_args()
+    if a.rerun:
+        rerun(a)
+    missing = [f"--{k}" for k in ("lab", "scenario", "load", "run", "policy", "out")
+               if getattr(a, k) is None] + ([] if a.pin or a.active else ["--pin or --active"])
+    if missing:
+        ap.error("missing " + ", ".join(missing))
     a.lab = str(Path(a.lab).resolve())
     a.scenarios = str(Path(a.scenarios).resolve()) if a.scenarios else \
         os.path.join(a.lab, "testdata", "kernel", "aisimulate")
@@ -313,15 +462,16 @@ def main():
     sos = json.load(open(a.scaledobjects or Path(a.policy).parent / "scaledobjects.json"))
 
     entry = schedule(a.load, a.run)
-    start, lead, horizon = simulate(a, entry, a.out, sos)
-    meta, written = convert(a, entry, a.out, sos, start, lead, horizon)
+    start, lead, horizon, mem = simulate(a, entry, a.out, sos)
+    meta, written = convert(a, entry, a.out, sos, start, lead, horizon, mem)
     f = meta["fates"]
     print(f"{a.run}: {f['generated']} requests, {f['completed']} completed, "
           f"{f.get('timed_out', 0)} timed out, dropped {f.get('dropped', {})}, "
           f"{f.get('in_flight_at_horizon', 0) + f.get('queued_at_horizon', 0)} unfinished at the horizon; "
           f"start {meta['arm']['start']}" + (f", lead-in {lead:.0f} s, Ready at the load's start "
                                              f"{meta['ready_at_load_start']}" if lead else "")
-          + f"; {len(written)} trigger series; {a.out}")
+          + f"; {len(written)} trigger series; blis peak RSS {mem['peak_rss_gib']} GiB of "
+          f"{mem['max_rss_gib']}; {a.out}")
 
 
 if __name__ == "__main__":

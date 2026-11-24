@@ -53,7 +53,11 @@ EPP.
 Name the namespace `step2-<scenario>-<YYYYMMDD>`. Pass the same `--spec`,
 `--cluster-config`, `--workspace benchmark/results` and `-p` to every command.
 The CLI expects `../llm-d-benchmark` next to the repository. Apply the gate in
-§2.3 item 4 with the `run-benchmark` skill's ScaledObject check.
+§2.3 item 4 with the `run-benchmark` skill's ScaledObject check. On a local
+cluster, run that skill's local memory check (Step 4) before the standup. A
+load experiment drives a pool to `maxReplicaCount`, so the peak must fit. An
+experiment whose pods were `OOMKilled` or evicted for memory proves nothing
+about the trigger: rerun it, or record it as not run.
 
 ## Step 3: Run each property as its own experiment
 

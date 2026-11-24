@@ -273,6 +273,7 @@ On top of run-set.md §4:
 | Check | Source | Fails when |
 |---|---|---|
 | blis ran clean | `stderr.txt` | any `level=error` or `fatal` line (`engine assumption` and deprecation warnings are expected) |
+| blis kept to its memory budget | `sim/memory.json` | `killed` is set: blis passed its RSS budget or the machine's free memory fell under the reserve, and the run did not finish |
 | every request has a fate | `blis-run.json` `fates` | the fates do not sum to `generated` |
 | the HPAs ran | `signals-hpa[-<role>].csv` | no row after t = 0 for a scaled pool, or a trigger column missing |
 | the arm held | `blis-run.json` `ready_at_load_start` | a pool with `minReplicaCount: 0` was not at 0 when the load started |

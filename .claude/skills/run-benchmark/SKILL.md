@@ -179,9 +179,37 @@ Then inspect the rendered merge under the printed session directory
   any `extraObjects`;
 - lists appear **in full** (the harness replaces lists wholesale, deep-merges
   dicts);
-- the scenario's `keda` block is unchanged.
+- the scenario's `keda` block is unchanged;
+- on a local cluster (Kind, or any cluster whose nodes are containers on
+  this machine), the scaled-out stack fits in memory (below).
 
 Report what you checked. Stop here if the phase was `dry-run`.
+
+**Local memory check.** A local cluster's pods share this machine's memory,
+and a CPU-simulator pod holds a real KV cache in RAM (`ocp/model-sim-qwen3-32b`
+gives each vLLM pod a 20Gi limit). When KEDA scales a pool out, the machine
+can run out of memory, and the container runtime or the host then kills
+pods. The run becomes meaningless, and the machine may hang. Before a
+standup on a local cluster:
+
+1. Add up the peak: each role's memory limit (`resources.limits.memory` in
+   `plan/<scenario>/config.yaml`) times its ScaledObject's
+   `maxReplicaCount` (its static replica count if it is not scaled), plus
+   the EPP, the harness pod, Prometheus and KEDA (about 4Gi together).
+2. Compare it with what the cluster can get: the container runtime's memory
+   (`docker info --format '{{.MemTotal}}'`, or `podman machine inspect` for
+   its `Memory`). That must not be more than the host's free memory (`vm_stat`
+   and Activity Monitor on macOS, `free -g` on Linux), less a few GiB for the
+   host itself. Close other memory-heavy work, such as a blis evaluation.
+3. If the peak does not fit, stop and tell the user the numbers. Ways out
+   are the `k8s/inference-sim` overlay (256Mi per pod), a staging variant
+   with a lower `maxReplicaCount`, or a remote cluster. Do not edit the
+   scenario or the overlay silently.
+
+While the run goes on, watch `kubectl top nodes` (if metrics-server runs)
+or `docker stats --no-stream`. If a pod is `OOMKilled`, or the host starts
+swapping hard, stop the run and report it. Do not report it as a scaling
+result.
 
 ### Step 5 — Standup  *(cluster write — confirm first)*
 
