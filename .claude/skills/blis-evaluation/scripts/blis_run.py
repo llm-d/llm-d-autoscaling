@@ -4,7 +4,7 @@
     blis_run.py --lab DIR --scenario FILE --load DIR --run NAME --policy policy.json \
         (--pin N|ROLE=N,... | --active) [--static ROLE=N] --out RUNDIR [--scenarios DIR] [--seed N]
         [--max-rss GiB] [--reserve GiB]
-    blis_run.py --rerun DIR [--out SIMDIR] [--lab DIR] [--max-rss GiB] [--reserve GiB]
+    blis_run.py --rerun DIR --lab DIR [--out SIMDIR] [--max-rss GiB] [--reserve GiB]
 
 NAME is a load gen_load.py --target blis wrote: its workload is DIR/NAME.yaml
 and its schedule is the entry NAME of DIR/index.json (or DIR/NAME.json for a
@@ -49,6 +49,11 @@ records blis's peak RSS and the budget; sim/memory.json holds the same for a kil
 rebuilding a run's sim/ from its report directory with --out) and prints the decision
 logs' sha256 next to the ones in blis-run.json.
 
+command.txt names the lab <lab> and this repository's checkout <repo>, and blis-run.json
+records the lab as <lab>, so a committed run record holds no local path. --rerun maps
+<repo> to this checkout and <lab> to --lab, which it needs unless blis-run.json was
+written before the placeholder and names the lab's path.
+
 Load time t s is placed at epoch EPOCH + t. Standard library only.
 """
 
@@ -68,11 +73,32 @@ import time
 from pathlib import Path
 
 EPOCH = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc).timestamp()
+# this repository's checkout: command.txt names it <repo>, so a committed run record holds no local path
+REPO = Path(__file__).resolve().parents[4]
 PERF0 = 1000.0           # perf_counter of load time 0 in the per-request records
 READY = ("Active", "WarmingUp")
 GiB = 1 << 30
 MIN_START = 1 * GiB      # what blis must be able to take on top of the reserve
 POLL_S = 1.0
+
+
+def portable(text, lab):
+    """text with the lab checkout as <lab> and this repository's checkout as <repo>."""
+    return text.replace(lab, "<lab>").replace(str(REPO), "<repo>")
+
+
+def resolve(text, lab):
+    """The inverse of portable(), for this machine."""
+    return text.replace("<lab>", lab).replace("<repo>", str(REPO))
+
+
+def rerun_lab(flag, meta):
+    """The lab a rerun uses: --lab, else the absolute path an older blis-run.json recorded."""
+    if flag:
+        return str(Path(flag).resolve())
+    if meta.get("lab") and meta["lab"] != "<lab>":
+        return meta["lab"]
+    sys.exit("blis-run.json names no lab: pass --lab")
 
 
 def available():
@@ -229,9 +255,9 @@ def simulate(a, entry, rundir, sos):
            "--output", "result.json"]
     if a.seed is not None:
         cmd += ["--seed", str(a.seed)]
-    shown = " ".join(cmd).replace(a.lab, "<lab>")
+    shown = portable(" ".join(cmd), a.lab)
     (sim / "command.txt").write_text("# run in the run's sim/ directory; <lab> is the "
-                                     f"blis-signal-lab checkout\n{shown}\n")
+                                     f"blis-signal-lab checkout, <repo> this repository's\n{shown}\n")
     with open(sim / "stderr.txt", "w") as err:
         rc, mem = guarded(cmd, sim, err, a)
     if rc:
@@ -277,9 +303,7 @@ def rerun(a):
     if meta is None:
         sys.exit(f"no blis-run.json in {src} or {src.parent / 'results'}")
     shown = [l for l in (src / "command.txt").read_text().splitlines() if not l.startswith("#")][0]
-    if "<lab>" in shown and not (a.lab or meta.get("lab")):
-        sys.exit("blis-run.json names no lab: pass --lab")
-    cmd = shown.replace("<lab>", str(Path(a.lab).resolve()) if a.lab else meta["lab"]).split()
+    cmd = resolve(shown, rerun_lab(a.lab, meta)).split()
     with tempfile.TemporaryDirectory() as tmp:
         out = a.out.resolve() if a.out else Path(tmp)
         out.mkdir(parents=True, exist_ok=True)
@@ -416,7 +440,7 @@ def convert(a, entry, rundir, sos, start, lead, horizon, mem):
     meta = {"run": a.run, "epoch0": EPOCH, "first_arrival_s": a0, "horizon_s": horizon,
             "lead_in_s": lead, "ready_at_load_start": at_start,
             "arm": {"pin": a.pin, "static": a.static, "start": {(k or "pool"): v for k, v in start.items()}},
-            "lab": a.lab, "lab_commit": lab_commit, "scenario": a.scenario, "seed": a.seed,
+            "lab": "<lab>", "lab_commit": lab_commit, "scenario": a.scenario, "seed": a.seed,
             "memory": mem,
             "fates": result["requests"], "hpa_log_sha256": hashes, "schedule": entry}
     (res / "blis-run.json").write_text(json.dumps(meta, indent=1) + "\n")
