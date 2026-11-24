@@ -18,7 +18,7 @@ skill adds only the order, the gates and the commands:
   which properties to test and how (§2.3), the simulator (§2.1, §2.2), the
   verdict and its proof (§2.4), plots (§2.5);
 - [`benchmark/protocol/1-static-signal-analysis.md`](../../../benchmark/protocol/1-static-signal-analysis.md)
-  for P1–P9, and [`benchmark/protocol/traps.md`](../../../benchmark/protocol/traps.md);
+  for P1–P10, and [`benchmark/protocol/traps.md`](../../../benchmark/protocol/traps.md);
 - the `run-benchmark` skill for the standup, smoketest, run and teardown
   commands.
 

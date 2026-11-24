@@ -44,6 +44,7 @@ the engine's saturation behavior.
 | P7 fails visibly | no: break the source (scale Prometheus or the EPP down, change a label) | either |
 | P8 lag and noise | partly: lag is measurable on either; noise at steady load needs realistic batching | `vllm-model-sim` for noise |
 | P9 measures what it claims | depends on the trap; label and counter-semantics traps (T1, T6, T8) need no knee, KV and queue semantics do | trap by trap |
+| P10 selects its own pool | no: it is about which series a selector matches | either; `inference-sim` is enough |
 
 The `llm-d-inference-sim` has no knee we can rely on. Its linear
 `time-factor-under-load` can show that a pool scales out in the right
@@ -104,6 +105,7 @@ runs these steps in this order, with the commands.
    | P7 fails visibly | break the source (scale Prometheus or the EPP down, or use a wrong label) | the external metric reads 0 and nothing fires |
    | P8 lag and noise | step the load; at steady load read the sample-to-sample swing | either one is not |
    | P9 measures what it claims | read the metric against an independent count of the quantity it claims | it does not, or the series is absent |
+   | P10 selects its own pool | deploy a second stack (another model, or the same scenario in a second namespace), load only the other one, and run `count by (namespace, job, pod) (<selector>)` for each selector | the trigger moves with the other stack's load, or a selector matches pods outside the pool, or none of its own |
 
 2. **Pick the simulator** per §2.1, and check for gaps per §2.2.
 3. **Isolate the run.** Use the Kubernetes context the user chose (the
@@ -155,7 +157,7 @@ One file per scenario, next to the step 1 verdict, as
 - the scenario, backend overlay, simulator and its image digest, the profile
   and whether it is tuned, KEDA release, date;
 - the calibrated knee, with the traffic mix it applies to;
-- the verdict **by property**: one section per property, P1 to P9, in order,
+- the verdict **by property**: one section per property, P1 to P10, in order,
   each with a table of one row per trigger: step 1's result, the
   observation (the numbers read from the cluster), and an outcome:
   - **not verified by this skill**: step 1 marked it pass or n/a; the row
@@ -208,6 +210,7 @@ proof is still empirical.
   | P7 fails visibly | trigger value and replica count over time, with the moment the source is broken |
   | P8 lag and noise | signal against the true load over time, with the lag marked and the noise band against the 10 % tolerance |
   | P9 measures what it claims | the metric against an independent ground truth (for example the load generator's own count) over time |
+  | P10 selects its own pool | trigger value and replica count over time while only the other stack is loaded, with this stack's own load drawn at 0 |
 
 - **Readable alone.** Axis labels with units, a legend, the threshold or
   target drawn and labelled, and a title that states what the plot shows.
