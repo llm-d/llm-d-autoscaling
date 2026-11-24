@@ -1,0 +1,27 @@
+{
+ "mixshift-decode": {
+  "what": "decode mix shift: 8192:256 -> 256:4096 -> 8192:256 at 2.4 req/s",
+  "seed": 1,
+  "duration_s": 2100,
+  "expected_requests": 5040,
+  "timeout_s": 311,
+  "drain_s": 360,
+  "phases": [
+   {
+    "seconds": 600,
+    "rate": 2.4,
+    "mix": "8192:256"
+   },
+   {
+    "seconds": 900,
+    "rate": 2.4,
+    "mix": "256:4096"
+   },
+   {
+    "seconds": 600,
+    "rate": 2.4,
+    "mix": "8192:256"
+   }
+  ]
+ }
+}

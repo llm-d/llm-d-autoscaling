@@ -1,0 +1,29 @@
+{
+ "coord-pd-prefill": {
+  "prefill-uncached-prompt-tokens": [
+   {
+    "metric": "prefill_prompt_tokens",
+    "function": "rate",
+    "window_s": 120
+   }
+  ]
+ },
+ "coord-pd-decode": {
+  "decode-kv-usage-2m": [
+   {
+    "metric": "kv_usage",
+    "aggregation": "sum",
+    "role": "decode",
+    "function": "avg_over_time",
+    "window_s": 120
+   }
+  ],
+  "decode-waiting-alarm": [
+   {
+    "metric": "waiting",
+    "aggregation": "sum",
+    "role": "decode"
+   }
+  ]
+ }
+}

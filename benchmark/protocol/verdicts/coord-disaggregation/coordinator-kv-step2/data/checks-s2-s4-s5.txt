@@ -1,0 +1,17 @@
+== S2 decode waiting: now / avg 3m / max 3m
+{} 0
+{} 0
+{} 0
+== decode running now / KV driver value
+{} 4
+{} 0.2797494780793319
+== S4 producers on prefill calls: prompt tokens/s, predicted cached tokens/s
+{'plugin_name': 'approx-prefix-cache-producer'} 2699.6363636363635
+{'plugin_name': 'decode-prefix-producer'} 2699.6363636363635
+{'plugin_name': 'approx-prefix-cache-producer'} 1079.8545454545454
+{'plugin_name': 'decode-prefix-producer'} 1079.8545454545454
+== S5 probes by result (3m) vs prefill dispatches per producer (3m)
+{'result': 'deferred'} 92.39999999999999
+{'result': 'served'} 79.2
+{'plugin_name': 'approx-prefix-cache-producer'} 91.3556158327177
+{'plugin_name': 'decode-prefix-producer'} 91.3556158327177

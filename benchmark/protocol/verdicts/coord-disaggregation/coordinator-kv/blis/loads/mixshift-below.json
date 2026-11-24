@@ -1,0 +1,27 @@
+{
+ "mixshift-below": {
+  "what": "decode mix shift below the cap at 1.6 req/s",
+  "seed": 2,
+  "duration_s": 2100,
+  "expected_requests": 3360,
+  "timeout_s": 311,
+  "drain_s": 360,
+  "phases": [
+   {
+    "seconds": 600,
+    "rate": 1.6,
+    "mix": "8192:256"
+   },
+   {
+    "seconds": 900,
+    "rate": 1.6,
+    "mix": "256:4096"
+   },
+   {
+    "seconds": 600,
+    "rate": 1.6,
+    "mix": "8192:256"
+   }
+  ]
+ }
+}

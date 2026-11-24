@@ -1,0 +1,193 @@
+# COORD-DISAGGREGATION, PD-only (encode role off) -- KEDA experiment: coordinator-kv
+#
+# Scales the prefill and decode roles of the guide's DisaggregatedSet with one
+# ScaledObject each, on the PD-only Coordinator pipeline (conditional-decode ->
+# prefill -> decode) with the single combined EPP:
+#   - prefill: the uncached prompt tokens the EPP dispatches to prefill (EPP
+#     prefix metrics), threshold 0.7 x the per-pod capacity at the SLO;
+#   - decode: the KV-cache usage of the decode pods (vllm:kv_cache_usage_perc,
+#     2m average, summed), threshold at 70 % of the knee load, plus a backlog
+#     alarm on vllm:num_requests_waiting; decode scales up by up to 4 pods / 60 s.
+# Delta from baseline.yaml: only `keda:` minReplicas and maxReplicas.
+# Step 1 verdict: benchmark/protocol/verdicts/coord-disaggregation/coordinator-kv.md.
+#
+# Requires llm-d/llm-d#3111 (PD-only router values and Coordinator overlay) and
+# llm-d/llm-d#3114 (model-server PodMonitors). Thresholds come from blis-signal-lab
+# knees (Qwen3-VL-32B, H100, TP2); re-measure them on the target plant (step 5).
+# The guide pins Qwen/Qwen3-VL-32B-Instruct, TP2 per role, vLLM v0.31.0.
+
+scenario:
+  - name: "coord-disaggregation"
+
+    common:
+      model:
+        name: Qwen/Qwen3-VL-32B-Instruct
+        shortName: qwen-qwen3-vl-32b-instruct
+        path: models/Qwen/Qwen3-VL-32B-Instruct
+        huggingfaceId: Qwen/Qwen3-VL-32B-Instruct
+
+      # The model servers are a DisaggregatedSet, so standup installs the
+      # LeaderWorkerSet controller when it is missing.
+      lws:
+        enabled: true
+
+    # =========================================================================
+    # KUSTOMIZE -- the coord-disaggregation guide, PD-only variant, patched
+    # =========================================================================
+    modelservice:
+      enabled: false
+    decode:
+      enabled: false
+    prefill:
+      enabled: false
+
+    kustomize:
+      enabled: true
+      guideName: "coord-disaggregation"
+      repoPath: ""
+      repoRef: "main"
+      gaieVersion: ""
+      routerChartVersion: ""
+      acceleratorBackend: "gpu/vllm"
+      # Runs the README's monitoring commands: the Coordinator PodMonitor and the
+      # model-server PodMonitors (llm-d#3114), which the decode triggers read.
+      monitoring: true
+      overlayPath: ""
+      # The prefill trigger reads EPP metrics, so the router needs its
+      # ServiceMonitor; the guide's router install has no monitoring variable.
+      # PD-only (no encode role): the router's rollout screener must not require an encode
+      # pod, so layer the guide's PD-only plugin config after its values file (llm-d#3111).
+      extraHelmValues:
+        - "${REPO_ROOT}/guides/recipes/router/features/monitoring.values.yaml"
+        - "${REPO_ROOT}/guides/coord-disaggregation/router/coord-disaggregation-pd-only.values.yaml"
+      extraHelmSets: {}
+      # The Coordinator's PD-only pipeline (conditional-decode -> prefill -> decode), llm-d#3111.
+      guideVariableOverrides:
+        COORDINATOR_OVERLAY: pd-only
+
+      # JSON6902 patches on the DisaggregatedSet (no strategic-merge schema, so
+      # roles are addressed by index). From a kustomize build of the guide:
+      # roles/0 encode, roles/1 prefill, roles/2 decode.
+      # Encode 0 and External prefill/decode go together: LWS requires Static
+      # roles to be all zero or all non-zero, and External roles are exempt.
+      patches:
+        - target:
+            group: disaggregatedset.x-k8s.io
+            version: v1
+            kind: DisaggregatedSet
+            name: pd-disagg-coord
+          patch: |-
+            - op: replace
+              path: /spec/roles/0/spec/replicas
+              value: 0
+            - op: replace
+              path: /spec/roles/1/spec/replicas
+              value: 1
+            - op: replace
+              path: /spec/roles/2/spec/replicas
+              value: 1
+            - op: add
+              path: /spec/roles/1/scaling
+              value: {mode: External}
+            - op: add
+              path: /spec/roles/2/scaling
+              value: {mode: External}
+
+    # =========================================================================
+    # KEDA -- one ScaledObject per role, on the DisaggregatedSetRoleScaler LWS
+    # creates for each External role. Analysis: benchmark/protocol/verdicts/
+    # coord-disaggregation/coordinator-kv.md
+    # =========================================================================
+    keda:
+      enabled: true
+      namespace: ""              # defaults to deploy namespace (first slot of `-p`)
+      prometheus:
+        baseUrl: http://prometheus-operated.monitoring.svc.cluster.local
+        port: 9090
+      scaledObjects:
+        - name: coord-pd-prefill
+          scaleTargetRef:
+            apiVersion: disaggregatedset.x-k8s.io/v1
+            kind: DisaggregatedSetRoleScaler
+            name: pd-disagg-coord-prefill
+          minReplicas: 1
+          maxReplicas: 4
+          pollingInterval: 15
+          fallback:
+            failureThreshold: 3
+            replicas: 1
+            behavior: currentReplicas
+          behavior:
+            scaleUp:
+              stabilizationWindowSeconds: 0
+              policies:
+                - type: Pods
+                  value: 1
+                  periodSeconds: 180
+            scaleDown:
+              stabilizationWindowSeconds: 300
+              policies:
+                - type: Pods
+                  value: 1
+                  periodSeconds: 300
+          triggers:
+            - name: prefill-uncached-prompt-tokens
+              type: prometheus
+              metricType: AverageValue
+              # Uncached prompt tokens the EPP dispatched to the prefill pool, per second (one
+              # producer only: both approx-prefix-cache-producers record on every call).
+              query: |
+                sum(rate(llm_d_epp_prefix_prompt_tokens_sum{namespace="${namespace.name}",endpoint_role="prefill",plugin_name="decode-prefix-producer"}[2m]))
+                -
+                sum(rate(llm_d_epp_prefix_predicted_cached_tokens_sum{namespace="${namespace.name}",endpoint_role="prefill",plugin_name="decode-prefix-producer"}[2m]))
+              threshold: "7782"   # 0.7 x 11,117 computed prompt tokens/s, the 8192:256 prefill knee (blis; re-measure on the plant)
+              activationThreshold: "0"
+              ignoreNullValues: false
+
+        - name: coord-pd-decode
+          scaleTargetRef:
+            apiVersion: disaggregatedset.x-k8s.io/v1
+            kind: DisaggregatedSetRoleScaler
+            name: pd-disagg-coord-decode
+          minReplicas: 1
+          maxReplicas: 4
+          pollingInterval: 15
+          fallback:
+            failureThreshold: 3
+            replicas: 1
+            behavior: currentReplicas
+          behavior:
+            scaleUp:
+              stabilizationWindowSeconds: 0
+              policies:
+                - type: Pods
+                  value: 4
+                  periodSeconds: 60
+            scaleDown:
+              stabilizationWindowSeconds: 300
+              policies:
+                - type: Pods
+                  value: 1
+                  periodSeconds: 300
+          triggers:
+            - name: decode-kv-usage-2m
+              type: prometheus
+              metricType: AverageValue
+              # KV held by live requests on the decode pods (idle prefix-cache blocks count as
+              # free), averaged over 2m and summed; max by (pod, engine) drops a duplicate
+              # scrape of the same engine and keeps every data-parallel engine of a pod.
+              query: |
+                sum(max by (pod, engine) (avg_over_time(vllm:kv_cache_usage_perc{namespace="${namespace.name}",pod=~"pd-disagg-coord-.+-decode-.+"}[2m])))
+              threshold: "0.45"   # KV usage at 70 % of the decode knee load across the run set's mixes (blis; re-measure on the plant)
+              activationThreshold: "0"
+              ignoreNullValues: false
+            - name: decode-waiting-alarm
+              type: prometheus
+              metricType: AverageValue
+              # Backlog alarm: requests vLLM queues on the decode pods once KV is full. Near 0 in
+              # steady state, so it wins only when decode saturates.
+              query: |
+                sum(max by (pod, engine) (vllm:num_requests_waiting{namespace="${namespace.name}",pod=~"pd-disagg-coord-.+-decode-.+"}))
+              threshold: "5"
+              activationThreshold: "0"
+              ignoreNullValues: false

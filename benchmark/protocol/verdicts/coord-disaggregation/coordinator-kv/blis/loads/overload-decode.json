@@ -1,0 +1,22 @@
+{
+ "overload-decode": {
+  "what": "blend 2.33 then 1.5 x C = 6.99 req/s",
+  "seed": 5,
+  "duration_s": 1500,
+  "expected_requests": 7689,
+  "timeout_s": 311,
+  "drain_s": 360,
+  "phases": [
+   {
+    "seconds": 600,
+    "rate": 2.33,
+    "mix": "blend"
+   },
+   {
+    "seconds": 900,
+    "rate": 6.99,
+    "mix": "blend"
+   }
+  ]
+ }
+}
