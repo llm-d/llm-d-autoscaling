@@ -18,7 +18,14 @@ blis-run.json (step 3).
 
 --knee X adds μ_SLO: the rate where A crosses X, interpolated linearly between
 the two stages around it, and says when the crossing is outside the stages:
-stage 1 fails or the last stage passes (run-set.md §2, run 1). Standard library only.
+stage 1 fails or the last stage passes (run-set.md §2, run 1).
+
+For a pool that serves only part of the load (run-set.md §1: prefill behind a decider
+that keeps short prompts on decode), --min-input-tokens N counts only the requests with
+at least N input tokens in A, errors, TTFT and TPOT; offered req/s, λ and sent stay
+the whole load's, so μ_SLO stays in requests per second of the load. --mu MIX=X and
+--mu-blend X replace the index's μ_SLO in the need column with the pool's own, and a
+phase whose mixes all fall under N needs minReplicaCount. Standard library only.
 """
 
 import argparse
@@ -87,6 +94,35 @@ def window_range(series, a, b):
     return (min(vals), max(vals)) if vals else (None, None)
 
 
+def pool_requests(reqs, min_in):
+    """The requests the pool serves: those with at least min_in input tokens, or all."""
+    return reqs if min_in is None else [r for r in reqs if r["in"] >= min_in]
+
+
+def serves(mix, min_in):
+    """Whether a phase's mix (one or a comma list) sends the pool any request."""
+    return min_in is None or any(int(m.split(":")[0]) >= min_in for m in mix.split(","))
+
+
+def need(rate, mix, mu, mu_blend, min_in, min_replicas):
+    """Replicas a phase needs, ceil(q / μ_SLO); minReplicaCount when the pool serves none of it."""
+    if not (mu and mu_blend and mix):
+        return None
+    if not serves(mix, min_in):
+        return min_replicas
+    m = mu.get(mix) if "," not in mix else mu_blend
+    return math.ceil(rate / m) if m else None
+
+
+def capacities(inputs, mu_flags, mu_blend_flag):
+    """The index's μ_SLO per mix and for the blend, with --mu MIX=X and --mu-blend X applied."""
+    mu = dict(inputs.get("mu") or {}) or None
+    for spec in mu_flags or []:
+        k, v = spec.rsplit("=", 1)
+        mu = {**(mu or {}), k: float(v)}
+    return mu, (mu_blend_flag if mu_blend_flag is not None else inputs.get("mu_blend"))
+
+
 def fmt(x, nd=2):
     if x is None:
         return "–"
@@ -107,12 +143,17 @@ def main():
     ap.add_argument("--knee", type=float, metavar="X", help="attainment objective: report μ_SLO")
     ap.add_argument("--gpus-per-replica", type=float, default=1)
     ap.add_argument("--json")
+    ap.add_argument("--min-input-tokens", type=int, metavar="N",
+                    help="count only requests with at least N input tokens (the pool's) in A, errors, TTFT, TPOT")
+    ap.add_argument("--mu", action="append", metavar="MIX=X", help="the pool's μ_SLO for MIX (repeat)")
+    ap.add_argument("--mu-blend", type=float, metavar="X", help="the pool's μ_SLO for the blend")
     a = ap.parse_args()
 
     index = json.load(open(a.index))
     entry = index.get(a.run) or sys.exit(f"no run {a.run} in {a.index}")
-    mu = (index.get("inputs") or {}).get("mu")
-    mu_blend = (index.get("inputs") or {}).get("mu_blend")
+    inputs = index.get("inputs") or {}
+    mu, mu_blend = capacities(inputs, a.mu, a.mu_blend)
+    min_replicas = inputs.get("min_replicas", 1)
     run = LlmdBenchmark(a.results, deployment=a.deployment).build()
     o_first, src = first_offset(a.results, a.trace)
     shift = 1.0 - o_first          # schedule offset b is t = b + shift on the run's clock
@@ -123,28 +164,25 @@ def main():
         b += ph["seconds"]
         dur = ph["seconds"]
         reqs = [r for r in run.requests if lo <= r["t"] < hi]
-        ok = [r for r in reqs if r["ok"]]
+        pool = pool_requests(reqs, a.min_input_tokens)
+        ok = [r for r in pool if r["ok"]]
         good = [r for r in ok if (r["ttft"] is not None and r["ttft"] <= a.slo.get("ttft", math.inf))
                 and (r["tpot"] is None or r["tpot"] <= a.slo.get("tpot", math.inf))]
-        errs = collections.Counter(r["err"] or "error" for r in reqs if not r["ok"])
+        errs = collections.Counter(r["err"] or "error" for r in pool if not r["ok"])
         ttft = [r["ttft"] for r in ok if r["ttft"] is not None]
         tpot = [r["tpot"] for r in ok if r["tpot"] is not None]
         rmin, rmax = window_range(run.ready, lo, hi)
         mix = ph.get("mix", "")
-        need = None
-        if mu and mu_blend:
-            m = mu.get(mix) if "," not in mix else mu_blend
-            need = math.ceil(ph["rate"] / m) if m else None
         rows.append({
             "stage": k + 1, "seconds": dur, "rate": ph["rate"], "mix": mix,
             "offered_req_s": len(reqs) / dur,
             "lambda_in": sum(r["in"] for r in reqs) / dur,
             "lambda_out": sum(r["out"] for r in reqs) / dur,
-            "sent": len(reqs), "errors": dict(errs),
-            "A": len(good) / len(reqs) if reqs else None,
+            "sent": len(reqs), "served": len(pool), "errors": dict(errs),
+            "A": len(good) / len(pool) if pool else None,
             "ttft": [pct(ttft, q) for q in (0.5, 0.9, 0.99)],
             "tpot": [pct(tpot, q) for q in (0.5, 0.9, 0.99)],
-            "ready": [rmin, rmax], "need": need,
+            "ready": [rmin, rmax], "need": need(ph["rate"], mix, mu, mu_blend, a.min_input_tokens, min_replicas),
             "requested_replica_s": integral(run.spec, lo, hi) if run.spec else None,
             "ready_replica_s": integral(run.ready, lo, hi)})
 
@@ -162,6 +200,9 @@ def main():
     head = ("| stage | s | set req/s | offered req/s | λ_in tok/s | λ_out tok/s | sent | errors | A "
             "| TTFT p50/p90/p99 s | TPOT p50/p90/p99 ms | Ready | need | requested replica-s "
             "| Ready replica-s |")
+    if a.min_input_tokens is not None:
+        print(f"A, errors, TTFT and TPOT count the {sum(r['served'] for r in rows):,} requests with at least "
+              f"{a.min_input_tokens:,} input tokens (the pool's); offered req/s, λ and sent count every request")
     print(head)
     print("|" + "---|" * (head.count("|") - 1))
     for r in rows:
@@ -175,11 +216,12 @@ def main():
               f"| {fmt(r['requested_replica_s'], 0)} | {fmt(r['ready_replica_s'], 0)} |")
     tot_req = sum(r["requested_replica_s"] or 0 for r in rows)
     sent = sum(r["sent"] for r in rows)
-    good = sum((r["A"] or 0) * r["sent"] for r in rows)
+    served = sum(r["served"] for r in rows)
+    good = sum((r["A"] or 0) * r["served"] for r in rows)
     errs = collections.Counter()
     for r in rows:
         errs.update(r["errors"])
-    summary = {"sent": sent, "A": good / sent if sent else None, "errors": dict(errs),
+    summary = {"sent": sent, "served": served, "A": good / served if served else None, "errors": dict(errs),
                "requested_replica_s": tot_req, "gpu_s": tot_req * a.gpus_per_replica,
                "placement": placement}
     print(f"\nrun: {sent:,} sent, A {summary['A'] * 100:.1f} %, errors {dict(errs) or 0}, "
