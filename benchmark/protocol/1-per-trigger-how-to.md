@@ -93,6 +93,8 @@ at the deployed version.
 5. For each write, name the request event it happens at: arrival at the
    gateway, dispatch by the router, admission by vLLM, first output token, last
    token, completion. Check whether a configuration option changes the event.
+6. Record the definition's label names. They decide which selectors can tell
+   this pool's series from another model's (P10).
 
 **Worked example: `llm_d_epp_inflight_tokens`**, at `llm-d/llm-d-router@6ab5c74`
 (`main`, 2026-11-03), in
@@ -402,6 +404,76 @@ and pins `namespace` on the `inflight_tokens` side only (`:311`); the
 `per_endpoint_queue_size` side selects by `name` (`:317`), and nothing is
 clamped. On a router built from `main` after #3439, plain `sum()` would be
 correct and the intersection harmless. *From the metric's source.*
+
+### P10, selects its own pool
+
+**Question.** On a cluster that also serves other models, does each selector
+match all of the scaled pool's series and nothing else?
+
+**How.**
+
+1. List every vector selector in the query: both sides of each arithmetic
+   operator, of each `and on (…)`, and the numerator and denominator of each
+   ratio.
+2. For each, find the metric's family in the table below, and the labels the
+   selector pins.
+3. Check each selector against the four neighbours of step 1 §1.2, P10: N1
+   another model in the namespace, N2 the scenario in another namespace, N3
+   the other role, N4 a second scrape. A regex matches a neighbour if the
+   neighbour's names fit it: `.*decode.*` matches every model's decode pods.
+4. Check the other direction: does a pin drop series the pool serves? A
+   `model_name` pin on EPP series drops adapters and other models routed to
+   the same pool; a `model_name` pin on vLLM series matches nothing if the
+   server loads a local path without `--served-model-name`; a `role` selector matches
+   nothing without the PodMonitor relabeling (trap T14).
+
+Labels that identify a pool, at llm-d-router `v0.11.0`, `v1.0.0` and `main`
+(`333f331e`) and vLLM `v0.27.0` and `v0.30.0` (traps T15, T16). Names are as
+llm-d-benchmark deploys a stack (trap T17): InferencePool
+`<idLabel>-router`, EPP Service and scrape `job` `<idLabel>-router-epp`,
+Deployments `<idLabel>-decode` and `<idLabel>-prefill`.
+
+| Family | Labels the exporter writes that name a pool or model | Pin |
+|---|---|---|
+| vLLM `vllm:*` | `model_name` (first served name), `engine` (DP rank) | `namespace` and `pod=~"<idLabel>-decode-.*"`; or a `role` label added by relabeling, with `namespace` and `model_name`. Aggregate over `engine` |
+| vLLM `http_*`, `vllm:lora_requests_info`, `vllm:cache_config_info` | none | `namespace` and `pod` |
+| EPP `request_*` (`total`, `error_total`, `running`, `input_tokens`, `output_tokens`, `ttft_seconds`, `outcome_total`) | `model_name`, `target_model_name` | `namespace` and `job="<idLabel>-router-epp"` (or `service`) |
+| EPP `inflight_tokens`, `inflight_requests` | `endpoint_name` (the pod), and a `namespace` of their own, scraped as `exported_namespace` | `namespace` and `endpoint_name=~"<idLabel>-prefill-.*"`, or `job` |
+| EPP `average_*`, `std_dev_*`, `ready_endpoints`, `per_endpoint_queue_size` | `name` = pool name | `namespace` and `name="<idLabel>-router"` |
+| EPP `flow_control_queue_size`, `_pool_saturation`, `_requests_total`, `fairness_id_resolved_total` | `inference_pool` = pool name | `namespace` and `inference_pool="<idLabel>-router"` |
+| EPP `flow_control_stale_endpoints`, `_detector_saturation` | none | `namespace` and `job` |
+| Envoy `envoy_cluster_upstream_rq_total` | `envoy_cluster_name` | the cluster of this pool's route only (trap T6); on a shared gateway, check that each pool has its own cluster |
+| kube-state-metrics `kube_deployment_*` | `namespace`, `deployment` | both |
+
+`namespace`, `pod`, `service` and `job` are not written by the exporters: the
+Prometheus operator adds them from the PodMonitor or ServiceMonitor target. A
+scrape job written by hand with `kubernetes_sd_configs` adds none of them
+unless its relabeling does, and every selector on them then matches nothing.
+
+**Passes when** every selector pins `namespace` and one pool identity from the
+table, every regex fits this stack's names only, and no pin drops the pool's
+own traffic. Whether the labels exist on the cluster, with one series per pod
+and engine, *needs measurement*: step 2 runs
+`count by (namespace, job, pod) (<selector>)` for each selector and expects
+exactly the pool's pods.
+
+**Example.** The prefill trigger reads two selectors. `inflight_tokens` pins
+`namespace` and `endpoint_name=~".*prefill.*"` (`token-aware.yaml:312-314`):
+the regex matches another model's prefill pods in the same namespace (N1), but
+the `and on (target_pod)` keeps only pods that also appear in
+`per_endpoint_queue_size{name="${model.idLabel}-router"}` (`:318`), which is
+this pool's. That side has no `namespace` (N2): it holds only if no pod in
+another namespace has the same name, which is true of Deployments' random
+suffixes and false of LeaderWorkerSets and StatefulSets (`…-prefill-0`).
+**Pass** on N1 and N3, conditional on N2. *From the config.*
+
+The decode trigger of the same scenario,
+`sum(vllm:kv_cache_usage_perc{namespace="${namespace.name}", pod=~".*decode.*"})`
+(`token-aware.yaml:365-366`), sums every model's decode pods in the namespace.
+With this pool's 2 pods at 0.5 and another model's 4 pods at 0.6, it reads
+`2 × 0.5 + 4 × 0.6 = 3.4` against a threshold of 0.8: it asks for
+`ceil(3.4 / 0.8) = 5` pods, where this pool's own reading, 1.0, asks for 2.
+**Fail** on N1. Fix: `pod=~"${model.idLabel}-decode-.*"`. *From the config.*
 
 ### Recording the result
 

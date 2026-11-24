@@ -87,6 +87,7 @@ Symbols (§1.1): `λ` load, `q` request rate at the SLO, `μ_SLO` capacity,
 | P7 | **Fails visibly** | value when the source is down (scrape failure, EPP restart, wrong label) | the scaler errors and `fallback` applies; it does not read 0 |
 | P8 | **Bounded lag and noise** | lag ≈ scrape interval + ½ `rate` window + `pollingInterval`; noise = sample-to-sample swing at steady load against `T` | lag well below cold start; noise well below the 10 % tolerance |
 | P9 | **Measures what it claims** | what the metric's source counts, and when: arrival, admission, first token, last token, completion | the query reads the quantity its role needs, and no known trap applies |
+| P10 | **Selects its own pool** | the series each selector matches on a cluster that also serves other models: another pool in the same namespace, the same scenario in another namespace, the other role of the same model, a second scrape of the same pods | every selector, on both sides of every operator, matches all of the scaled pool's series and no other |
 
 P1–P3 are the core of the assessment. A queue or prefill backlog fails all
 three: by Little's law, per pod it equals utilization × time to first token, and
@@ -264,6 +265,45 @@ versions it was verified on, so first record the deployed version of every
 component the trigger reads; `traps.md` says how to treat a version outside a
 trap's range.
 
+**P10, selects its own pool.** `desired = ceil(U / T)` is this pool's count
+only if `U` is this pool's load. One Prometheus usually scrapes every model on
+the cluster, and the query reads whatever its selectors match. Four neighbours
+export the same metric names as the scaled pool:
+
+- **N1, another model in the same namespace.** llm-d-benchmark's multi-stack
+  scenarios (`examples/multi-model-optimized-baseline`) deploy one EPP,
+  InferencePool and model server per model, all in one namespace.
+- **N2, the same scenario in another namespace**, on a store that sees every
+  namespace (OpenShift's Thanos querier, a cluster-wide Prometheus).
+- **N3, the other role of the same model.** Prefill and decode pods report
+  the same `model_name`.
+- **N4, a second scrape of the same pods** (trap T14).
+
+No label written by the exporters separates all four. The EPP's request
+series carry no pool label; its pool labels hold the bare pool name, which
+repeats across namespaces; vLLM's `model_name` is the same for every pool that
+serves the model (traps T15, T16). Isolation therefore comes from the
+scrape-target labels the Prometheus operator adds (`namespace`, `pod`,
+`service`, `job`), together with a pool label where the metric has one.
+
+Take two models in one namespace, A at 10 req/s and B at 30 req/s, each
+scaled by a request-rate trigger with target 5 req/s per pod. A selector
+pinned on `namespace` alone reads 40 req/s for both: A asks for
+`ceil(40 / 5) = 8` pods instead of 2, B for 8 instead of 6. A ratio built from
+such selectors, such as output tokens per request, averages the two models'
+mixes, so B's long answers set A's per-request cost.
+
+The opposite error drops series the pool serves. The EPP's `model_name` is the
+request's `model` field, so a pool serving a base model and LoRA adapters has
+one series per adapter, and a pin on the base model's name reads only part of
+its load. A pin on vLLM's `model_name` matches nothing when the server loads
+the model from a local path without `--served-model-name`: the label then
+holds that path.
+
+Both errors are silent. An over-wide selector reads a plausible number. A
+selector that matches nothing reads 0 under `or vector(0)` or
+`ignoreNullValues: true` (P7), which looks like no load.
+
 ## 1.3 Classify each trigger
 
 The kind of signal predicts which properties it can have, and therefore which
@@ -296,10 +336,10 @@ Each role must pass these properties:
 
 | Role | Must pass | Why the others do not apply |
 |---|---|---|
-| Driver | P1–P9 | — |
-| Guard | P4, P5 (capped, `T < s_max / 1.1`), P8, P9 | it is not proportional by design; reading 0 on an outage is safe while the driver runs |
-| Alarm | P4, P5 (integrating, overshoot bounded by `maxReplicaCount` and `behavior`), P8, P9 | it reads 0 in normal operation by design |
-| Scale-in veto | P4 (`Value`, since a quantile is intensive), P8, P9, and it never asks for more than the current count | it holds the pool and does not size it |
+| Driver | P1–P10 | — |
+| Guard | P4, P5 (capped, `T < s_max / 1.1`), P8, P9, P10 | it is not proportional by design; reading 0 on an outage is safe while the driver runs |
+| Alarm | P4, P5 (integrating, overshoot bounded by `maxReplicaCount` and `behavior`), P8, P9, P10 | it reads 0 in normal operation by design |
+| Scale-in veto | P4 (`Value`, since a quantile is intensive), P8, P9, P10, and it never asks for more than the current count | it holds the pool and does not size it |
 
 | Kind | Looks like | P1–P3 | Role |
 |---|---|---|---|

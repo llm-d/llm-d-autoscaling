@@ -64,6 +64,13 @@ the default maximum applies unless the rendered object shows otherwise.
   signal but do not stop it oscillating. An exploding signal pins at
   `maxReplicaCount`; that is harmless only if the true need is already at the
   cap.
+- **Isolation from other models.** Each trigger passes P10 on its own; check
+  the ScaledObject too. Its `name` and `scaleTargetRef.name` must contain
+  `${model.idLabel}`, or a second stack that inherits the same `keda:` block
+  writes the same object (trap T17). Every trigger of one ScaledObject must
+  select the same pool, the one `scaleTargetRef` names: a decode
+  ScaledObject that reads prefill series, or another stack's, scales on load
+  it does not carry.
 
 ## Step 3: Write the verdict
 
@@ -162,6 +169,9 @@ the wrong replica count, with the computation.>
 - **Scale-in:** <what drives the pool down, and whether it can go below need>.
 - **behavior and bounds:** <effect of the scale-up/scale-down policies and of
   maxReplicaCount>.
+- **Isolation:** <per neighbour N1–N4 (step 1 §1.2, P10): whether any
+  selector matches its series; and whether the ScaledObject's name and target
+  are unique per stack>.
 
 **Predicted behavior:** <two or three sentences: what the pool does at low
 load, near capacity, past capacity, and at constant load>.
@@ -184,4 +194,4 @@ is a complete verdict at the expected depth.
 
 Before finishing, check the report against the template: every trigger has
 its table, every `fail` has a failure case, every `measure` appears under
-"Needs measurement", and every failure has a fix.
+"Needs measurement", every failure has a fix, and every trigger has a P10 row.
