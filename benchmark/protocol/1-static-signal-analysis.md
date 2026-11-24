@@ -88,6 +88,7 @@ Symbols (§1.1): `λ` load, `q` request rate at the SLO, `μ_SLO` capacity,
 | P8 | **Bounded lag and noise** | lag ≈ scrape interval + ½ `rate` window + `pollingInterval`; noise = sample-to-sample swing at steady load against `T` | lag well below cold start; noise well below the 10 % tolerance |
 | P9 | **Measures what it claims** | what the metric's source counts, and when: arrival, admission, first token, last token, completion | the query reads the quantity its role needs, and no known trap applies |
 | P10 | **Selects its own pool** | the series each selector matches on a cluster that also serves other models: another pool in the same namespace, the same scenario in another namespace, the other role of the same model, a second scrape of the same pods | every selector, on both sides of every operator, matches all of the scaled pool's series and no other |
+| P11 | **Matches the router's configuration** | the EPP's effective plugin set and parameters: which plugin or feature gate produces each EPP series the query reads, and which plugin parameters change what any series in the query reads | every EPP series is produced by a plugin or gate the deployed configuration enables, with one producer per selector, and no parameter changes the quantity the trigger's role needs |
 
 P1–P3 are the core of the assessment. A queue or prefill backlog fails all
 three: by Little's law, per pod it equals utilization × time to first token, and
@@ -304,6 +305,49 @@ Both errors are silent. An over-wide selector reads a plausible number. A
 selector that matches nothing reads 0 under `or vector(0)` or
 `ignoreNullValues: true` (P7), which looks like no load.
 
+**P11, matches the router's configuration.** Many EPP series exist only when
+the EPP runs the plugin that writes them: `inflight_tokens` comes from
+`inflight-load-producer`, `prefix_*_cached_tokens` from a prefix-cache
+producer, `flow_control_*` from the `flowControl` feature gate. A query on a
+series no plugin writes matches nothing, and KEDA reads the empty result as 0
+(trap T7): the trigger never fires and nothing reports an error. This is P7's
+silent failure, built into the configuration rather than caused by an outage.
+
+The configuration that counts is the effective one, not the file. The EPP's
+loader adds plugins the file omits: the `utilization-detector` saturation
+detector, the vLLM metrics data source, and a default producer for any data a
+configured plugin requires (trap T18). A scorer can therefore bring in
+`inflight-load-producer` without the file naming it, and removing the scorer
+removes the series. When two plugins of the same type run, each writes its own
+series, told apart by `plugin_name` or `producer_name`; a selector that does
+not pin it sums both.
+
+Plugin parameters also change what a series reads, including vLLM's own:
+
+- `inflight-load-producer`'s `addEstimatedOutputTokens` adds an estimate of
+  each request's output tokens to `inflight_tokens` and, on endpoints that
+  decode, holds them until the last token: a prefill backlog becomes a count of
+  work in progress (§1.3, "Placing a gauge").
+- The saturation detector is also a scheduling filter, added to every
+  profile. With the default thresholds, a pod with 5 requests waiting or 80 %
+  KV-cache usage receives no new request while another pod is below both, so a
+  per-pod `max()` above those values fires only once every pod is past them
+  (trap T19).
+- With the `flowControl` gate on, the detector holds requests in the EPP's
+  queue. Under `concurrency-detector` with `maxConcurrency` 8, a pod never has
+  more than 8 requests in flight: `vllm:num_requests_running` is capped at 8
+  (P5) and `vllm:num_requests_waiting` stays near 0 under any overload (KV
+  preemption aside), while the backlog moves to `flow_control_queue_size`
+  (traps T4, T20).
+
+Take a pool scaled by `sum(vllm:num_requests_waiting)` with target 4,
+behind an EPP with flow control and `concurrency-detector` at
+`maxConcurrency: 8` on pods with `--max-num-seqs 16`. At twice the pool's
+capacity the router queue grows by hundreds of requests, and the trigger reads
+about 0: the pool stays at its size. Read alone, the query is an alarm (§1.3)
+that grows under overload; only the router's configuration shows that the
+overload never reaches the series.
+
 ## 1.3 Classify each trigger
 
 The kind of signal predicts which properties it can have, and therefore which
@@ -336,10 +380,10 @@ Each role must pass these properties:
 
 | Role | Must pass | Why the others do not apply |
 |---|---|---|
-| Driver | P1–P10 | — |
-| Guard | P4, P5 (capped, `T < s_max / 1.1`), P8, P9, P10 | it is not proportional by design; reading 0 on an outage is safe while the driver runs |
-| Alarm | P4, P5 (integrating, overshoot bounded by `maxReplicaCount` and `behavior`), P8, P9, P10 | it reads 0 in normal operation by design |
-| Scale-in veto | P4 (`Value`, since a quantile is intensive), P8, P9, P10, and it never asks for more than the current count | it holds the pool and does not size it |
+| Driver | P1–P11 | — |
+| Guard | P4, P5 (capped, `T < s_max / 1.1`), P8, P9, P10, P11 | it is not proportional by design; reading 0 on an outage is safe while the driver runs |
+| Alarm | P4, P5 (integrating, overshoot bounded by `maxReplicaCount` and `behavior`), P8, P9, P10, P11 | it reads 0 in normal operation by design |
+| Scale-in veto | P4 (`Value`, since a quantile is intensive), P8, P9, P10, P11, and it never asks for more than the current count | it holds the pool and does not size it |
 
 | Kind | Looks like | P1–P3 | Role |
 |---|---|---|---|

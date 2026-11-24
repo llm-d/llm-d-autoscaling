@@ -31,6 +31,11 @@ Clone exporters' source into a temporary directory, never into this
 repository. When a trigger reads the same metric as an earlier one, reuse that
 analysis.
 
+Before the first trigger, build the EPP's effective plugin set once, as the
+how-to's P11 says (§2's configuration record and trap T18), and reuse it for
+every trigger. Every trigger gets a P11 row, the vLLM ones included: the
+saturation detector and flow control change what vLLM's series read.
+
 ## Step 2: Check the combination
 
 Once every trigger has its rows, check the ScaledObject as a whole. With this
@@ -64,6 +69,13 @@ the default maximum applies unless the rendered object shows otherwise.
   signal but do not stop it oscillating. An exploding signal pins at
   `maxReplicaCount`; that is harmless only if the true need is already at the
   cap.
+- **Router configuration.** Each trigger passes P11 on its own; check the
+  ScaledObjects together too. A plugin added for one trigger can change
+  another's series: a `concurrency-detector` under flow control, added to
+  feed one pool's trigger, also empties `vllm:num_requests_waiting` on every
+  pool the EPP routes to (trap T20). On
+  prefill/decode, both pools share one EPP and its effective set, unless the
+  scenario runs one EPP per role.
 - **Isolation from other models.** Each trigger passes P10 on its own; check
   the ScaledObject too. Its `name` and `scaleTargetRef.name` must contain
   `${model.idLabel}`, or a second stack that inherits the same `keda:` block
@@ -129,6 +141,7 @@ behavior in one sentence.>
 | Component | Version | Source of the version |
 |---|---|---|
 | <EPP> | <v0.11.0> | <llm-d-benchmark defaults.yaml@commit:line> |
+| <EPP configuration> | <file name; feature gates; plugins the loader adds> | <scenario or values file:line> |
 
 ## ScaledObject `<name>`
 
@@ -194,4 +207,4 @@ is a complete verdict at the expected depth.
 
 Before finishing, check the report against the template: every trigger has
 its table, every `fail` has a failure case, every `measure` appears under
-"Needs measurement", every failure has a fix, and every trigger has a P10 row.
+"Needs measurement", every failure has a fix, and every trigger has a P10 and a P11 row.

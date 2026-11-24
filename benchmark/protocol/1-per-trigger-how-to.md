@@ -74,6 +74,25 @@ A floating tag (`latest`, `main`, `auto`) is not a version. Resolve it to an
 image digest from a running pod, or tag every finding that depends on it
 *needs measurement*.
 
+Record the EPP's configuration with its version: P11 reads it.
+
+- the `EndpointPickerConfig` the EPP loads: the scenario's
+  `router.epp.pluginsCustomConfig` entry named by `pluginsConfigFile`, a
+  guide's values file layered by the scenario, or, when neither names a file,
+  the router chart's `default-plugins.yaml`
+  (`config/charts/routerlib/templates/_config.yaml`). After a `--dry-run`, the
+  rendered `12_router-values.yaml` holds it;
+- its `featureGates` (and any `--feature-gates` flag in
+  `router.epp.flags`), its `flowControl` section, and every plugin's
+  `parameters`;
+- the EPP flags that set data-layer timing: `--refresh-metrics-interval`
+  (50 ms), `--refresh-prometheus-metrics-interval` (5 s),
+  `--metrics-staleness-threshold` (2 s).
+
+On a running EPP, the startup log has the result: an `Effective raw
+configuration` line with the file and the loader's defaults, then one
+`auto-created default producer` line per producer the loader added (trap T18).
+
 ## 3. Find what each metric counts, and when
 
 The metric name is a hint, not evidence. Read the code that writes the series,
@@ -474,6 +493,87 @@ With this pool's 2 pods at 0.5 and another model's 4 pods at 0.6, it reads
 `2 × 0.5 + 4 × 0.6 = 3.4` against a threshold of 0.8: it asks for
 `ceil(3.4 / 0.8) = 5` pods, where this pool's own reading, 1.0, asks for 2.
 **Fail** on N1. Fix: `pod=~"${model.idLabel}-decode-.*"`. *From the config.*
+
+### P11, matches the router's configuration
+
+**Question.** Does the EPP's effective configuration write every EPP series
+the query reads, once, and leave every series in the query meaning what the
+trigger's role needs?
+
+**How.**
+
+1. Build the effective plugin set from §2's record: the plugins the file
+   lists, plus what the loader adds (trap T18). The `utilization-detector`
+   saturation detector and the vLLM metrics data source are always there
+   unless replaced. For each plugin, list the data it requires; if nothing
+   listed produces it, the loader adds the default producer with no
+   parameters, named after its type.
+2. For each EPP selector, find the producer in the table below and check that
+   it is in the effective set. Count the instances that write the series: more
+   than one needs a pin on `plugin_name` or `producer_name`.
+3. For every series in the query, EPP or vLLM, check the parameters in the
+   second table below against the deployed values.
+4. If the EPP image floats (`main`), the plugin set and the defaults are those
+   of the resolved commit: the result *needs measurement* until it is resolved.
+
+Producers, at llm-d-router `v1.0.0` and `main` (`26871a0e`):
+
+| Series (`llm_d_epp_…`) | Written only when | Instance label |
+|---|---|---|
+| `request_*`, `model_rewrite_decisions_total` | always | none |
+| `inflight_requests`, `inflight_tokens` | `inflight-load-producer` is in the effective set; `inflight_tokens` also needs a `token-producer` (estimate backend by default) | `producer_name` |
+| `prefix_predicted_cached_tokens`, `prefix_best_predicted_cached_tokens`, `prefix_best_available_cached_tokens`, `prefix_prompt_tokens`, `prefix_indexer_*` | an `approx-prefix-cache-producer` or `precise-prefix-cache-producer`; `prefix_*_cached_tokens` are absent on `v0.11.0` | `plugin_name` |
+| `kv_cache_events_*`, `kv_cache_index_*` | `precise-prefix-cache-producer`; `kv_cache_index_*` also needs `indexerConfig.enableMetrics` | none |
+| `disagg_decision_total` | `disagg-profile-handler` | `plugin_name` |
+| `token_producer_*` | `token-producer` with the vLLM `/render` backend | `plugin_name` |
+| `request_predicted_*`, `request_slo_violation_total` | `predicted-latency-producer` | `plugin_name` |
+| `ready_endpoints`, `average_*`, `per_endpoint_queue_size` | the vLLM metrics extractor (injected unless `dataLayer.injectDefaults: false`); otherwise 0, or frozen (trap T2) | `name` |
+| `flow_control_*` (queue, saturation, `requests_total`) | the `flowControl` feature gate (default off) | `inference_pool` |
+| `flow_control_stale_endpoints` | `utilization-detector`; with the gate off, only when a request with priority < 0 arrives | `detector` |
+| `flow_control_detector_saturation` | `max-saturation-detector` | `detector` |
+| `fairness_id_resolved_total`, `request_outcome_total` | `main` only, always | none |
+
+Parameters that change what a trigger reads:
+
+| Parameter (default) | Plugin | Series it changes | Check |
+|---|---|---|---|
+| `addEstimatedOutputTokens` (`false`) | `inflight-load-producer` | `inflight_tokens`: prompt tokens until the first token, or plus an estimate of 100, 1000 or 4096 output tokens held to the last token on decode endpoints | the gauge's kind (§1.3) matches the role |
+| `prefixMatchInfoProducerName` (the approximate producer) | `inflight-load-producer` | which cached prefix `inflight_tokens` subtracts | names a producer in the effective set |
+| `blockSizeTokens` (64), `maxPrefixTokensToMatch` (131072), `lruCapacityPerServer`, `autoTune` (`true`) | `approx-prefix-cache-producer` | `prefix_*_cached_tokens`: 64-token steps, capped; an LRU smaller than the pods' KV cache predicts fewer hits | a capacity divisor is in the same tokens |
+| `queueDepthThreshold` (5), `kvCacheUtilThreshold` (0.8), `headroom` (0), `metricsStalenessThreshold` (200 ms) | `utilization-detector` (default) | per-pod `vllm:num_requests_waiting` and `vllm:kv_cache_usage_perc` levelled at these limits (trap T19); `flow_control_pool_saturation` | a per-pod `max()` threshold above a limit fires only when every pod is past it |
+| `stalenessPolicy` (`saturated`) | `utilization-detector` | `flow_control_pool_saturation` reads 1.0 for a stale pod (trap T9) | the query gates on `flow_control_stale_endpoints == 0` |
+| `maxConcurrency` (100), `concurrencyMode` (`requests`), `maxTokenConcurrency`, `failOpen` (`true`) | `concurrency-detector` | with the gate on, per-pod `running + waiting ≤ maxConcurrency` and the excess in `flow_control_queue_size` (trap T20) | a `running` trigger's threshold `< maxConcurrency / 1.1` (P5); no `waiting` trigger is meant to see overload |
+| the `flowControl` feature gate (off) | — | `vllm:num_requests_waiting` bounded (T4); `request_total` counts at dispatch (T8); vLLM's TTFT misses the router queue (T10) | the trigger reads the backlog where it now accumulates |
+| `defaultRequestTTL` (60 s), band `maxRequests` (5000), `maxBytes` | `flowControl` | `flow_control_queue_size` stops growing; the rest leaves as 429 in `request_error_total{error_code="ResourceExhausted"}` | an integrating alarm on the queue is capped (P5) |
+| `conditions[].maxValue`, `fallbackOnEmpty` (`false`) | `utilization-filter` | per-pod caps on running, waiting or KV usage; past them, 503 instead of queueing | a trigger on the capped series has `T < cap / 1.1` |
+| `affinityThreshold` (0.80), `maxTTFTPenaltyMs` (18000) | `prefix-cache-affinity-filter` | load concentrates on cache-warm pods: per-pod `max()` reads above the pool's mean | a `max()` trigger is meant to follow the hottest pod |
+| the profile weights of `prefix-cache-scorer` against the load scorers | scorers | the same concentration, softer | as above |
+
+**Passes when** every EPP series is written by a plugin or gate in the
+effective set, each selector matches one producer instance, and no parameter
+changes the quantity the role needs. Whether the series exist on the running
+EPP *needs measurement* when the image floats: step 2 runs
+`count by (job, plugin_name, producer_name) (<selector>)`.
+
+**Example.** The prefill trigger reads `inflight_tokens` and
+`per_endpoint_queue_size`. The file lists `inflight-load-producer`
+(`token-aware.yaml:171`); `active-request-scorer` in the decode profile would
+have brought it in anyway. It runs with no parameters, so
+`addEstimatedOutputTokens` is `false`: the gauge is a prefill backlog, as
+step 3 found. No tokenizer is configured, so the loader adds `token-producer`
+with its estimate backend, and the prompt tokens are an estimate, not the
+engine's count. `per_endpoint_queue_size` needs the metrics extractor, which
+the loader injects. The trigger pins neither `producer_name` nor `plugin_name`;
+one instance writes the series, so that is safe here, and it breaks as soon as a
+second producer is configured. **Pass**, with the estimated tokens noted under
+P3. *From the config* and *from the metric's source*.
+
+The decode trigger reads `vllm:kv_cache_usage_perc` against 0.8. The
+default `utilization-detector` is injected into both profiles with
+`kvCacheUtilThreshold: 0.8`, so while any decode pod is below 80 % no request
+goes to a pod above it: the pool fills evenly, which suits a `sum()` trigger.
+A per-pod `max()` guard at 0.95, as in `baseline.yaml`, rises above 0.8 only
+once every decode pod is past 0.8 (trap T19). *From the metric's source.*
 
 ### Recording the result
 

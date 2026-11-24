@@ -45,6 +45,7 @@ the engine's saturation behavior.
 | P8 lag and noise | partly: lag is measurable on either; noise at steady load needs realistic batching | `vllm-model-sim` for noise |
 | P9 measures what it claims | depends on the trap; label and counter-semantics traps (T1, T6, T8) need no knee, KV and queue semantics do | trap by trap |
 | P10 selects its own pool | no: it is about which series a selector matches | either; `inference-sim` is enough |
+| P11 matches the router's configuration | for series presence and labels, no; for what the detector or flow control does to vLLM's series, yes: holding and filtering act at saturation | `inference-sim` for presence, `vllm-model-sim` for the rest |
 
 The `llm-d-inference-sim` has no knee we can rely on. Its linear
 `time-factor-under-load` can show that a pool scales out in the right
@@ -106,6 +107,7 @@ runs these steps in this order, with the commands.
    | P8 lag and noise | step the load; at steady load read the sample-to-sample swing | either one is not |
    | P9 measures what it claims | read the metric against an independent count of the quantity it claims | it does not, or the series is absent |
    | P10 selects its own pool | deploy a second stack (another model, or the same scenario in a second namespace), load only the other one, and run `count by (namespace, job, pod) (<selector>)` for each selector | the trigger moves with the other stack's load, or a selector matches pods outside the pool, or none of its own |
+   | P11 matches the router's configuration | read the EPP's startup log: the `Effective raw configuration` line (the file plus the loader's defaults) and one `auto-created default producer` line per injected producer; run `count by (job, plugin_name, producer_name) (<selector>)` for each EPP selector; for a detector or flow-control finding, step the load past capacity and read the vLLM series and `flow_control_queue_size` together | a series is absent or written by two instances, or the vLLM series stays flat while the router queue grows |
 
 2. **Pick the simulator** per §2.1, and check for gaps per §2.2.
 3. **Isolate the run.** Use the Kubernetes context the user chose (the
@@ -157,7 +159,7 @@ One file per scenario, next to the step 1 verdict, as
 - the scenario, backend overlay, simulator and its image digest, the profile
   and whether it is tuned, KEDA release, date;
 - the calibrated knee, with the traffic mix it applies to;
-- the verdict **by property**: one section per property, P1 to P10, in order,
+- the verdict **by property**: one section per property, P1 to P11, in order,
   each with a table of one row per trigger: step 1's result, the
   observation (the numbers read from the cluster), and an outcome:
   - **not verified by this skill**: step 1 marked it pass or n/a; the row
@@ -211,6 +213,7 @@ proof is still empirical.
   | P8 lag and noise | signal against the true load over time, with the lag marked and the noise band against the 10 % tolerance |
   | P9 measures what it claims | the metric against an independent ground truth (for example the load generator's own count) over time |
   | P10 selects its own pool | trigger value and replica count over time while only the other stack is loaded, with this stack's own load drawn at 0 |
+  | P11 matches the router's configuration | the trigger's series and the series where the excess goes (for example `flow_control_queue_size`) over time through a load step, with offered load |
 
 - **Readable alone.** Axis labels with units, a legend, the threshold or
   target drawn and labelled, and a title that states what the plot shows.
