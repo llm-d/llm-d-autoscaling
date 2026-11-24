@@ -21,6 +21,9 @@ resolving inputs, putting `llmdbenchmark` on PATH, cluster preflight, dry-run;
 Step 5 standup; Step 7 ScaledObject checks; Step 10 teardown). Do not repeat
 them here — follow them, with the same flags on every command. Confirm
 `kubectl config current-context` with the user before the first cluster write.
+On a local cluster, run Step 4's local memory check first. The peak here is
+the stood-up pods plus one replica of the role you scale (more if the load
+overshoots), not every role at `maxReplicaCount`.
 
 ## Speed: patch the timings first
 

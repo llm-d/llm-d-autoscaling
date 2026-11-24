@@ -33,13 +33,47 @@ Scripts in this directory (standard library Python):
   (each ScaledObject's role, name and target) next to it;
 - `scripts/blis_run.py` runs one load with an arm and leaves the run in
   llm-d-benchmark's layout, one controller per pool, with the trigger series
-  from the decision logs.
+  from the decision logs. It runs blis under a memory guard (see "Memory").
 
 The loads (`gen_load.py --target blis`) and the per-stage table
 (`stage_table.py`) are shared with step 5, in `benchmark/protocol/scripts/`.
 
 Nothing here touches a cluster. Every write is local: the lab checkout,
 `benchmark/results/` (not committed) and the verdicts.
+
+## Memory
+
+blis keeps every request of a run in memory until the run ends, so a long
+or heavy load (the agentic run, overload over the cap, a long knee) can take
+many GiB and push a laptop into swap or the out-of-memory killer.
+`blis_run.py` guards against this:
+
+- one blis runs at a time: a second `blis_run.py` waits on a lock in
+  `$TMPDIR`. Run the runs in sequence. Do not start them in the background
+  or from parallel agents to save time, because they would queue anyway;
+- it refuses to start unless 1 GiB plus a reserve is available. The reserve
+  defaults to the larger of 2 GiB and 10 % of physical memory; set it with
+  `--reserve <GiB>`;
+- while blis runs, it is killed when its RSS passes `--max-rss <GiB>`
+  (default: what was available at the start, less the reserve), or when the
+  system's available memory falls under the reserve. Either way,
+  `blis_run.py` exits with **out of memory budget** and writes
+  `sim/memory.json`. Nothing is converted;
+- every run records blis's peak RSS and the budget under `memory` in
+  `blis-run.json`, and prints them.
+
+Before the first run, check what is free: `vm_stat` and Activity Monitor's
+Memory Used on macOS, `free -g` on Linux. Close what holds memory, such as a
+local Kind cluster (`make destroy-kind-cluster`) or other simulations. Keep
+an eye on the peaks: a knee's peak RSS, scaled by the request count of the
+longer runs, says whether they will fit.
+
+A run killed for its memory budget is a tool limit, not a result. It fails
+the gate. Do not shorten its load to make it fit, because the run set fixes
+the lengths (run-set.md §2). Free memory and rerun it. If it still does not
+fit, run it on a machine with more memory. Otherwise mark it *not run* in the
+summary, with the peak RSS and budget from `sim/memory.json`. Never raise
+`--max-rss` past what the machine has free, and never set `--reserve` to 0.
 
 ## Step 1: The lab
 
@@ -144,8 +178,10 @@ role for P/D, `composite.json` with a formula).
 1. **The first knee gates the translation** (3-blis-evaluation.md §3.5):
    read `$RAW/<run>/sim/signals-hpa[-<role>].csv`; every trigger's
    `<name>_value` leaves 0, and each exact trigger reads what its query would
-   for the load. Rerun it once with the command in `sim/command.txt` and
-   compare the decision logs' sha256 with `blis-run.json` (§3.7).
+   for the load. Rerun it once with the command in `sim/command.txt`, under
+   the memory guard, and compare the decision logs' sha256 with
+   `blis-run.json` (§3.7): `python3 -I $B/blis_run.py --rerun $RAW/<run>/sim`
+   prints both and exits non-zero when they differ.
 2. **After the knees**, read μ_SLO with `stage_table.py --knee X`
    (run-set.md §5; no `--trace`: the clock comes from `blis-run.json`). A
    capacity-derived threshold is applied by rewriting the policy with
@@ -155,7 +191,8 @@ role for P/D, `composite.json` with a formula).
    behavior and cold start (run-set.md §2).
 3. **Gate every run**: run-set.md §4 and 3-blis-evaluation.md §3.7. A failed
    gate is a tool or input error: fix it, rerun, and list the failed attempt
-   in the summary.
+   in the summary. A run killed for its memory budget fails too; see
+   "Memory".
 
 ## Step 4: Report each run as it finishes
 
@@ -186,5 +223,8 @@ to the number it affects.
 As run-set.md §5, "Resuming". The plant check: the lab is at the commit the
 summary names, and `$V/policy.json` is the one the last report's
 `policy.json` came from (the arm aside). Raw results are cheap to rebuild:
-rerun a run whose `$RAW` directory is gone with its `command.txt`, and check
-the decision logs' sha256 against its `blis-run.json`.
+rebuild the blis output of a run whose `$RAW` directory is gone with
+`python3 -I $B/blis_run.py --rerun $V/<run> --out $RAW/<run>/sim`, which
+reruns its `command.txt` under the memory guard and checks the decision
+logs' sha256 against its `blis-run.json`. Do not run a bare `command.txt`:
+it runs blis without the guard.
