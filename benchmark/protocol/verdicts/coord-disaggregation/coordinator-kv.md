@@ -108,9 +108,9 @@ and decode (llm-d/llm-d#3112).
 ### Trigger `prefill-uncached-prompt-tokens`
 
 ```promql
-sum(rate(llm_d_epp_prefix_prompt_tokens_sum{namespace="${NAMESPACE}",endpoint_role="prefill",plugin_name="decode-prefix-producer"}[2m]))
+sum(rate(llm_d_epp_prefix_prompt_tokens_sum{namespace="${NAMESPACE}",job="coord-disaggregation-epp",endpoint_role="prefill",plugin_name="decode-prefix-producer"}[2m]))
 -
-sum(rate(llm_d_epp_prefix_predicted_cached_tokens_sum{namespace="${NAMESPACE}",endpoint_role="prefill",plugin_name="decode-prefix-producer"}[2m]))
+sum(rate(llm_d_epp_prefix_predicted_cached_tokens_sum{namespace="${NAMESPACE}",job="coord-disaggregation-epp",endpoint_role="prefill",plugin_name="decode-prefix-producer"}[2m]))
 ```
 
 `metricType: AverageValue`, `threshold: "7782"` (0.7 x 11,117 computed prompt
@@ -152,6 +152,7 @@ tokens/s, the prefill knee for 8192:256, `sim`), `activationThreshold: "0"`,
 | P7 fails visibly | pass | No `or vector(0)`, `ignoreNullValues: "false"`, fallback holds. Series are absent until the first prefill dispatch after an EPP start, so an idle fresh deploy shows `Fallback=True` at `minReplicaCount` | config / source |
 | P8 lag and noise | fail at one pod | **Lag:** `10 + 60 + 15 = 85 s`, below the 120 s cold start (`sim` value; GPU cold start *needs measurement*). **Noise:** one pod at threshold receives `7,782 / 8,192 = 0.95` prefill requests/s, 114 per 120 s window, so `1 / √114 = 9.4 %` with equal lengths: at the 10 % tolerance. 6.6 % at two pods. `[3m]` would give 7.6 % at one pod for 30 s more lag | config |
 | P9 measures what it claims | pass | Uncached prompt tokens dispatched to prefill. **Conditions:** (1) single-EPP topology only (the 3-EPP prefill EPP labels its series `decode`); (2) `plugin_name` pinned; (3) the guide's `token-producer` supplies engine token IDs; (4) the EPP runs `main`, so main-only producer changes apply: `indexCompletions` is opt-in on `main` (llm-d-router#3847), which lowers predicted hits for multi-turn traffic and raises this value; the offload-sized LRU (#2292) needs offloading, which the guide does not enable. No listed trap applies; T14's double scrape does not apply (one ServiceMonitor) | source |
+| P10 selects its own pool | pass (needs measurement on a cluster) | Both selectors pin `namespace`, `job="coord-disaggregation-epp"`, `endpoint_role="prefill"` and `plugin_name`. The job is this guide's EPP scrape: the router chart (`llm-d-router-gateway` `v0`, digest `sha256:5794540136b7…`, rendered with the guide's values and `features/monitoring.values.yaml`) names the EPP Service `coord-disaggregation-epp` and its ServiceMonitor sets `jobLabel: app.kubernetes.io/name`, whose value is the same. **N1:** another model's EPP in the namespace is its own release and job, so it is excluded (without the job pin it was summed in: the earlier selector failed N1). **N2:** `namespace`. **N3:** decode dispatches carry `endpoint_role="decode"`. **N4:** one ServiceMonitor on the EPP. Nothing the pool serves is dropped: one EPP routes every request. That the series carry this `job` on the cluster is *needs measurement*: step 2 ran these queries without the pin; `count by (namespace, job) (...)` should give one job | source / measure |
 
 **Failure case (P3):** a deployment whose prompts are mostly 12k tokens, with
 the threshold taken from 8k prompts. Each prefill pod is asked to carry 7,782
@@ -167,7 +168,7 @@ tokens/s against a 6,648 tokens/s capacity at the SLO (117 %).
 ### Trigger `decode-kv-usage-2m`
 
 ```promql
-sum(max by (pod, engine) (avg_over_time(vllm:kv_cache_usage_perc{namespace="${NAMESPACE}",pod=~"pd-disagg-coord-.+-decode-.+"}[2m])))
+sum(max by (pod, engine) (avg_over_time(vllm:kv_cache_usage_perc{namespace="${NAMESPACE}",pod=~"pd-disagg-coord-[0-9]+-[0-9a-f]{8}-decode-[0-9]+(-[0-9]+)?"}[2m])))
 ```
 
 `metricType: AverageValue`, `threshold: "0.45"`, `activationThreshold: "0"`,
@@ -189,8 +190,11 @@ turns into 76 to 87 % of knee load.
 - **Selecting decode pods:** vLLM series carry no role label (trap T14).
   DisaggregatedSet pods are named `<set>-<slice>-<revision>-<role>-<group>` (W
   `pkg/utils/disaggregatedset/utils.go:96-98`, LWS pod suffix `-<groupIndex>`),
-  so `pod=~"pd-disagg-coord-.+-decode-.+"` selects decode. `max by (pod,
-  engine)` removes a second scrape of the same engine (two jobs or endpoints on
+  and the revision is the first 8 hex digits of a sha256 (W
+  `utils.go:118`, `computeRevision`), so
+  `pod=~"pd-disagg-coord-[0-9]+-[0-9a-f]{8}-decode-[0-9]+(-[0-9]+)?"` selects
+  decode, worker pods included, and no other set named `pd-disagg-coord-*`.
+  `max by (pod, engine)` removes a second scrape of the same engine (two jobs or endpoints on
   one pod give series that differ only in `job`, `endpoint` or `instance`, T14)
   and keeps each data-parallel engine of a pod, which has its own `engine`
   label; the series carry `container, endpoint, engine, instance, job,
@@ -218,6 +222,7 @@ turns into 76 to 87 % of knee load.
 | P7 fails visibly | pass | No `or vector(0)`, `ignoreNullValues: "false"`, fallback holds. Without the decode PodMonitor the query is empty from the start (visible, but the pool never scales); with it, a scrape outage errors and holds | config |
 | P8 lag and noise | fail on long outputs | **Lag:** `30 + 60 + 15 = 105 s`, plus the time the load takes to appear in KV: a request's context grows as it decodes, so a shift to 4,096-token outputs reaches steady occupancy after about one decode duration (2 to 3 minutes). That exceeds the 120 s cold start. **Noise:** instant, one pod: CV 21 to 38 % on 8192:256 (each request is about 2.8 % of the pool); with `[2m]`, 8 to 10 % (`sim`) | config / sim |
 | P9 measures what it claims | pass | Reads the KV decode's requests hold, its binding resource here. **Conditions:** (1) the model-server PodMonitors are applied (llm-d/llm-d#3114, port `modelserver`; the scenario's monitoring step does it); (2) pod names follow the DisaggregatedSet pattern above; (3) vLLM v0.34 sizes the KV pool after warm-up by default (`vllm-extensible-kv-cache`), which changes what 1.0 means; the guide runs v0.31.0. No listed trap applies beyond T14, handled by `max by (pod, engine)` and the name selector | source |
+| P10 selects its own pool | pass (needs measurement on a cluster) | `namespace` and `pod=~"pd-disagg-coord-[0-9]+-[0-9a-f]{8}-decode-[0-9]+(-[0-9]+)?"`. **N1:** a set of another name fails the prefix, and a set named `pd-disagg-coord-<x>` fails `-[0-9]+-[0-9a-f]{8}-` (the earlier `pd-disagg-coord-.+-decode-.+` matched it). **N2:** `namespace`. **N3:** the role is in the name. **N4:** `max by (pod, engine)`. Every decode pod of this set matches: each slice, group and worker index. Step 2 checked the earlier regex on the cluster (S1); the pod names were not recorded, so the tighter one is *needs measurement*: `count by (pod) (...)` should give the decode pods | source / measure |
 
 **Failure case (P8):** decode right-sized at 1 pod for 8192:256 at 1.6 req/s;
 traffic switches to 256:4096 at the same rate. KV fills over about two minutes
@@ -228,7 +233,7 @@ then 100 % at 4 pods.
 ### Trigger `decode-waiting-alarm`
 
 ```promql
-sum(max by (pod, engine) (vllm:num_requests_waiting{namespace="${NAMESPACE}",pod=~"pd-disagg-coord-.+-decode-.+"}))
+sum(max by (pod, engine) (vllm:num_requests_waiting{namespace="${NAMESPACE}",pod=~"pd-disagg-coord-[0-9]+-[0-9a-f]{8}-decode-[0-9]+(-[0-9]+)?"}))
 ```
 
 `metricType: AverageValue`, `threshold: "5"`, `activationThreshold: "0"`,
@@ -250,6 +255,7 @@ sum(max by (pod, engine) (vllm:num_requests_waiting{namespace="${NAMESPACE}",pod
 | P6 / P7 | as the KV driver | Absent series at zero pods; empty without the PodMonitor | source |
 | P8 lag | pass | `30 + 15 = 45 s`, instant gauge | config |
 | P9 | pass with condition | On vLLM < v0.32, KV fetches in flight count as waiting; the threshold must stay well above `arrivals x fetch time` per pod (*needs measurement* on the deployed connector) | source / measure |
+| P10 | as the KV driver | The same selector | source / measure |
 
 ## Combination
 
@@ -307,6 +313,10 @@ gate.
    Still open: the effect of `indexCompletions` on the floating EPP for
    multi-turn traffic (prefill P9), which step 2's prompts did not exercise.
 6. The EPP image digest the guide deploys.
+7. The P10 selectors on the cluster: `count by (namespace, job) (...)` of the
+   prefill trigger's series gives one job, `coord-disaggregation-epp`, and
+   `count by (pod) (...)` of the decode selector gives exactly the decode pods
+   (prefill P10, decode P10).
 
 ## Fixes and open decisions
 
