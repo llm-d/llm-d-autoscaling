@@ -11,7 +11,7 @@ GPU measurement, and none is given to step 5.
 
 | | |
 |---|---|
-| Plant | blis-signal-lab `25f2dfb` (branch `signals-hpa`), built with Go 1.27.2. Run 4b only: with the TTFT projection of inference-sim `dfa8987` (#2237) applied ([`lab-patch.diff`](coordinator-kv-step3/overload-over/lab-patch.diff)), which changes the reported TTFT of preempted decode sub-requests and nothing the HPAs read (its decision logs are byte-identical without it) |
+| Plant | blis-signal-lab `25f2dfb` (branch `signals-hpa`), built with Go 1.27.2. Run 4b only: with the TTFT projection of inference-sim `dfa8987` (#2237) applied ([`lab-patch.diff`](coordinator-kv-step3/overload-over/lab-patch.diff)), which raises the reported TTFT of most disaggregated requests by about 20 ms (18.4 ms on average on the prefill 8192:256 knee, which does not move) and nothing the HPAs read (its decision logs are byte-identical without it), so run 4b's TTFT and A are on that basis |
 | Catalog | blis-substrate `v0.14.0` (the lab's `go.mod`) has no `Qwen/Qwen3-VL-32B-Instruct`; the runs use a local copy of the catalog with the entry proposed in inference-sim/blis-substrate#415 (open). When #415 merges and the lab moves to it, `blis catalog resolve` needs no local copy |
 | BLIS scenario | [`coord-pd-qwen3-vl-32b-h100-bf16-tp2.yaml`](coordinator-kv-step3/coord-pd-qwen3-vl-32b-h100-bf16-tp2.yaml), written for the evaluation: a `prefill` and a `decode` pool of 4 H100 replicas each, bf16, TP2 per role, the guide overlay's GPU type and parallelism. Router [`router/pd-prefix-8192.yaml`](coordinator-kv-step3/router/pd-prefix-8192.yaml): the prefix decider with `nonCachedTokens` 8192, the guide's PD-only value |
 | Coordinator | not modelled: blis has no Coordinator, so the EPP's P/D flow with the prefix decider stands in for conditional-decode → prefill → decode (upstream ask inference-sim/inference-sim#1959). Step 2 checked the Coordinator's 412 path on a cluster |
@@ -227,3 +227,13 @@ Detail by run:
   and to inference-sim's later fix (`dfa8987`); run 4b rerun on `25f2dfb` with
   that fix applied. Its decision logs and pod series match the failed attempt's
   byte for byte.
+- 2026-11-24, amendment: the fix was described as changing only the preempted
+  requests' TTFT. It raises the TTFT of most disaggregated requests: on the
+  prefill 8192:256 knee rerun with it
+  ([`lab-patch-rerun/`](coordinator-kv-step3/knees/prefill-8192x256/lab-patch-rerun/ttft-shift.txt)),
+  1,286 of 1,534 requests by 18.4 ms on
+  average (at most 24.3 ms), E2E unchanged, A unchanged in stages 1 to 3, so
+  the knee does not move. Run 4b's TTFT and A are on that basis; runs 1 to 10
+  are not. Found porting the fix to blis-signal-lab
+  (vishakha-ramani/blis-signal-lab#7). The plant row and run 4b's report are
+  amended; no other number changes.

@@ -16,7 +16,7 @@ Part of the [step 3 summary](../../coordinator-kv-step3.md). Simulator numbers: 
 | Load | `overload-over` in [`index.json`](../index.json) |
 | Arm | as run 2 |
 | Raw results | `benchmark/results/step3-coordinator-kv-20261124/overload-over/` (not committed) |
-| Lab patch | [`lab-patch.diff`](lab-patch.diff): the TTFT projection of inference-sim `dfa8987` (#2237) applied to `25f2dfb`. Without it blis refuses its own Result under this load: two decode sub-requests preempted after their first token get a TTFT past their E2E. The patch changes only those requests' TTFT: the decision logs and pod series are byte-identical with and without it |
+| Lab patch | [`lab-patch.diff`](lab-patch.diff): the TTFT projection of inference-sim `dfa8987` (#2237) applied to `25f2dfb`. Without it blis refuses its own Result under this load: two decode sub-requests preempted after their first token get a TTFT past their E2E. It moves the TTFT of most disaggregated requests, not only those two: on the prefill 8192:256 knee rerun with it ([`lab-patch-rerun/`](../knees/prefill-8192x256/lab-patch-rerun/ttft-shift.txt)), 1,286 of 1,534 requests read 18.4 ms more on average (at most 24.3 ms), E2E does not move, and A per stage is unchanged in stages 1 to 3 (72.2 to 71.6 % in stage 4), so the knee does not move. This run's TTFT and A are therefore on that basis, about 20 ms of TTFT above runs 1 to 10 for a disaggregated request. No trigger reads TTFT: the decision logs and pod series are byte-identical with and without it |
 
 ![load vs supply, decode pool](load-vs-supply-decode.svg)
 
@@ -61,4 +61,4 @@ The run shows a problem when the trigger reads 0 or falls while the load holds, 
 
 ## Amendments
 
-None.
+- 2026-11-24: the lab patch row said the patch changes only the two preempted requests' TTFT. It changes the TTFT of most disaggregated requests (+18.4 ms on average on the prefill 8192:256 knee rerun with it, at most 24.3 ms, [`lab-patch-rerun/`](../knees/prefill-8192x256/lab-patch-rerun/ttft-shift.txt); the knee does not move). Found while porting the fix to blis-signal-lab (vishakha-ramani/blis-signal-lab#7), whose golden file moved on every disaggregated request. No number in this report changes.
