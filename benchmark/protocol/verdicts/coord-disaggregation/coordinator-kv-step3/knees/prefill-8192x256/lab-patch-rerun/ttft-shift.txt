@@ -1,0 +1,5 @@
+Run 1e (prefill knee 8192:256) rerun on blis-signal-lab built from vishakha-ramani/blis-signal-lab#7
+(25f2dfb plus the TTFT fix, the same condition as overload-over/lab-patch.diff), against the committed run 1e on 25f2dfb. Per request, from blis's Result.
+requests with a TTFT in both: 1534
+TTFT moved: 1286; mean shift 18.4 ms; min 0.0 ms; max 24.3 ms
+E2E changed: 0
