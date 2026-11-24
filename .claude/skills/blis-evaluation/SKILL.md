@@ -180,8 +180,9 @@ role for P/D, `composite.json` with a formula).
    `<name>_value` leaves 0, and each exact trigger reads what its query would
    for the load. Rerun it once with the command in `sim/command.txt`, under
    the memory guard, and compare the decision logs' sha256 with
-   `blis-run.json` (§3.7): `python3 -I $B/blis_run.py --rerun $RAW/<run>/sim`
-   prints both and exits non-zero when they differ.
+   `blis-run.json` (§3.7):
+   `python3 -I $B/blis_run.py --rerun $RAW/<run>/sim --lab $LAB` prints both
+   and exits non-zero when they differ.
 2. **After the knees**, read μ_SLO with `stage_table.py --knee X`
    (run-set.md §5; no `--trace`: the clock comes from `blis-run.json`). A
    capacity-derived threshold is applied by rewriting the policy with
@@ -224,7 +225,7 @@ As run-set.md §5, "Resuming". The plant check: the lab is at the commit the
 summary names, and `$V/policy.json` is the one the last report's
 `policy.json` came from (the arm aside). Raw results are cheap to rebuild:
 rebuild the blis output of a run whose `$RAW` directory is gone with
-`python3 -I $B/blis_run.py --rerun $V/<run> --out $RAW/<run>/sim`, which
+`python3 -I $B/blis_run.py --rerun $V/<run> --lab $LAB --out $RAW/<run>/sim`, which
 reruns its `command.txt` under the memory guard and checks the decision
 logs' sha256 against its `blis-run.json`. Do not run a bare `command.txt`:
 it runs blis without the guard.
