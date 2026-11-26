@@ -103,7 +103,7 @@ analyzers:
     score: 1.0
 ```
 
-See [saturation-scaling-config.md — Multi-Analyzer Pipeline](../saturation-scaling-config.md#multi-analyzer-pipeline)
+See [saturation-scaling-config.md — Multi-Analyzer Pipeline](saturation-scaling-config.md#multi-analyzer-pipeline)
 for the full `analyzers:` field reference and combine algorithm.
 
 ## Metrics
@@ -592,7 +592,7 @@ RC = max(0, TotalDemand / scaleUpThreshold  − TotalAnticipatedSupply)
 SC = max(0, TotalSupply  − TotalDemand / scaleDownBoundary)
 ```
 
-See [`saturation-scaling-config.md`](../saturation-scaling-config.md) § Universal Threshold Post-Step
+See [`saturation-scaling-config.md`](saturation-scaling-config.md) § Universal Threshold Post-Step
 for the authoritative formula and per-analyzer threshold override configuration.
 
 ### Known Regression
