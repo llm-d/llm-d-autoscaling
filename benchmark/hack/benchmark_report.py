@@ -552,6 +552,192 @@ def _kpi_table_html(rows):
     return f"<table class='kpi'><tbody>{body}</tbody></table>"
 
 
+def _as_int(value):
+    """Coerce a replica count to int, or None if it is missing or not a count."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _pod_summary(experiment_dir):
+    """Summarise pod counts for one experiment from its replica timeseries.
+
+    Reads ``metrics/processed/replica_status_timeseries.json`` (written by the
+    harness when the run uses ``--monitoring``), the same file
+    ``lvs_adapters.replicas()`` reads: each snapshot lists per-controller
+    ``desired_replicas`` / ``ready_replicas``. The canonical path is read
+    when present; any other copy found under the experiment dir is only a
+    fallback.
+
+    Returns None when the file is missing or holds no usable snapshot, or a
+    dict with an ``"error"`` key when the harness recorded a collection
+    failure instead of snapshots. Otherwise the dict holds the fleet totals
+    of the last snapshot (``total``), the peak pending count over the run,
+    the ready range, and the same totals per role.
+
+    ``pending`` is derived, not observed: pending pods export no metrics, so
+    there is no direct pending count to read -- it is the sum, over
+    controllers, of each controller's positive deficit
+    ``max(desired - ready, 0)`` per snapshot, so a surplus of ready pods in
+    one pool cannot cancel a shortage in another. ``ready`` is the count of
+    pods ready to serve, i.e. the running fleet. Role rows describe only the
+    last usable snapshot; a role absent from it is not carried forward. If
+    the file's final snapshot(s) hold no usable controller data, the totals
+    come from the last usable snapshot and ``final_snapshot_skipped`` is set,
+    so the report says so instead of silently presenting stale counts as
+    current. A snapshot that drops a controller for unusable counts is
+    partial: its totals omit that controller (named in
+    ``last_snapshot_dropped``), and peak pending / the ready range use only
+    complete snapshots when at least one exists. If no complete snapshot
+    exists, they fall back to partial snapshots and are labelled as partial
+    data (``extrema_partial``).
+    """
+    canonical = os.path.join(experiment_dir, "metrics", "processed", "replica_status_timeseries.json")
+    if os.path.isfile(canonical):
+        paths = [canonical]
+    else:
+        paths = sorted(glob.glob(os.path.join(experiment_dir, "**", "replica_status_timeseries.json"), recursive=True))
+    if not paths:
+        return None
+    try:
+        with open(paths[0]) as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        return {"error": f"could not read {os.path.basename(paths[0])}: {e}"}
+    if not isinstance(data, dict):
+        return {"error": f"{os.path.basename(paths[0])} is not a JSON object"}
+    if data.get("collection_error"):
+        return {"error": f"replica collection failed: {data['collection_error']}"}
+    snapshots = data.get("snapshots")
+    if not isinstance(snapshots, list) or not snapshots:
+        return None
+
+    ticks = []  # (fleet desired, fleet ready, fleet pending, {role: (desired, ready, pending)}, [controllers], [dropped]) per usable snapshot
+    last_usable_idx = -1
+    for idx, snap in enumerate(snapshots):
+        if not isinstance(snap, dict) or not isinstance(snap.get("controllers"), list):
+            continue
+        fleet_desired = fleet_ready = fleet_pending = 0
+        by_role = {}
+        tick_controllers = []
+        tick_dropped = []
+        usable = False
+        for pos, c in enumerate(snap["controllers"]):
+            if not isinstance(c, dict):
+                tick_dropped.append(f"controller #{pos}")
+                continue
+            role = c.get("role")
+            if not isinstance(role, str) or not role:
+                role = "aggregated"
+            if role.endswith("-dryrun"):
+                continue
+            desired = _as_int(c.get("desired_replicas"))
+            ready = _as_int(c.get("ready_replicas"))
+            if desired is None or ready is None or desired < 0 or ready < 0:
+                tick_dropped.append(str(c.get("name") or role))
+                continue
+            usable = True
+            tick_controllers.append(str(c.get("name") or role))
+            fleet_desired += desired
+            fleet_ready += ready
+            fleet_pending += max(desired - ready, 0)
+            d, r, p = by_role.get(role, (0, 0, 0))
+            by_role[role] = (d + desired, r + ready, p + max(desired - ready, 0))
+        if usable:
+            ticks.append((fleet_desired, fleet_ready, fleet_pending, by_role, tick_controllers, tick_dropped))
+            last_usable_idx = idx
+    if not ticks:
+        return None
+
+    # Peak pending and the ready range describe the fully observed fleet:
+    # a snapshot that dropped a controller understates both, so use only
+    # complete snapshots for them when at least one exists.
+    complete_ticks = [t for t in ticks if not t[5]] or ticks
+    extrema_partial = len(complete_ticks) == len(ticks) and any(t[5] for t in ticks)
+
+    last_desired, last_ready, last_pending, last_by_role, last_controllers, last_dropped = ticks[-1]
+    roles = {}
+    for role, (d, r, p) in sorted(last_by_role.items()):
+        roles[role] = {"desired": d, "ready": r, "pending": p}
+        role_ticks = [b[role][2] for _, _, _, b, _, _ in complete_ticks if role in b]
+        if not role_ticks:
+            role_ticks = [b[role][2] for _, _, _, b, _, _ in ticks if role in b]
+        roles[role]["peak_pending"] = max(role_ticks)
+    return {
+        "snapshots": len(ticks),
+        "controllers": sorted(set(last_controllers)),
+        "final_snapshot_skipped": last_usable_idx < len(snapshots) - 1,
+        "last_snapshot_dropped": sorted(set(last_dropped)),
+        "extrema_partial": extrema_partial,
+        "total": {"desired": last_desired, "ready": last_ready, "pending": last_pending},
+        "peak_pending": max(p for _, _, p, _, _, _ in complete_ticks),
+        "ready_min": min(r for _, r, _, _, _, _ in complete_ticks),
+        "ready_max": max(r for _, r, _, _, _, _ in complete_ticks),
+        "by_role": roles,
+    }
+
+
+def _pod_summary_html(summary):
+    """Render a _pod_summary() dict as the Pods section of _render_experiment."""
+    if summary is None:
+        return (
+            "<p class='muted'>No replica data found for this run. Run with "
+            "<code>--monitoring</code> so the harness records "
+            "<code>metrics/processed/replica_status_timeseries.json</code>.</p>"
+        )
+    if summary.get("error"):
+        return f"<p class='muted'>Pod counts unavailable: {_html_escape(summary['error'])}</p>"
+    total = summary["total"]
+    peak_label = "pods.pending peak" + (" (partial data)" if summary.get("extrema_partial") else "")
+    range_label = "pods.ready range" + (" (partial data)" if summary.get("extrema_partial") else "")
+    rows = [
+        ("pods.total (desired)", total["desired"]),
+        ("pods.ready", total["ready"]),
+        ("pods.pending", total["pending"]),
+        (peak_label, summary["peak_pending"]),
+        (range_label, f"{summary['ready_min']}–{summary['ready_max']}"),
+    ]
+    if len(summary["by_role"]) > 1:
+        for role, totals in sorted(summary["by_role"].items()):
+            rows.append(
+                (f"pods.{role} total / ready / pending",
+                 f"{totals['desired']} / {totals['ready']} / {totals['pending']}"),
+            )
+    controllers = ", ".join(summary["controllers"])
+    note = (
+        "Last snapshot of "
+        f"{summary['snapshots']} snapshot(s)"
+        + (f" ({_html_escape(controllers)})" if controllers else "")
+        + ". Pending is derived: each pool's shortfall (desired - ready, "
+        "floored at 0) summed, so a surplus in one pool cannot hide a "
+        "shortage in another; pending pods export no metrics, so there is "
+        "no direct pending count to read."
+        + (
+            " The final snapshot in the file had no usable controller data, "
+            "so these are the last usable counts, not the run's final state."
+            if summary.get("final_snapshot_skipped")
+            else ""
+        )
+        + (
+            " The last snapshot omitted "
+            + ", ".join(_html_escape(n) for n in summary["last_snapshot_dropped"])
+            + " (unusable counts), so these totals are incomplete."
+            if summary.get("last_snapshot_dropped")
+            else ""
+        )
+    )
+    return _kpi_table_html(rows) + f"<p class='muted'>{note}</p>"
+
+
 def _render_experiment(experiment_dir):
     meta = _load_yaml(os.path.join(experiment_dir, "run_metadata.yaml"))
     traffic = _load_yaml(os.path.join(experiment_dir, "traffic_complete.yaml"))
@@ -581,6 +767,8 @@ def _render_experiment(experiment_dir):
     meta_rows = [(k, v) for k, v in meta_rows if v is not None]
 
     metric_rows = list(_flatten(metrics)) if metrics else []
+
+    pod_html = _pod_summary_html(_pod_summary(experiment_dir))
 
     snapshot = _load_yaml(os.path.join(experiment_dir, "grafana_snapshot.yaml"))
     window = _run_window_epochs(meta)
@@ -615,6 +803,8 @@ def _render_experiment(experiment_dir):
   {_kpi_table_html(meta_rows)}
   <h3>Metrics</h3>
   {_kpi_table_html(metric_rows) if metric_rows else "<p class='muted'>No lifecycle metrics found.</p>"}
+  <h3>Pods</h3>
+  {pod_html}
   <h3>Grafana</h3>
   {grafana_html}
   <details>
