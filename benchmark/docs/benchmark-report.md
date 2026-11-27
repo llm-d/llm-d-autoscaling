@@ -187,8 +187,9 @@ passed to `standup`/`run`/`teardown`). This:
    files,
 3. renders `<session_dir>/report.html` with a section per experiment: run
    metadata, the lifecycle metrics from `summary_lifecycle_metrics.json`,
-   the workload config, and both Grafana links (permanent snapshot + live
-   time-boxed dashboard).
+   the pod counts from `metrics/processed/replica_status_timeseries.json`
+   (see [Pod reporting](#pod-reporting)), the workload config, and both
+   Grafana links (permanent snapshot + live time-boxed dashboard).
 
 Each step can also be run on its own — `configure`, `snapshot <experiment_dir>`,
 `report <session_dir>` — see `benchmark/hack/benchmark_report.sh --help`.
@@ -197,6 +198,47 @@ If Grafana isn't running, `snapshot` fails for that experiment but `report`
 still succeeds; the affected experiment's section just says no snapshot was
 captured, with the command to capture one later (as long as Prometheus still
 has the data).
+
+## Pod reporting
+
+Each experiment's section in `report.html` has a **Pods** table, read from
+the on-disk `metrics/processed/replica_status_timeseries.json` the harness
+writes when the run uses `--monitoring` (the same file
+`lvs_adapters.replicas()` reads). It shows, for the last usable snapshot of
+the run:
+
+- **pods.total (desired)** — what the autoscaler asked for;
+- **pods.ready** — pods ready to serve, i.e. the running fleet;
+- **pods.pending** — pods asked for but not yet serving: each pool's
+  shortfall (desired − ready, floored at 0) summed, so a surplus in one pool
+  cannot hide a shortage in another;
+- **pods.pending peak** — the largest pending count seen in any complete
+  snapshot (see below);
+- **pods.ready range** — the min–max ready count over complete snapshots
+  (see below).
+
+On a P/D (or multi-pool) run the table also breaks the last snapshot down
+per role (prefill / decode / aggregated).
+
+Pending is **derived**, not observed: pending pods export no metrics, so no
+source counts them directly — the summed gap is the shortfall between what
+the autoscaler asked for and what is serving at that moment. A gap most
+often appears while new pods are still starting (commonly image pull, model
+load, or KV warm-up), but it can also appear when a serving replica becomes
+unready; either way it is a count of the shortfall at that moment, not a
+measurement of its duration or cause. The dashboard's Deployment
+spec-vs-available panels show a similar gap, not the identical one: they
+count available replicas, which can lag ready ones while `minReadySeconds`
+is still running. If the timeseries
+file is missing, the section says so and names the `--monitoring` flag
+instead of showing zeros; if the harness recorded a collection failure, the
+section shows that failure instead of numbers. If the file's final
+snapshot(s) hold no usable controller data, the table keeps the last usable
+snapshot's counts and says so; if the last usable snapshot itself dropped a
+controller for unusable counts, the table names it and says the totals are
+incomplete. Peak pending and the ready range are computed over complete
+snapshots only, when at least one exists; if none exists, they are computed
+over partial snapshots and the table labels them as partial data.
 
 ## Identifying a session's metrics
 
